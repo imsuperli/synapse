@@ -13892,6 +13892,28 @@ export const CodePane: React.FC<CodePaneProps> = ({
     return true;
   }, [saveFile, scheduleGitStatusRefresh]);
 
+  const getCurrentViewFilePath = useCallback(() => {
+    const currentViewMode = paneRef.current.code?.viewMode ?? viewMode;
+
+    if (currentViewMode === 'diff') {
+      return activeFilePathRef.current
+        ?? getModelFilePath(diffEditorRef.current?.getModifiedEditor()?.getModel?.() ?? null);
+    }
+
+    if (focusedEditorTargetRef.current === 'secondary' && isEditorSplitVisible) {
+      return secondaryFilePathRef.current
+        ?? getModelFilePath(secondaryEditorRef.current?.getModel?.() ?? null)
+        ?? activeFilePathRef.current
+        ?? getModelFilePath(editorRef.current?.getModel?.() ?? null);
+    }
+
+    return activeFilePathRef.current
+      ?? getModelFilePath(editorRef.current?.getModel?.() ?? null)
+      ?? (isEditorSplitVisible
+        ? secondaryFilePathRef.current ?? getModelFilePath(secondaryEditorRef.current?.getModel?.() ?? null)
+        : null);
+  }, [getModelFilePath, isEditorSplitVisible, viewMode]);
+
   const getActiveEditorContext = useCallback(() => {
     const currentViewMode = paneRef.current.code?.viewMode ?? viewMode;
     const currentFocusedEditorTarget = focusedEditorTargetRef.current;
@@ -13922,6 +13944,18 @@ export const CodePane: React.FC<CodePaneProps> = ({
       readOnly: Boolean(fileMetaRef.current.get(filePath)?.readOnly),
     };
   }, [getModelFilePath, isEditorSplitVisible, viewMode]);
+
+  const handleLocateCurrentViewFile = useCallback(() => {
+    const currentViewFilePath = getCurrentViewFilePath();
+    if (!currentViewFilePath) {
+      return;
+    }
+
+    void revealPathInExplorer(currentViewFilePath, {
+      showSidebar: true,
+      scrollIntoView: true,
+    });
+  }, [getCurrentViewFilePath, revealPathInExplorer]);
 
   const loadQuickDocumentation = useCallback(async () => {
     const context = getActiveEditorContext();
@@ -24463,16 +24497,12 @@ export const CodePane: React.FC<CodePaneProps> = ({
     <FilesSidebarContent
       scrollRef={filesSidebarScrollRef}
       body={renderedFilesSidebarBody}
-      onLocateActiveFile={() => {
-        if (activeFilePath) {
-          void revealPathInExplorer(activeFilePath, { showSidebar: true, scrollIntoView: true });
-        }
-      }}
+      onLocateActiveFile={handleLocateCurrentViewFile}
       onExpandSelection={() => {
         void expandExplorerSelection();
       }}
       onCollapseAll={collapseAllExplorerDirectories}
-      canLocateActiveFile={Boolean(activeFilePath)}
+      canLocateActiveFile={Boolean(activeFilePath || secondaryFilePath)}
       canExpandSelection={Boolean(selectedPath)}
       canCollapseAll={expandedDirectories.size > 0}
       t={t}
@@ -24482,8 +24512,9 @@ export const CodePane: React.FC<CodePaneProps> = ({
     collapseAllExplorerDirectories,
     expandExplorerSelection,
     expandedDirectories.size,
+    handleLocateCurrentViewFile,
     renderedFilesSidebarBody,
-    revealPathInExplorer,
+    secondaryFilePath,
     selectedPath,
     t,
   ]);

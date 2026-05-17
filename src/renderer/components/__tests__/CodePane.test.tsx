@@ -9719,6 +9719,116 @@ describe('CodePane', () => {
     }
   });
 
+  it('locates the focused secondary split editor file in the explorer', async () => {
+    const user = userEvent.setup();
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
+    vi.mocked(window.electronAPI.codePaneListDirectory).mockImplementation(async ({ targetPath }) => {
+      if (targetPath === '/workspace/project') {
+        return {
+          success: true,
+          data: [
+            {
+              path: '/workspace/project/src',
+              name: 'src',
+              type: 'directory',
+            },
+          ],
+        };
+      }
+
+      if (targetPath === '/workspace/project/src') {
+        return {
+          success: true,
+          data: [
+            {
+              path: '/workspace/project/src/index.ts',
+              name: 'index.ts',
+              type: 'file',
+            },
+            {
+              path: '/workspace/project/src/secondary.ts',
+              name: 'secondary.ts',
+              type: 'file',
+            },
+          ],
+        };
+      }
+
+      return { success: true, data: [] };
+    });
+
+    const view = renderCodePane(createPane({
+      activeFilePath: '/workspace/project/src/index.ts',
+      openFiles: [
+        { path: '/workspace/project/src/index.ts' },
+        { path: '/workspace/project/src/secondary.ts' },
+      ],
+      selectedPath: '/workspace/project',
+      expandedPaths: [],
+      layout: {
+        editorSplit: {
+          visible: true,
+          size: 0.5,
+          secondaryFilePath: '/workspace/project/src/secondary.ts',
+        },
+      },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('code-pane-editor-split-resize-handle')).toBeInTheDocument();
+      expect(fakeMonaco.editor.create.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    const primaryEditor = fakeMonaco.editor.create.mock.results.at(-2)?.value;
+    const secondaryEditor = fakeMonaco.editor.create.mock.results.at(-1)?.value;
+    if (!primaryEditor || !secondaryEditor) {
+      throw new Error('expected split editor instances');
+    }
+
+    await act(async () => {
+      secondaryEditor.fireMouseDown({
+        target: {
+          position: { lineNumber: 1, column: 1 },
+        },
+        event: {
+          browserEvent: {
+            button: 0,
+            buttons: 1,
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+          },
+          leftButton: true,
+          preventDefault: vi.fn(),
+          stopPropagation: vi.fn(),
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(primaryEditor.getModel()?.uri.path).toBe('/workspace/project/src/index.ts');
+    expect(secondaryEditor.getModel()?.uri.path).toBe('/workspace/project/src/secondary.ts');
+
+    try {
+      await user.click(await screen.findByRole('button', { name: 'codePane.locateActiveFileInExplorer' }));
+
+      await waitFor(() => {
+        const explorerTarget = document.querySelector<HTMLButtonElement>(
+          '[data-explorer-path="/workspace/project/src/secondary.ts"]',
+        );
+        expect(explorerTarget).not.toBeNull();
+        expect(scrollIntoViewSpy).toHaveBeenCalled();
+        expect(explorerTarget?.className).toContain('bg-[rgb(var(--primary))]/15');
+      });
+
+      await waitFor(() => {
+        expect(view.getPane().code?.expandedPaths).toContain('/workspace/project');
+        expect(view.getPane().code?.expandedPaths).toContain('/workspace/project/src');
+      });
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+    }
+  });
+
   it('expands the selected directory recursively from the files toolbar', async () => {
     const user = userEvent.setup();
     vi.mocked(window.electronAPI.codePaneListDirectory).mockImplementation(async ({ targetPath }) => {
