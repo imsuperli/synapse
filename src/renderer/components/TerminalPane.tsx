@@ -325,7 +325,11 @@ function readRootCssColor(variableName: string, fallback: string): string {
 }
 
 function normalizeTerminalPasteText(text: string): string {
-  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r');
+}
+
+function wrapBracketedPasteText(text: string): string {
+  return `\x1b[200~${text.replace(/\x1b/g, '\u241b')}\x1b[201~`;
 }
 
 function getWindowsTerminalTheme() {
@@ -1330,7 +1334,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
 
       const payload = terminal.modes.bracketedPasteMode
-        ? `\x1b[200~${normalizedText}\x1b[201~`
+        ? wrapBracketedPasteText(normalizedText)
         : normalizedText;
       window.electronAPI.ptyWrite(windowId, pane.id, payload, { source });
     };

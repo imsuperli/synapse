@@ -535,7 +535,7 @@ describe('TerminalPane history replay', () => {
     });
   });
 
-  it('routes right-click paste through direct PTY writes with normalized LF endings', async () => {
+  it('routes right-click paste through direct PTY writes with terminal CR line endings', async () => {
     vi.mocked(window.electronAPI.readClipboardText).mockResolvedValue({
       success: true,
       data: 'first line\r\nsecond line',
@@ -569,7 +569,7 @@ describe('TerminalPane history replay', () => {
       expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
         'win-1',
         'pane-1',
-        'first line\nsecond line',
+        'first line\rsecond line',
         { source: 'context-menu-paste' },
       );
     });
@@ -613,7 +613,7 @@ describe('TerminalPane history replay', () => {
       expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
         'win-1',
         'pane-1',
-        '\u001b[200~first line\nsecond line\u001b[201~',
+        '\u001b[200~first line\rsecond line\u001b[201~',
         { source: 'context-menu-paste' },
       );
     });
@@ -1152,7 +1152,7 @@ describe('TerminalPane history replay', () => {
     expect(window.electronAPI.tryPasteSshClipboardImage).not.toHaveBeenCalled();
   });
 
-  it('normalizes Ctrl+V line endings before bracketed paste wrapping', async () => {
+  it('normalizes Ctrl+V line endings to terminal CR before bracketed paste wrapping', async () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
       success: true,
       data: { chunks: [], lastSeq: 0 },
@@ -1199,7 +1199,60 @@ describe('TerminalPane history replay', () => {
       expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
         'win-1',
         'pane-1',
-        '\u001b[200~alpha\nbeta\ngamma\u001b[201~',
+        '\u001b[200~alpha\rbeta\rgamma\u001b[201~',
+        { source: 'clipboard-shortcut' },
+      );
+    });
+  });
+
+  it('sanitizes ESC characters inside bracketed paste payloads', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+    vi.mocked(window.electronAPI.readClipboardText).mockResolvedValue({
+      success: true,
+      data: 'safe\u001b[201~unsafe',
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.WaitingForInput,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances).toHaveLength(1);
+    });
+    terminalInstances[0].modes.bracketedPasteMode = true;
+
+    const keyHandler = terminalInstances[0].attachCustomKeyEventHandler.mock.calls[0]?.[0] as (event: KeyboardEvent) => boolean;
+    keyHandler({
+      type: 'keydown',
+      key: 'v',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as KeyboardEvent);
+
+    await waitFor(() => {
+      expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
+        'win-1',
+        'pane-1',
+        '\u001b[200~safe\u241b[201~unsafe\u001b[201~',
         { source: 'clipboard-shortcut' },
       );
     });
