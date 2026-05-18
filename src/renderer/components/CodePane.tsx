@@ -389,6 +389,7 @@ const CODE_PANE_MAX_LOCAL_HISTORY_PER_FILE = 12;
 const CODE_PANE_MAX_LOCAL_HISTORY_CONTENT_SIZE = 200_000;
 const CODE_PANE_LOCAL_HISTORY_CHANGE_DEBOUNCE_MS = 2500;
 const CODE_PANE_MAX_EXTERNAL_CHANGE_ENTRIES = 60;
+const CODE_PANE_MAX_OPEN_FILE_TABS = 5;
 const CODE_PANE_EXTERNAL_CHANGE_PREVIEW_LINE_LIMIT = 80;
 const CODE_PANE_EXTERNAL_CHANGE_INLINE_DIFF_MAX_RENDERED_LINES = 1_200;
 const CODE_PANE_EXTERNAL_CHANGE_INLINE_DIFF_MAX_CONTENT_LENGTH = 120_000;
@@ -6576,16 +6577,28 @@ function upsertOpenFileTab(
           ? true
           : existingTab.preview,
     };
-    return sortOpenFilesByPinned(nextTabs);
-  }
-
-  return sortOpenFilesByPinned([
-    ...nextTabs,
-    {
+  } else {
+    nextTabs.push({
       path: filePath,
       pinned: options?.pinned,
       preview: shouldOpenAsPreview || undefined,
-    },
+    });
+  }
+
+  const pinnedTabs = nextTabs.filter((tab) => tab.pinned);
+  const unpinnedTabs = nextTabs.filter((tab) => !tab.pinned);
+  if (unpinnedTabs.length > CODE_PANE_MAX_OPEN_FILE_TABS) {
+    const removableTabIndex = unpinnedTabs.findIndex((tab) => tab.path !== filePath);
+    if (removableTabIndex >= 0) {
+      unpinnedTabs.splice(removableTabIndex, 1);
+    } else {
+      unpinnedTabs.splice(0, unpinnedTabs.length - CODE_PANE_MAX_OPEN_FILE_TABS);
+    }
+  }
+
+  return sortOpenFilesByPinned([
+    ...pinnedTabs,
+    ...unpinnedTabs,
   ]);
 }
 
@@ -12398,9 +12411,20 @@ export const CodePane: React.FC<CodePaneProps> = ({
       .flatMap((section) => section.roots)
       .find((root) => isPathInside(root.path, targetPath));
     const rootDirectoryPath = externalLibraryRoot?.path ?? rootPath;
+    const nextExpandedDirectories = new Set(expandedDirectoriesRef.current);
+    if (options?.scrollIntoView) {
+      pendingExplorerRevealPathRef.current = targetPath;
+      setExplorerRevealVersion((currentVersion) => currentVersion + 1);
+    }
+    if (options?.showSidebar) {
+      showSidebarMode('files');
+    }
+
+    nextExpandedDirectories.add(rootPath);
+    nextExpandedDirectories.add(rootDirectoryPath);
+
     const directoryPathsToExpand: string[] = [];
     let currentPath = getParentDirectory(targetPath);
-
     while (isPathInside(rootDirectoryPath, currentPath) && currentPath !== rootDirectoryPath) {
       directoryPathsToExpand.unshift(currentPath);
       const parentPath = getParentDirectory(currentPath);
@@ -12410,11 +12434,25 @@ export const CodePane: React.FC<CodePaneProps> = ({
       currentPath = parentPath;
     }
 
-    const nextExpandedDirectories = new Set(expandedDirectoriesRef.current);
-    nextExpandedDirectories.add(rootPath);
-    nextExpandedDirectories.add(rootDirectoryPath);
     for (const directoryPath of directoryPathsToExpand) {
-      nextExpandedDirectories.add(directoryPath);
+      const loadedEntries = isDirectoryLoaded(directoryPath)
+        ? getDirectoryEntries(directoryPath)
+        : await loadExplorerDirectory(directoryPath);
+      await preloadCompactDirectoryChildren(directoryPath, loadedEntries);
+      const isCompactCandidate = isCompactPackageCandidate(rootPath, directoryPath);
+      const {
+        terminalPath,
+        visibleDirectoryPaths,
+      } = isCompactCandidate
+        ? await ensureCompactDirectoryChainLoaded(directoryPath, loadedEntries)
+        : {
+            terminalPath: directoryPath,
+            visibleDirectoryPaths: [directoryPath],
+          };
+      for (const visiblePath of visibleDirectoryPaths) {
+        nextExpandedDirectories.add(visiblePath);
+      }
+      nextExpandedDirectories.add(terminalPath);
     }
 
     setExpandedDirectories((currentExpandedDirectories) => (
@@ -12426,26 +12464,17 @@ export const CodePane: React.FC<CodePaneProps> = ({
       selectedPath: targetPath,
       expandedPaths: getPersistedExpandedPaths(nextExpandedDirectories),
     });
-    if (options?.scrollIntoView) {
-      pendingExplorerRevealPathRef.current = targetPath;
-      setExplorerRevealVersion((currentVersion) => currentVersion + 1);
-    }
-    if (options?.showSidebar) {
-      showSidebarMode('files');
-    }
-
-    const loadRequests: Array<Promise<void>> = [];
-    for (const directoryPath of [rootDirectoryPath, ...directoryPathsToExpand]) {
-      if (!isDirectoryLoaded(directoryPath)) {
-        loadRequests.push((async () => {
-          await loadExplorerDirectory(directoryPath);
-        })());
-      }
-    }
-    if (loadRequests.length > 0) {
-      await Promise.all(loadRequests);
-    }
-  }, [getPersistedExpandedPaths, isDirectoryLoaded, loadExplorerDirectory, persistCodeState, rootPath, showSidebarMode]);
+  }, [
+    ensureCompactDirectoryChainLoaded,
+    getDirectoryEntries,
+    getPersistedExpandedPaths,
+    isDirectoryLoaded,
+    loadExplorerDirectory,
+    persistCodeState,
+    preloadCompactDirectoryChildren,
+    rootPath,
+    showSidebarMode,
+  ]);
 
   const expandDirectorySubtree = useCallback(async (
     directoryPath: string,
@@ -20184,7 +20213,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
       return;
     }
 
-    void activateFile(row.resolvedPath, { preview: true });
+    void activateFile(row.resolvedPath);
   }, [activateFile, selectExplorerPath]);
 
   const handleExplorerRowPromote = useCallback((row: ExplorerTreeRow) => {

@@ -492,7 +492,7 @@ function renderCodePane(initialPane: Pane) {
 }
 
 async function openFileFromTree(fileName: string, options?: { doubleClick?: boolean }) {
-  const treeButton = await screen.findByRole('button', { name: fileName }, { timeout: 3000 });
+  const treeButton = await screen.findByTitle(fileName, { timeout: 3000 });
   await act(async () => {
     if (options?.doubleClick) {
       fireEvent.doubleClick(treeButton);
@@ -9441,7 +9441,7 @@ describe('CodePane', () => {
     ]);
   });
 
-  it('uses preview tabs for single-click tree navigation and promotes them on double click', async () => {
+  it('opens regular tabs for single-click tree navigation', async () => {
     const view = renderCodePane(createPane());
     const treeButton = await screen.findByRole('button', { name: 'index.ts' }, { timeout: 3000 });
 
@@ -9453,13 +9453,52 @@ describe('CodePane', () => {
       expect(view.getPane().code?.openFiles).toEqual([
         expect.objectContaining({
           path: '/workspace/project/src/index.ts',
-          preview: true,
         }),
       ]);
     });
     expect(screen.queryByText('codePane.previewTabBadge')).not.toBeInTheDocument();
 
     expect(view.getPane().code?.activeFilePath).toBe('/workspace/project/src/index.ts');
+  });
+
+  it('keeps up to five open file tabs and replaces the oldest unpinned tab', async () => {
+    vi.mocked(window.electronAPI.codePaneListDirectory).mockResolvedValue({
+      success: true,
+      data: [
+        { path: '/workspace/project/src/one.ts', name: 'one.ts', type: 'file' },
+        { path: '/workspace/project/src/two.ts', name: 'two.ts', type: 'file' },
+        { path: '/workspace/project/src/three.ts', name: 'three.ts', type: 'file' },
+        { path: '/workspace/project/src/four.ts', name: 'four.ts', type: 'file' },
+        { path: '/workspace/project/src/five.ts', name: 'five.ts', type: 'file' },
+        { path: '/workspace/project/src/six.ts', name: 'six.ts', type: 'file' },
+      ],
+    });
+    vi.mocked(window.electronAPI.codePaneReadFile).mockImplementation(async ({ filePath }) => ({
+      success: true,
+      data: {
+        content: `// ${filePath}\n`,
+        mtimeMs: 100,
+        size: 24,
+        language: 'typescript',
+        isBinary: false,
+      },
+    }));
+
+    const view = renderCodePane(createPane());
+    for (const fileName of ['one.ts', 'two.ts', 'three.ts', 'four.ts', 'five.ts', 'six.ts']) {
+      await openFileFromTree(fileName, { doubleClick: true });
+    }
+
+    await waitFor(() => {
+      expect(view.getPane().code?.openFiles.map((tab) => tab.path)).toEqual([
+        '/workspace/project/src/two.ts',
+        '/workspace/project/src/three.ts',
+        '/workspace/project/src/four.ts',
+        '/workspace/project/src/five.ts',
+        '/workspace/project/src/six.ts',
+      ]);
+    });
+    expect(view.getPane().code?.activeFilePath).toBe('/workspace/project/src/six.ts');
   });
 
   it('opens files in a secondary split editor from the context menu', async () => {
@@ -9711,6 +9750,70 @@ describe('CodePane', () => {
     try {
       await user.click(await screen.findByRole('button', { name: 'codePane.locateActiveFileInExplorer' }));
 
+      await waitFor(() => {
+        expect(scrollIntoViewSpy).toHaveBeenCalled();
+      });
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+    }
+  });
+
+  it('re-expands a collapsed directory when locating the open file from the files toolbar', async () => {
+    const user = userEvent.setup();
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
+    vi.mocked(window.electronAPI.codePaneListDirectory).mockImplementation(async ({ targetPath }) => {
+      if (targetPath === '/workspace/project') {
+        return {
+          success: true,
+          data: [
+            {
+              path: '/workspace/project/src',
+              name: 'src',
+              type: 'directory',
+            },
+          ],
+        };
+      }
+
+      if (targetPath === '/workspace/project/src') {
+        return {
+          success: true,
+          data: [
+            {
+              path: '/workspace/project/src/index.ts',
+              name: 'index.ts',
+              type: 'file',
+            },
+          ],
+        };
+      }
+
+      return { success: true, data: [] };
+    });
+
+    const view = renderCodePane(createPane({
+      activeFilePath: '/workspace/project/src/index.ts',
+      openFiles: [{ path: '/workspace/project/src/index.ts' }],
+      selectedPath: '/workspace/project/src',
+      expandedPaths: ['/workspace/project', '/workspace/project/src'],
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'index.ts' })).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.doubleClick(screen.getByRole('button', { name: 'src' }));
+    });
+
+    try {
+      await user.click(await screen.findByRole('button', { name: 'codePane.locateActiveFileInExplorer' }));
+
+      await waitFor(() => {
+        expect(view.getPane().code?.selectedPath).toBe('/workspace/project/src/index.ts');
+        expect(view.getPane().code?.expandedPaths).toContain('/workspace/project');
+        expect(view.getPane().code?.expandedPaths).toContain('/workspace/project/src');
+      });
       await waitFor(() => {
         expect(scrollIntoViewSpy).toHaveBeenCalled();
       });
