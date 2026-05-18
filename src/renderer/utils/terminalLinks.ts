@@ -32,6 +32,25 @@ interface LogicalLineSegment {
 
 const WEB_LINK_REGEX = /https?:\/\/[^\s<>"'`{}|\\^]+/gi;
 const TRIMMABLE_TRAILING_PUNCTUATION = new Set(['.', ',', '!', '?', ':', ';']);
+const HARD_URL_BOUNDARY_CHARS = new Set([
+  '，',
+  '。',
+  '、',
+  '；',
+  '：',
+  '！',
+  '？',
+  '）',
+  '］',
+  '｝',
+  '】',
+  '》',
+  '〉',
+  '」',
+  '』',
+  '”',
+  '’',
+]);
 const WRAPPING_TRAILING_PAIRS: Record<string, string> = {
   ')': '(',
   ']': '[',
@@ -50,8 +69,22 @@ function countOccurrences(value: string, char: string): number {
   return count;
 }
 
+function findHardUrlBoundaryIndex(value: string): number {
+  for (let index = 0; index < value.length; index += 1) {
+    if (HARD_URL_BOUNDARY_CHARS.has(value[index])) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
 function trimTerminalUrlCandidate(candidate: string): string {
   let trimmed = candidate.trim();
+  const hardBoundaryIndex = findHardUrlBoundaryIndex(trimmed);
+  if (hardBoundaryIndex >= 0) {
+    trimmed = trimmed.slice(0, hardBoundaryIndex);
+  }
 
   while (trimmed) {
     const trailingChar = trimmed[trimmed.length - 1];

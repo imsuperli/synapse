@@ -50,6 +50,7 @@ describe('terminalLinks', () => {
   it('sanitizes terminal URLs without accepting non-http protocols', () => {
     expect(sanitizeTerminalHttpUrl('https://example.com/docs).')).toBe('https://example.com/docs');
     expect(sanitizeTerminalHttpUrl('http://example.com/path,')).toBe('http://example.com/path');
+    expect(sanitizeTerminalHttpUrl('https://github.com/Margin-Lab/evals)，README')).toBe('https://github.com/Margin-Lab/evals');
     expect(sanitizeTerminalHttpUrl('javascript:alert(1)')).toBeNull();
   });
 
@@ -73,6 +74,20 @@ describe('terminalLinks', () => {
     });
   });
 
+  it('cuts off adjacent Chinese punctuation and prose from detected terminal URLs', () => {
+    const terminal = createMockTerminal(80, [
+      { text: '来源 (https://github.com/Margin-Lab/evals)，README 说明' },
+    ]);
+    const provider = createTerminalWebLinkProvider(terminal, vi.fn());
+    const callback = vi.fn();
+
+    provider.provideLinks(1, callback);
+
+    const links = callback.mock.calls[0]?.[0];
+    expect(links).toHaveLength(1);
+    expect(links[0].text).toBe('https://github.com/Margin-Lab/evals');
+  });
+
   it('routes link activation through the external opener only for sanitized http urls', async () => {
     const openExternalUrl = vi.fn().mockResolvedValue(undefined);
     const handler = createTerminalLinkHandler(openExternalUrl);
@@ -82,10 +97,15 @@ describe('terminalLinks', () => {
 
     expect(openExternalUrl).toHaveBeenCalledWith('https://example.com/docs');
 
+    handler.activate(new MouseEvent('mouseup'), 'https://github.com/Margin-Lab/evals)，README');
+    await Promise.resolve();
+
+    expect(openExternalUrl).toHaveBeenCalledWith('https://github.com/Margin-Lab/evals');
+
     handler.activate(new MouseEvent('mouseup'), 'file:///etc/hosts');
     await Promise.resolve();
 
-    expect(openExternalUrl).toHaveBeenCalledTimes(1);
+    expect(openExternalUrl).toHaveBeenCalledTimes(2);
   });
 
   it('does not block document mouseup when activating a link', async () => {
