@@ -9822,6 +9822,80 @@ describe('CodePane', () => {
     }
   });
 
+  it('locates the open editor file after its parent folder was collapsed from the tree', async () => {
+    const user = userEvent.setup();
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
+    vi.mocked(window.electronAPI.codePaneListDirectory).mockImplementation(async ({ targetPath }) => {
+      if (targetPath === '/workspace/project') {
+        return {
+          success: true,
+          data: [
+            {
+              path: '/workspace/project/src',
+              name: 'src',
+              type: 'directory',
+            },
+          ],
+        };
+      }
+
+      if (targetPath === '/workspace/project/src') {
+        return {
+          success: true,
+          data: [
+            {
+              path: '/workspace/project/src/index.ts',
+              name: 'index.ts',
+              type: 'file',
+            },
+          ],
+        };
+      }
+
+      return { success: true, data: [] };
+    });
+
+    const view = renderCodePane(createPane({
+      selectedPath: '/workspace/project/src',
+      expandedPaths: ['/workspace/project', '/workspace/project/src'],
+    }));
+
+    await openFileFromTree('index.ts');
+
+    await waitFor(() => {
+      expect(view.getPane().code?.activeFilePath).toBe('/workspace/project/src/index.ts');
+    });
+
+    await act(async () => {
+      fireEvent.doubleClick(screen.getByRole('button', { name: 'src' }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-explorer-path="/workspace/project/src/index.ts"]')).toBeNull();
+      expect(view.getPane().code?.expandedPaths).toEqual(['/workspace/project']);
+      expect(view.getPane().code?.activeFilePath).toBe('/workspace/project/src/index.ts');
+    });
+
+    try {
+      await user.click(await screen.findByRole('button', { name: 'codePane.locateActiveFileInExplorer' }));
+
+      await waitFor(() => {
+        const explorerTarget = document.querySelector<HTMLButtonElement>(
+          '[data-explorer-path="/workspace/project/src/index.ts"]',
+        );
+        expect(explorerTarget).not.toBeNull();
+        expect(view.getPane().code?.selectedPath).toBe('/workspace/project/src/index.ts');
+        expect(view.getPane().code?.expandedPaths).toContain('/workspace/project');
+        expect(view.getPane().code?.expandedPaths).toContain('/workspace/project/src');
+        expect(explorerTarget?.className).toContain('bg-[rgb(var(--primary))]/15');
+        expect(scrollIntoViewSpy).toHaveBeenCalled();
+      });
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+    }
+  });
+
   it('locates the focused secondary split editor file in the explorer', async () => {
     const user = userEvent.setup();
     const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView');

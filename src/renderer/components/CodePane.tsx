@@ -348,6 +348,7 @@ const CODE_PANE_SIDEBAR_MAX_WIDTH = 520;
 const CODE_PANE_EXPLORER_ROW_HEIGHT = 24;
 const CODE_PANE_EXPLORER_ROW_OVERSCAN = 10;
 const CODE_PANE_EXPLORER_WINDOWING_THRESHOLD = 120;
+const CODE_PANE_EXPLORER_REVEAL_MAX_RETRIES = 8;
 const CODE_PANE_SEARCH_EVERYWHERE_ROW_HEIGHT = 52;
 const CODE_PANE_SEARCH_EVERYWHERE_ROW_OVERSCAN = 8;
 const CODE_PANE_SEARCH_EVERYWHERE_WINDOWING_THRESHOLD = 80;
@@ -9062,6 +9063,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
   const sidebarElementRef = useRef<HTMLElement | null>(null);
   const filesSidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const pendingExplorerRevealPathRef = useRef<string | null>(null);
+  const pendingExplorerRevealRetryCountRef = useRef(0);
   const pendingExplorerRevealAnimationFrameRef = useRef<number | null>(null);
   const openFileTabsScrollRef = useRef<HTMLDivElement | null>(null);
   const primaryEditorPaneRef = useRef<HTMLDivElement | null>(null);
@@ -12412,10 +12414,6 @@ export const CodePane: React.FC<CodePaneProps> = ({
       .find((root) => isPathInside(root.path, targetPath));
     const rootDirectoryPath = externalLibraryRoot?.path ?? rootPath;
     const nextExpandedDirectories = new Set(expandedDirectoriesRef.current);
-    if (options?.scrollIntoView) {
-      pendingExplorerRevealPathRef.current = targetPath;
-      setExplorerRevealVersion((currentVersion) => currentVersion + 1);
-    }
     if (options?.showSidebar) {
       showSidebarMode('files');
     }
@@ -12423,16 +12421,20 @@ export const CodePane: React.FC<CodePaneProps> = ({
     nextExpandedDirectories.add(rootPath);
     nextExpandedDirectories.add(rootDirectoryPath);
 
-    const directoryPathsToExpand: string[] = [];
+    const nestedDirectoryPathsToExpand: string[] = [];
     let currentPath = getParentDirectory(targetPath);
     while (isPathInside(rootDirectoryPath, currentPath) && currentPath !== rootDirectoryPath) {
-      directoryPathsToExpand.unshift(currentPath);
+      nestedDirectoryPathsToExpand.unshift(currentPath);
       const parentPath = getParentDirectory(currentPath);
       if (parentPath === currentPath) {
         break;
       }
       currentPath = parentPath;
     }
+    const directoryPathsToExpand = [
+      rootDirectoryPath,
+      ...nestedDirectoryPathsToExpand,
+    ];
 
     for (const directoryPath of directoryPathsToExpand) {
       const loadedEntries = isDirectoryLoaded(directoryPath)
@@ -12455,13 +12457,31 @@ export const CodePane: React.FC<CodePaneProps> = ({
       nextExpandedDirectories.add(terminalPath);
     }
 
+    let resolvedTargetPath = targetPath;
+    const targetParentPath = getParentDirectory(targetPath);
+    if (isPathInside(rootDirectoryPath, targetParentPath)) {
+      const targetParentEntries = isDirectoryLoaded(targetParentPath)
+        ? getDirectoryEntries(targetParentPath)
+        : await loadExplorerDirectory(targetParentPath);
+      resolvedTargetPath = targetParentEntries.find((entry) => (
+        getPathComparisonKey(entry.path) === getPathComparisonKey(targetPath)
+      ))?.path ?? targetPath;
+    }
+
+    if (options?.scrollIntoView) {
+      pendingExplorerRevealPathRef.current = resolvedTargetPath;
+      pendingExplorerRevealRetryCountRef.current = 0;
+      setExplorerRevealVersion((currentVersion) => currentVersion + 1);
+    }
+
+    expandedDirectoriesRef.current = nextExpandedDirectories;
     setExpandedDirectories((currentExpandedDirectories) => (
       areStringSetsEqual(currentExpandedDirectories, nextExpandedDirectories)
         ? currentExpandedDirectories
         : nextExpandedDirectories
     ));
     persistCodeState({
-      selectedPath: targetPath,
+      selectedPath: resolvedTargetPath,
       expandedPaths: getPersistedExpandedPaths(nextExpandedDirectories),
     });
   }, [
@@ -13922,26 +13942,35 @@ export const CodePane: React.FC<CodePaneProps> = ({
   }, [saveFile, scheduleGitStatusRefresh]);
 
   const getCurrentViewFilePath = useCallback(() => {
+    const currentCodeState = paneRef.current.code;
     const currentViewMode = paneRef.current.code?.viewMode ?? viewMode;
+    const currentOpenFiles = currentCodeState?.openFiles ?? openFiles;
+    const currentActiveFilePath = currentCodeState?.activeFilePath ?? activeFilePathRef.current;
+    const currentSecondaryFilePath = currentCodeState?.layout?.editorSplit?.secondaryFilePath
+      ?? secondaryFilePathRef.current;
 
     if (currentViewMode === 'diff') {
-      return activeFilePathRef.current
+      return currentActiveFilePath
         ?? getModelFilePath(diffEditorRef.current?.getModifiedEditor()?.getModel?.() ?? null);
     }
 
     if (focusedEditorTargetRef.current === 'secondary' && isEditorSplitVisible) {
-      return secondaryFilePathRef.current
+      return currentSecondaryFilePath
         ?? getModelFilePath(secondaryEditorRef.current?.getModel?.() ?? null)
-        ?? activeFilePathRef.current
-        ?? getModelFilePath(editorRef.current?.getModel?.() ?? null);
+        ?? currentActiveFilePath
+        ?? getModelFilePath(editorRef.current?.getModel?.() ?? null)
+        ?? currentOpenFiles[currentOpenFiles.length - 1]?.path
+        ?? null;
     }
 
-    return activeFilePathRef.current
+    return currentActiveFilePath
       ?? getModelFilePath(editorRef.current?.getModel?.() ?? null)
       ?? (isEditorSplitVisible
-        ? secondaryFilePathRef.current ?? getModelFilePath(secondaryEditorRef.current?.getModel?.() ?? null)
-        : null);
-  }, [getModelFilePath, isEditorSplitVisible, viewMode]);
+        ? currentSecondaryFilePath ?? getModelFilePath(secondaryEditorRef.current?.getModel?.() ?? null)
+        : null)
+      ?? currentOpenFiles[currentOpenFiles.length - 1]?.path
+      ?? null;
+  }, [getModelFilePath, isEditorSplitVisible, openFiles, viewMode]);
 
   const getActiveEditorContext = useCallback(() => {
     const currentViewMode = paneRef.current.code?.viewMode ?? viewMode;
@@ -20107,7 +20136,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
       !revealPath
       || !isSidebarVisible
       || sidebarMode !== 'files'
-      || selectedPath !== revealPath
+      || getPathComparisonKey(selectedPath ?? '') !== getPathComparisonKey(revealPath)
     ) {
       return;
     }
@@ -20127,6 +20156,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
         block: 'nearest',
       });
       pendingExplorerRevealPathRef.current = null;
+      pendingExplorerRevealRetryCountRef.current = 0;
       return;
     }
 
@@ -20165,6 +20195,17 @@ export const CodePane: React.FC<CodePaneProps> = ({
     }
 
     if (rowIndex === null) {
+      if (pendingExplorerRevealRetryCountRef.current >= CODE_PANE_EXPLORER_REVEAL_MAX_RETRIES) {
+        return;
+      }
+      pendingExplorerRevealRetryCountRef.current += 1;
+      if (pendingExplorerRevealAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingExplorerRevealAnimationFrameRef.current);
+      }
+      pendingExplorerRevealAnimationFrameRef.current = window.requestAnimationFrame(() => {
+        pendingExplorerRevealAnimationFrameRef.current = null;
+        setExplorerRevealVersion((currentVersion) => currentVersion + 1);
+      });
       return;
     }
 
@@ -20186,6 +20227,11 @@ export const CodePane: React.FC<CodePaneProps> = ({
       pendingExplorerRevealAnimationFrameRef.current = null;
       const nextTargetElement = container.querySelector<HTMLElement>(selector);
       if (!nextTargetElement) {
+        if (pendingExplorerRevealRetryCountRef.current >= CODE_PANE_EXPLORER_REVEAL_MAX_RETRIES) {
+          return;
+        }
+        pendingExplorerRevealRetryCountRef.current += 1;
+        setExplorerRevealVersion((currentVersion) => currentVersion + 1);
         return;
       }
 
@@ -20193,6 +20239,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
         block: 'nearest',
       });
       pendingExplorerRevealPathRef.current = null;
+      pendingExplorerRevealRetryCountRef.current = 0;
     });
   }, [
     expandedDirectories,
@@ -24531,7 +24578,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
         void expandExplorerSelection();
       }}
       onCollapseAll={collapseAllExplorerDirectories}
-      canLocateActiveFile={Boolean(activeFilePath || secondaryFilePath)}
+      canLocateActiveFile={Boolean(activeFilePath || secondaryFilePath || openFiles.length > 0)}
       canExpandSelection={Boolean(selectedPath)}
       canCollapseAll={expandedDirectories.size > 0}
       t={t}
@@ -24542,6 +24589,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
     expandExplorerSelection,
     expandedDirectories.size,
     handleLocateCurrentViewFile,
+    openFiles.length,
     renderedFilesSidebarBody,
     secondaryFilePath,
     selectedPath,
