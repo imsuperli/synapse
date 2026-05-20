@@ -3508,6 +3508,14 @@ const FilesSidebarContent = React.memo(function FilesSidebarContent({
   const pendingViewportRef = React.useRef<FileTreeViewport | null>(null);
   const viewportAnimationFrameRef = React.useRef<number | null>(null);
 
+  useEffect(() => {
+    console.info('[CodePane][ExplorerLocate] toolbar-state', {
+      canLocateActiveFile,
+      canExpandSelection,
+      canCollapseAll,
+    });
+  }, [canCollapseAll, canExpandSelection, canLocateActiveFile]);
+
   const updateViewport = React.useCallback((nextViewport: FileTreeViewport) => {
     const nextNormalizedViewport = {
       scrollTop: Math.max(0, Math.floor(nextViewport.scrollTop / CODE_PANE_EXPLORER_ROW_HEIGHT) * CODE_PANE_EXPLORER_ROW_HEIGHT),
@@ -9771,6 +9779,10 @@ export const CodePane: React.FC<CodePaneProps> = ({
     });
   }, [pane.id, rootPath, updatePane, windowId]);
 
+  const logExplorerLocate = useCallback((stage: string, details: Record<string, unknown>) => {
+    console.info('[CodePane][ExplorerLocate]', stage, details);
+  }, []);
+
   const getRunTargetCustomization = useCallback((targetId: string): CodePaneRunTargetCustomization => ({
     profiles: paneRef.current.code?.runConfigurations?.[targetId]?.profiles ?? '',
     programArgs: paneRef.current.code?.runConfigurations?.[targetId]?.programArgs ?? '',
@@ -12414,6 +12426,16 @@ export const CodePane: React.FC<CodePaneProps> = ({
       .find((root) => isPathInside(root.path, targetPath));
     const rootDirectoryPath = externalLibraryRoot?.path ?? rootPath;
     const nextExpandedDirectories = new Set(expandedDirectoriesRef.current);
+    logExplorerLocate('reveal-start', {
+      targetPath,
+      rootPath,
+      rootDirectoryPath,
+      options,
+      activeFilePath: activeFilePathRef.current,
+      selectedPath: paneRef.current.code?.selectedPath ?? null,
+      openFiles: (paneRef.current.code?.openFiles ?? []).map((file) => file.path),
+      expandedCount: nextExpandedDirectories.size,
+    });
     if (options?.showSidebar) {
       showSidebarMode('files');
     }
@@ -12437,9 +12459,19 @@ export const CodePane: React.FC<CodePaneProps> = ({
     ];
 
     for (const directoryPath of directoryPathsToExpand) {
+      logExplorerLocate('load-directory-start', {
+        targetPath,
+        directoryPath,
+        isLoaded: isDirectoryLoaded(directoryPath),
+      });
       const loadedEntries = isDirectoryLoaded(directoryPath)
         ? getDirectoryEntries(directoryPath)
         : await loadExplorerDirectory(directoryPath);
+      logExplorerLocate('load-directory-done', {
+        targetPath,
+        directoryPath,
+        entryCount: loadedEntries.length,
+      });
       await preloadCompactDirectoryChildren(directoryPath, loadedEntries);
       const isCompactCandidate = isCompactPackageCandidate(rootPath, directoryPath);
       const {
@@ -12468,6 +12500,13 @@ export const CodePane: React.FC<CodePaneProps> = ({
       ))?.path ?? targetPath;
     }
 
+    logExplorerLocate('reveal-target-resolved', {
+      targetPath,
+      resolvedTargetPath,
+      targetParentPath,
+      directoryPathsToExpand,
+    });
+
     if (options?.scrollIntoView) {
       pendingExplorerRevealPathRef.current = resolvedTargetPath;
       pendingExplorerRevealRetryCountRef.current = 0;
@@ -12484,6 +12523,11 @@ export const CodePane: React.FC<CodePaneProps> = ({
       selectedPath: resolvedTargetPath,
       expandedPaths: getPersistedExpandedPaths(nextExpandedDirectories),
     });
+    logExplorerLocate('reveal-persisted', {
+      targetPath,
+      resolvedTargetPath,
+      expandedPaths: getPersistedExpandedPaths(nextExpandedDirectories),
+    });
   }, [
     ensureCompactDirectoryChainLoaded,
     getDirectoryEntries,
@@ -12493,6 +12537,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
     persistCodeState,
     preloadCompactDirectoryChildren,
     rootPath,
+    logExplorerLocate,
     showSidebarMode,
   ]);
 
@@ -14005,15 +14050,38 @@ export const CodePane: React.FC<CodePaneProps> = ({
 
   const handleLocateCurrentViewFile = useCallback(() => {
     const currentViewFilePath = getCurrentViewFilePath();
+    logExplorerLocate('button-click', {
+      currentViewFilePath,
+      activeFilePath: paneRef.current.code?.activeFilePath ?? null,
+      selectedPath: paneRef.current.code?.selectedPath ?? null,
+      openFiles: (paneRef.current.code?.openFiles ?? []).map((file) => file.path),
+      viewMode: paneRef.current.code?.viewMode ?? viewMode,
+      focusedEditorTarget: focusedEditorTargetRef.current,
+      isEditorSplitVisible,
+      secondaryFilePath: secondaryFilePathRef.current,
+      sidebarVisible: sidebarVisibleRef.current,
+      sidebarMode: sidebarModeRef.current,
+    });
     if (!currentViewFilePath) {
+      logExplorerLocate('button-no-path', {
+        activeFilePath: paneRef.current.code?.activeFilePath ?? null,
+        selectedPath: paneRef.current.code?.selectedPath ?? null,
+        openFiles: (paneRef.current.code?.openFiles ?? []).map((file) => file.path),
+        viewMode: paneRef.current.code?.viewMode ?? viewMode,
+      });
       return;
     }
 
     void revealPathInExplorer(currentViewFilePath, {
       showSidebar: true,
       scrollIntoView: true,
+    }).catch((error) => {
+      logExplorerLocate('button-error', {
+        currentViewFilePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
-  }, [getCurrentViewFilePath, revealPathInExplorer]);
+  }, [getCurrentViewFilePath, isEditorSplitVisible, logExplorerLocate, revealPathInExplorer, viewMode]);
 
   const loadQuickDocumentation = useCallback(async () => {
     const context = getActiveEditorContext();
@@ -20132,17 +20200,58 @@ export const CodePane: React.FC<CodePaneProps> = ({
 
   useEffect(() => {
     const revealPath = pendingExplorerRevealPathRef.current;
+    if (revealPath) {
+      logExplorerLocate('effect-check', {
+        revealPath,
+        selectedPath,
+        isSidebarVisible,
+        sidebarMode,
+        retryCount: pendingExplorerRevealRetryCountRef.current,
+        rootRowCount: rootExplorerRows.length,
+        externalSectionCount: externalLibrarySections.length,
+      });
+    }
     if (
       !revealPath
       || !isSidebarVisible
       || sidebarMode !== 'files'
       || getPathComparisonKey(selectedPath ?? '') !== getPathComparisonKey(revealPath)
     ) {
+      if (revealPath) {
+        logExplorerLocate('effect-wait-state', {
+          revealPath,
+          selectedPath,
+          isSidebarVisible,
+          sidebarMode,
+          retryCount: pendingExplorerRevealRetryCountRef.current,
+        });
+      }
       return;
     }
 
     const container = filesSidebarScrollRef.current;
     if (!container) {
+      if (pendingExplorerRevealRetryCountRef.current >= CODE_PANE_EXPLORER_REVEAL_MAX_RETRIES) {
+        logExplorerLocate('effect-no-container-give-up', {
+          revealPath,
+          selectedPath,
+          retryCount: pendingExplorerRevealRetryCountRef.current,
+        });
+        return;
+      }
+      pendingExplorerRevealRetryCountRef.current += 1;
+      logExplorerLocate('effect-no-container-retry', {
+        revealPath,
+        selectedPath,
+        retryCount: pendingExplorerRevealRetryCountRef.current,
+      });
+      if (pendingExplorerRevealAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingExplorerRevealAnimationFrameRef.current);
+      }
+      pendingExplorerRevealAnimationFrameRef.current = window.requestAnimationFrame(() => {
+        pendingExplorerRevealAnimationFrameRef.current = null;
+        setExplorerRevealVersion((currentVersion) => currentVersion + 1);
+      });
       return;
     }
 
@@ -20157,6 +20266,9 @@ export const CodePane: React.FC<CodePaneProps> = ({
       });
       pendingExplorerRevealPathRef.current = null;
       pendingExplorerRevealRetryCountRef.current = 0;
+      logExplorerLocate('effect-success-direct', {
+        revealPath,
+      });
       return;
     }
 
@@ -20196,9 +20308,21 @@ export const CodePane: React.FC<CodePaneProps> = ({
 
     if (rowIndex === null) {
       if (pendingExplorerRevealRetryCountRef.current >= CODE_PANE_EXPLORER_REVEAL_MAX_RETRIES) {
+        logExplorerLocate('effect-no-row-give-up', {
+          revealPath,
+          selectedPath,
+          retryCount: pendingExplorerRevealRetryCountRef.current,
+        });
         return;
       }
       pendingExplorerRevealRetryCountRef.current += 1;
+      logExplorerLocate('effect-no-row-retry', {
+        revealPath,
+        selectedPath,
+        retryCount: pendingExplorerRevealRetryCountRef.current,
+        rootRowCount: rootExplorerRows.length,
+        externalSectionCount: externalLibrarySections.length,
+      });
       if (pendingExplorerRevealAnimationFrameRef.current !== null) {
         window.cancelAnimationFrame(pendingExplorerRevealAnimationFrameRef.current);
       }
@@ -20223,14 +20347,32 @@ export const CodePane: React.FC<CodePaneProps> = ({
     if (pendingExplorerRevealAnimationFrameRef.current !== null) {
       window.cancelAnimationFrame(pendingExplorerRevealAnimationFrameRef.current);
     }
+    logExplorerLocate('effect-scroll-planned', {
+      revealPath,
+      rowIndex,
+      targetScrollTop,
+      viewportHeight,
+    });
     pendingExplorerRevealAnimationFrameRef.current = window.requestAnimationFrame(() => {
       pendingExplorerRevealAnimationFrameRef.current = null;
       const nextTargetElement = container.querySelector<HTMLElement>(selector);
       if (!nextTargetElement) {
         if (pendingExplorerRevealRetryCountRef.current >= CODE_PANE_EXPLORER_REVEAL_MAX_RETRIES) {
+          logExplorerLocate('effect-no-target-give-up', {
+            revealPath,
+            selectedPath,
+            retryCount: pendingExplorerRevealRetryCountRef.current,
+            rowIndex,
+          });
           return;
         }
         pendingExplorerRevealRetryCountRef.current += 1;
+        logExplorerLocate('effect-no-target-retry', {
+          revealPath,
+          selectedPath,
+          retryCount: pendingExplorerRevealRetryCountRef.current,
+          rowIndex,
+        });
         setExplorerRevealVersion((currentVersion) => currentVersion + 1);
         return;
       }
@@ -20240,6 +20382,10 @@ export const CodePane: React.FC<CodePaneProps> = ({
       });
       pendingExplorerRevealPathRef.current = null;
       pendingExplorerRevealRetryCountRef.current = 0;
+      logExplorerLocate('effect-success-after-scroll', {
+        revealPath,
+        rowIndex,
+      });
     });
   }, [
     expandedDirectories,
@@ -20252,6 +20398,7 @@ export const CodePane: React.FC<CodePaneProps> = ({
     sidebarEntries.length,
     sidebarMode,
     explorerRevealVersion,
+    logExplorerLocate,
   ]);
 
   const handleExplorerRowActivate = useCallback((row: ExplorerTreeRow) => {
