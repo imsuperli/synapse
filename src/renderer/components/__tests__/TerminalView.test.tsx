@@ -664,6 +664,57 @@ describe('TerminalView', () => {
     expect(destroyedWindow?.layout.type === 'pane' && destroyedWindow.layout.pane.status).toBe(WindowStatus.Completed);
   });
 
+  it('cleans up inactive standalone pane exits without switching away from the current view', async () => {
+    const inactiveWindow = createLocalWindow(WindowStatus.Running);
+    const activeWindow: Window = {
+      ...createLocalWindow(WindowStatus.Running),
+      id: 'win-local-2',
+      name: 'Active Window',
+      activePaneId: 'pane-local-2',
+      layout: {
+        type: 'pane',
+        id: 'pane-local-2',
+        pane: {
+          id: 'pane-local-2',
+          cwd: '/workspace/other',
+          command: 'bash',
+          status: WindowStatus.Running,
+          pid: 202,
+        },
+      },
+    };
+    const onReturn = vi.fn();
+    const onWindowSwitch = vi.fn();
+
+    useWindowStore.setState({
+      windows: [inactiveWindow, activeWindow],
+      activeWindowId: activeWindow.id,
+      mruList: [activeWindow.id, inactiveWindow.id],
+      sidebarExpanded: false,
+      sidebarWidth: 200,
+    });
+
+    render(
+      <TerminalView
+        window={inactiveWindow}
+        onReturn={onReturn}
+        onWindowSwitch={onWindowSwitch}
+        isActive={false}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+
+    await waitFor(() => {
+      expect(window.electronAPI.closeWindow).toHaveBeenCalledWith(inactiveWindow.id);
+      expect(window.electronAPI.deleteWindow).toHaveBeenCalledWith(inactiveWindow.id);
+    });
+
+    expect(onWindowSwitch).not.toHaveBeenCalled();
+    expect(onReturn).not.toHaveBeenCalled();
+    expect(useWindowStore.getState().activeWindowId).toBe(activeWindow.id);
+  });
+
   it('keeps remote tabs visible for embedded ssh windows even when inactive', () => {
     render(
       <TerminalView

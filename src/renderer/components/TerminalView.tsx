@@ -623,6 +623,17 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           return;
         }
 
+        if (!embedded && !isActive) {
+          const destroyExitedWindow = getPaneBackend(exitingPane) === 'ssh'
+            ? deleteRemoteWindows([terminalWindow.id])
+            : destroyWindowResourcesKeepRecord(terminalWindow.id);
+
+          void destroyExitedWindow.catch((error) => {
+            console.error('Failed to destroy inactive window session after pane exit:', error);
+          });
+          return;
+        }
+
         // 单窗格窗口退出
         if (embedded && onStopAndRemoveFromGroup) {
           // 窗口组内：复用"停止并移除"逻辑
@@ -664,6 +675,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       terminalPaneCount,
       canvasEmbedded,
       embedded,
+      isActive,
+      deleteRemoteWindows,
       onStopAndRemoveFromGroup,
       isEphemeralRemoteTab,
       destroyCurrentEphemeralRemoteWindow,
