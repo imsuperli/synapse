@@ -9,11 +9,13 @@ import { CustomCategory } from '../../../shared/types/custom-category';
 import { SSHCredentialState, SSHProfile } from '../../../shared/types/ssh';
 import { useWindowStore } from '../../stores/windowStore';
 import { useI18n } from '../../i18n';
-import { getStandalonePersistableWindows, isEphemeralSSHCloneWindow } from '../../utils/sshWindowBindings';
+import { getStandalonePersistableWindows, getStandaloneSSHProfileId, isEphemeralSSHCloneWindow } from '../../utils/sshWindowBindings';
+import { getAllWindowIds } from '../../utils/groupLayoutHelpers';
 import { TerminalTypeLogo } from '../icons/TerminalTypeLogo';
 import { getWindowKind } from '../../../shared/utils/terminalCapabilities';
 import { getSidebarCardCounts } from '../../utils/cardCollection';
-import { destroyWindowResourcesAndRemoveRecord } from '../../utils/windowDestruction';
+import { getRecentTerminalWindows } from '../../utils/recentTerminals';
+import { destroySSHWindowFamilyResources, destroyWindowResourcesAndRemoveRecord } from '../../utils/windowDestruction';
 import {
   idePopupInputClassName,
   idePopupSecondaryButtonClassName,
@@ -42,6 +44,7 @@ interface SidebarProps {
   sshProfiles?: SSHProfile[];
   onSSHProfileSaved?: (profile: SSHProfile, credentialState: SSHCredentialState) => void;
   currentTab?: 'all' | 'active' | 'archived' | string;
+  recentTerminalLimit?: number;
   onTabChange?: (tab: 'all' | 'active' | 'archived' | string) => void;
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
@@ -56,6 +59,7 @@ export function Sidebar({
   sshProfiles = [],
   onSSHProfileSaved,
   currentTab = 'active',
+  recentTerminalLimit,
   onTabChange,
   searchQuery = '',
   onSearchChange,
@@ -64,6 +68,7 @@ export function Sidebar({
   const windows = useWindowStore((state) => state.windows);
   const groups = useWindowStore((state) => state.groups);
   const canvasWorkspaces = useWindowStore((state) => state.canvasWorkspaces);
+  const mruList = useWindowStore((state) => state.mruList);
   const addWindow = useWindowStore((state) => state.addWindow);
   const customCategories = useWindowStore((state) => state.customCategories);
   const syncCustomCategories = useWindowStore((state) => state.syncCustomCategories);
@@ -74,6 +79,18 @@ export function Sidebar({
 
   const activeWindows = persistableWindows.filter(w => !w.archived);
   const archivedWindows = persistableWindows.filter(w => w.archived);
+  const groupedWindowIds = useMemo(
+    () => new Set(groups.flatMap((group) => getAllWindowIds(group.layout))),
+    [groups],
+  );
+  const visibleActiveWindows = useMemo(
+    () => activeWindows.filter((window) => !groupedWindowIds.has(window.id)),
+    [activeWindows, groupedWindowIds],
+  );
+  const recentActiveWindows = useMemo(
+    () => getRecentTerminalWindows(visibleActiveWindows, mruList, recentTerminalLimit),
+    [mruList, recentTerminalLimit, visibleActiveWindows],
+  );
   const localActiveWindows = activeWindows.filter(w => getWindowKind(w) !== 'ssh');
   const sshActiveWindows = sshEnabled
     ? activeWindows.filter((window) => getWindowKind(window) === 'ssh')
@@ -83,7 +100,7 @@ export function Sidebar({
     [canvasWorkspaces, groups, sshEnabled, sshProfiles, windows],
   );
   const allCount = counts.all;
-  const activeCount = counts.active;
+  const activeCount = recentActiveWindows.length;
   const archivedCount = counts.archived;
   const localCount = counts.local;
   const sshCount = counts.ssh;
@@ -155,6 +172,7 @@ export function Sidebar({
         icon: '📌',
         windowIds: [],
         groupIds: [],
+        sshProfileIds: [],
         order: topLevelCategories.length,
       });
       setNewCategoryName('');
@@ -211,13 +229,21 @@ export function Sidebar({
         continue;
       }
 
+      if (getWindowKind(win) === 'ssh') {
+        await destroySSHWindowFamilyResources(win, {
+          removeTargetRecord: true,
+          includeOwnedClones: true,
+        });
+        continue;
+      }
+
       await destroyWindowResourcesAndRemoveRecord(win.id);
     }
   };
 
   const handleClearActiveWindows = async () => {
     try {
-      await removeWindowRecords(activeWindows.map((window) => window.id));
+      await removeWindowRecords(recentActiveWindows.map((window) => window.id));
     } catch (error) {
       console.error('Failed to clear active windows:', error);
     }
@@ -258,7 +284,7 @@ export function Sidebar({
   // 根据当前标签获取清空函数和窗口数量
   const getClearHandler = () => {
     if (currentTab === 'active') {
-      return { handler: handleClearActiveWindows, count: activeWindows.length };
+      return { handler: handleClearActiveWindows, count: recentActiveWindows.length };
     } else if (currentTab === 'archived') {
       return { handler: handleClearArchivedWindows, count: archivedWindows.length };
     } else if (currentTab === 'all') {
@@ -273,9 +299,21 @@ export function Sidebar({
 
   /** 计算分类中的有效项目数 */
   const getCategoryCount = (category: CustomCategory) => {
-    const wCount = category.windowIds.filter(id => windows.some(w => w.id === id)).length;
+    const validWindowIds = category.windowIds.filter(id => windows.some(w => w.id === id));
+    const profileIdsFromWindows = new Set(
+      validWindowIds
+        .map((id) => {
+          const windowItem = windows.find((window) => window.id === id);
+          return windowItem ? getStandaloneSSHProfileId(windowItem) : null;
+        })
+        .filter((id): id is string => Boolean(id)),
+    );
+    const wCount = validWindowIds.length;
     const gCount = category.groupIds.filter(id => groups.some(g => g.id === id)).length;
-    return wCount + gCount;
+    const sCount = (category.sshProfileIds ?? []).filter((id) => (
+      sshProfiles.some((profile) => profile.id === id) && !profileIdsFromWindows.has(id)
+    )).length;
+    return wCount + gCount + sCount;
   };
 
   return (
@@ -480,6 +518,7 @@ export function Sidebar({
                     categoryId={category.id}
                     windowIds={category.windowIds}
                     groupIds={category.groupIds}
+                    sshProfileIds={category.sshProfileIds ?? []}
                   >
                     <div
                       className={`flex items-center gap-2 pl-8 pr-2 py-1.5 rounded-lg text-sm transition-colors cursor-pointer group ${
@@ -771,7 +810,7 @@ export function Sidebar({
         }
         description={
           currentTab === 'active'
-            ? t('sidebar.confirmClearActiveDescription', { count: activeWindows.length })
+            ? t('sidebar.confirmClearActiveDescription', { count: recentActiveWindows.length })
             : currentTab === 'archived'
             ? t('sidebar.confirmClearArchivedDescription', { count: archivedWindows.length })
             : currentTab === 'all'

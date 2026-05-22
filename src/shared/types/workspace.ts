@@ -94,6 +94,7 @@ export interface Settings {
   sshClipboardImage?: SSHClipboardImageSettings;
   customCategories?: CustomCategory[];
   defaultSidebarTab?: 'all' | 'active' | 'local' | 'ssh' | 'archived' | string; // string 也可能是自定义分类或状态筛选 ID
+  recentTerminalLimit?: number;
   chat?: ChatSettings;
   plugins?: WorkspacePluginSettings;
   browserSync?: BrowserSyncSettings;

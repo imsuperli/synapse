@@ -140,13 +140,17 @@ describe('CardGrid', () => {
     expect(screen.getByTestId('card-grid-scroll-root')).toBeInTheDocument();
   });
 
-  it('renders active window cards sorted by createdAt descending', () => {
-    const { addWindow } = useWindowStore.getState();
-    addWindow(makeWindow({ id: 'old', name: 'Old Window', createdAt: '2024-01-01T08:00:00Z' }));
-    addWindow(makeWindow({ id: 'new', name: 'New Window', createdAt: '2024-01-01T12:00:00Z' }));
-    addWindow(makeWindow({ id: 'mid', name: 'Mid Window', createdAt: '2024-01-01T10:00:00Z' }));
+  it('renders recent active window cards sorted by lastActiveAt descending', () => {
+    useWindowStore.setState({
+      windows: [
+        makeWindow({ id: 'old', name: 'Old Window', lastActiveAt: '2024-01-01T08:00:00Z' }),
+        makeWindow({ id: 'new', name: 'New Window', lastActiveAt: '2024-01-01T12:00:00Z' }),
+        makeWindow({ id: 'mid', name: 'Mid Window', lastActiveAt: '2024-01-01T10:00:00Z' }),
+      ],
+      mruList: [],
+    });
 
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'active' });
 
     const cardLabels = screen.getAllByRole('button')
       .map((button) => button.getAttribute('aria-label') ?? '')
@@ -155,6 +159,23 @@ describe('CardGrid', () => {
     expect(cardLabels[0]).toContain('New Window');
     expect(cardLabels[1]).toContain('Mid Window');
     expect(cardLabels[2]).toContain('Old Window');
+  });
+
+  it('limits the recent active window cards using the configured count', () => {
+    useWindowStore.setState({
+      windows: [
+        makeWindow({ id: 'old', name: 'Old Window', lastActiveAt: '2024-01-01T08:00:00Z' }),
+        makeWindow({ id: 'new', name: 'New Window', lastActiveAt: '2024-01-01T12:00:00Z' }),
+        makeWindow({ id: 'mid', name: 'Mid Window', lastActiveAt: '2024-01-01T10:00:00Z' }),
+      ],
+      mruList: [],
+    });
+
+    renderCardGrid({ currentTab: 'active', recentTerminalLimit: 2 });
+
+    expect(screen.getByText('New Window')).toBeInTheDocument();
+    expect(screen.getByText('Mid Window')).toBeInTheDocument();
+    expect(screen.queryByText('Old Window')).not.toBeInTheDocument();
   });
 
   // Empty state
@@ -170,7 +191,7 @@ describe('CardGrid', () => {
     addWindow(makeWindow({ id: '2', name: 'Window 2' }));
     addWindow(makeWindow({ id: '3', name: 'Window 3' }));
 
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'all' });
 
     expect(screen.getByText('Window 1')).toBeInTheDocument();
     expect(screen.getByText('Window 2')).toBeInTheDocument();
@@ -204,7 +225,7 @@ describe('CardGrid', () => {
       addWindow(makeWindow({ id: `${i}`, name: `Window ${i}` }));
     }
 
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'all' });
 
     const windowCards = screen.getAllByRole('button')
       .filter((button) => (button.getAttribute('aria-label') ?? '').includes('Window '));
@@ -230,7 +251,7 @@ describe('CardGrid', () => {
   // NewWindowCard is rendered at the end of the grid
   it('renders NewWindowCard at the end of the grid when windows exist', () => {
     useWindowStore.getState().addWindow(makeWindow({ id: '1', name: 'Window 1' }));
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'all' });
     expect(screen.getByTestId('new-window-card')).toBeInTheDocument();
   });
 
@@ -248,7 +269,7 @@ describe('CardGrid', () => {
 
   // NewWindowCard not shown when empty
   it('does not render NewWindowCard when windows array is empty', () => {
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'all' });
     expect(screen.queryByTestId('new-window-card')).not.toBeInTheDocument();
   });
 
@@ -266,7 +287,7 @@ describe('CardGrid', () => {
       addWindow(makeWindow({ id: `${i}`, name: `Window ${i}`, status }));
     });
 
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'all' });
 
     expect(screen.getByRole('button', { name: /运行中/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /等待输入/ })).toBeInTheDocument();
@@ -303,7 +324,7 @@ describe('CardGrid', () => {
       ],
     });
 
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'all' });
 
     const targetDropZone = dropZoneProps.at(-1);
     expect(targetDropZone).toBeDefined();
@@ -335,7 +356,7 @@ describe('CardGrid', () => {
       canvasWorkspaces: [makeCanvasWorkspace()],
     });
 
-    renderCardGrid();
+    renderCardGrid({ currentTab: 'canvas' });
 
     const targetDropZone = dropZoneProps.find((props) => props.targetCanvasWorkspaceId === 'canvas-1');
 

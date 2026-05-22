@@ -201,6 +201,33 @@ describe('windowStore', () => {
     });
   });
 
+  describe('custom category SSH profiles', () => {
+    it('adds and removes an SSH profile from a custom category', async () => {
+      useWindowStore.setState({
+        customCategories: [{
+          id: 'category-1',
+          name: 'Production',
+          icon: 'pin',
+          windowIds: [],
+          groupIds: [],
+          order: 0,
+          createdAt: '2026-05-22T00:00:00.000Z',
+          updatedAt: '2026-05-22T00:00:00.000Z',
+        }],
+      });
+
+      await useWindowStore.getState().addSSHProfileToCategory('category-1', 'profile-1');
+
+      expect(useWindowStore.getState().customCategories[0]?.sshProfileIds).toEqual(['profile-1']);
+      expect(useWindowStore.getState().getSSHProfileCategories('profile-1').map((category) => category.id)).toEqual(['category-1']);
+
+      await useWindowStore.getState().removeSSHProfileFromCategory('category-1', 'profile-1');
+
+      expect(useWindowStore.getState().customCategories[0]?.sshProfileIds).toEqual([]);
+      expect(useWindowStore.getState().getSSHProfileCategories('profile-1')).toEqual([]);
+    });
+  });
+
   describe('edge cases', () => {
     it('does not throw when removing a missing window', () => {
       expect(() => {

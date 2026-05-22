@@ -5,7 +5,7 @@
 
 /**
  * 自定义分类
- * 用户可以创建自定义分类来组织窗口和组
+ * 用户可以创建自定义分类来组织窗口、远程连接和组
  */
 export interface CustomCategory {
   /** 分类唯一标识符 (UUID) */
@@ -25,6 +25,9 @@ export interface CustomCategory {
 
   /** 包含的组 ID 列表 */
   groupIds: string[];
+
+  /** 包含的 SSH 配置 ID 列表 */
+  sshProfileIds?: string[];
 
   /** 排序顺序 (数字越小越靠前) */
   order: number;

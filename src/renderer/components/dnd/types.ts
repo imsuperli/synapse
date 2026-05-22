@@ -8,6 +8,8 @@ export const DragItemTypes = {
   WINDOW_CARD: 'WINDOW_CARD',
   /** 组卡片（主界面 CardGrid 中的 GroupCard） */
   GROUP_CARD: 'GROUP_CARD',
+  /** SSH 配置卡片（主界面 CardGrid 中无关联窗口的 SSHProfileCard） */
+  SSH_PROFILE_CARD: 'SSH_PROFILE_CARD',
   /** 分类项（侧边栏中的 CategoryItem，用于分类排序） */
   CATEGORY_ITEM: 'CATEGORY_ITEM',
   /** 浏览器工具按钮（用于拖拽创建浏览器 pane） */
@@ -32,6 +34,14 @@ export interface GroupCardDragItem {
   type: typeof DragItemTypes.GROUP_CARD;
   groupId: string;
   groupName: string;
+  source: 'cardGrid';
+}
+
+/** SSH 配置卡片拖拽数据 */
+export interface SSHProfileCardDragItem {
+  type: typeof DragItemTypes.SSH_PROFILE_CARD;
+  profileId: string;
+  profileName: string;
   source: 'cardGrid';
 }
 

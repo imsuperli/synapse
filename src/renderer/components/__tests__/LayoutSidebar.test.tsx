@@ -83,13 +83,13 @@ describe('Layout Sidebar', () => {
       />,
     );
 
-    for (const name of ['工作区', '本地终端', '远程终端', '画布', '归档终端', '全部终端']) {
+    for (const name of ['最近终端', '本地终端', '远程终端', '画布', '归档终端', '全部终端']) {
       const button = screen.getByRole('button', { name });
       expect(button.querySelector('.h-6.w-6.shrink-0.items-center.justify-center')).not.toBeNull();
     }
   });
 
-  it('deletes active window records when clearing the workspace tab', async () => {
+  it('deletes recent active window records when clearing the recent terminals tab', async () => {
     const user = userEvent.setup();
     const activeWindow = createWindowWithStatus('active-a', WindowStatus.Running);
     const otherWindow = {
@@ -110,7 +110,7 @@ describe('Layout Sidebar', () => {
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: '清空工作区' }));
+    await user.click(screen.getByRole('button', { name: '清空最近终端' }));
     const dialog = screen.getByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: '删除' }));
 

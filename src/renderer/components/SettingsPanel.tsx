@@ -35,6 +35,12 @@ import {
   normalizeKeyboardShortcuts,
 } from '../../shared/utils/keyboardShortcuts';
 import {
+  DEFAULT_RECENT_TERMINAL_LIMIT,
+  MAX_RECENT_TERMINAL_LIMIT,
+  MIN_RECENT_TERMINAL_LIMIT,
+  normalizeRecentTerminalLimit,
+} from '../../shared/utils/recentTerminals';
+import {
   idePopupActionButtonClassName,
   idePopupEmptyStateClassName,
   idePopupIconButtonClassName,
@@ -308,6 +314,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
   const [currentTab, setCurrentTab] = useState<SettingsTab>('general');
   const [hasVisitedPluginTab, setHasVisitedPluginTab] = useState(false);
   const [quickNavTab, setQuickNavTab] = useState<QuickNavSubTab>('ide');
+  const [recentTerminalLimit, setRecentTerminalLimit] = useState(DEFAULT_RECENT_TERMINAL_LIMIT);
+  const [recentTerminalLimitDraft, setRecentTerminalLimitDraft] = useState(String(DEFAULT_RECENT_TERMINAL_LIMIT));
 
   // StatusLine 配置状态
   const [statusLineConfig, setStatusLineConfig] = useState<StatusLineConfig>(DEFAULT_STATUSLINE_CONFIG);
@@ -384,6 +392,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
 
         setIDEs(settings.ides || []);
         setQuickNavItems([...(settings.quickNav?.items || [])].sort((a: QuickNavItem, b: QuickNavItem) => a.order - b.order));
+        const normalizedRecentTerminalLimit = normalizeRecentTerminalLimit(settings.recentTerminalLimit);
+        setRecentTerminalLimit(normalizedRecentTerminalLimit);
+        setRecentTerminalLimitDraft(String(normalizedRecentTerminalLimit));
         setStatusLineConfig({
           ...DEFAULT_STATUSLINE_CONFIG,
           ...settings.statusLine,
@@ -793,6 +804,22 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
       console.error('Failed to update terminal settings:', error);
     }
   };
+
+  const commitRecentTerminalLimit = useCallback(async (rawValue: string) => {
+    const previousLimit = recentTerminalLimit;
+    const nextLimit = normalizeRecentTerminalLimit(rawValue);
+    setRecentTerminalLimit(nextLimit);
+    setRecentTerminalLimitDraft(String(nextLimit));
+
+    try {
+      await window.electronAPI.updateSettings({ recentTerminalLimit: nextLimit });
+      notifyWorkspaceSettingsUpdated({ recentTerminalLimit: nextLimit });
+    } catch (error) {
+      console.error('Failed to update recent terminal limit:', error);
+      setRecentTerminalLimit(previousLimit);
+      setRecentTerminalLimitDraft(String(previousLimit));
+    }
+  }, [recentTerminalLimit]);
 
   const handleAppearanceSettingsChange = async (updates: Partial<AppearanceSettings>) => {
     const previousConfig = appearanceSettings;
@@ -1254,6 +1281,39 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
                           </Select.Content>
                         </Select.Portal>
                       </Select.Root>
+                    </CompactSettingRow>
+
+                    <CompactSettingRow
+                      label={t('settings.general.recentTerminalLimitLabel')}
+                      htmlFor="recent-terminal-limit"
+                      help={t('settings.general.recentTerminalLimitDescription')}
+                    >
+                      <input
+                        id="recent-terminal-limit"
+                        type="number"
+                        min={MIN_RECENT_TERMINAL_LIMIT}
+                        max={MAX_RECENT_TERMINAL_LIMIT}
+                        step={1}
+                        value={recentTerminalLimitDraft}
+                        onChange={(event) => setRecentTerminalLimitDraft(event.target.value)}
+                        onBlur={(event) => {
+                          void commitRecentTerminalLimit(event.currentTarget.value);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            (event.currentTarget as HTMLInputElement).blur();
+                          }
+
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            setRecentTerminalLimitDraft(String(recentTerminalLimit));
+                            (event.currentTarget as HTMLInputElement).blur();
+                          }
+                        }}
+                        className={`w-full max-w-[160px] ${settingsPanelInputClassName}`}
+                        aria-label={t('settings.general.recentTerminalLimitLabel')}
+                      />
                     </CompactSettingRow>
 
                     <CompactSettingRow

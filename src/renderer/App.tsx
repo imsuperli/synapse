@@ -68,6 +68,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { canStartPaneSession, hasLiveTerminalSession, isInactiveTerminalPaneStatus } from './utils/windowLifecycle';
 import { useKeyboardShortcutSettings } from './hooks/useKeyboardShortcutSettings';
 import { matchesKeyboardShortcut } from '../shared/utils/keyboardShortcuts';
+import { DEFAULT_RECENT_TERMINAL_LIMIT, normalizeRecentTerminalLimit } from '../shared/utils/recentTerminals';
 import { destroyWindowResourcesKeepRecord } from './utils/windowDestruction';
 import type { WindowSwitchHandler, WindowSwitchOptions } from './types/windowSwitch';
 
@@ -513,6 +514,7 @@ function AppContent() {
   const [connectingSSHProfileId, setConnectingSSHProfileId] = useState<string | null>(null);
   const [sshEnabled, setSSHEnabled] = useState(true);
   const [currentTab, setCurrentTab] = useState<'all' | 'active' | 'archived' | string>('active');
+  const [recentTerminalLimit, setRecentTerminalLimit] = useState(DEFAULT_RECENT_TERMINAL_LIMIT);
   const [searchQuery, setSearchQuery] = useState(''); // 搜索状态
   const [isQuickNavOpen, setIsQuickNavOpen] = useState(false); // 快捷导航面板状态
   const [sshHostKeyPromptQueue, setSSHHostKeyPromptQueue] = useState<SSHHostKeyPromptPayload[]>([]);
@@ -562,6 +564,7 @@ function AppContent() {
           setCurrentTab(response.data.defaultSidebarTab);
         }
         setSSHEnabled(response.data.features?.sshEnabled ?? true);
+        setRecentTerminalLimit(normalizeRecentTerminalLimit(response.data.recentTerminalLimit));
         setAppearance(getAppearanceFromSettings(response.data));
         return;
       }
@@ -1135,6 +1138,14 @@ function AppContent() {
       const deleteError = new Error(response?.error || `Failed to delete SSH profile ${profile.id}`);
       console.error('Failed to delete SSH profile:', deleteError);
       throw deleteError;
+    }
+
+    const categoriesWithProfile = useWindowStore
+      .getState()
+      .customCategories
+      .filter((category) => (category.sshProfileIds ?? []).includes(profile.id));
+    for (const category of categoriesWithProfile) {
+      await useWindowStore.getState().removeSSHProfileFromCategory(category.id, profile.id);
     }
 
     setSSHProfiles((previousProfiles) => previousProfiles.filter((item) => item.id !== profile.id));
@@ -1848,6 +1859,7 @@ function AppContent() {
               sshProfileCount={sshProfiles.length}
               onCreateGroup={handleCreateGroup}
               currentTab={currentTab}
+              recentTerminalLimit={recentTerminalLimit}
               onTabChange={handleTabChange}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
@@ -1874,6 +1886,7 @@ function AppContent() {
               onDeleteSSHProfile={handleDeleteSSHProfile}
               searchQuery={searchQuery}
               currentTab={currentTab}
+              recentTerminalLimit={recentTerminalLimit}
             />
           )}
         </MainLayout>

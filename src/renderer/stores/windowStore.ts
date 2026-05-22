@@ -692,6 +692,8 @@ interface WindowStore {
   removeCustomCategory: (id: string) => Promise<void>;
   addWindowToCategory: (categoryId: string, windowId: string) => Promise<void>;
   removeWindowFromCategory: (categoryId: string, windowId: string) => Promise<void>;
+  addSSHProfileToCategory: (categoryId: string, profileId: string) => Promise<void>;
+  removeSSHProfileFromCategory: (categoryId: string, profileId: string) => Promise<void>;
   addGroupToCategory: (categoryId: string, groupId: string) => Promise<void>;
   removeGroupFromCategory: (categoryId: string, groupId: string) => Promise<void>;
 
@@ -699,6 +701,7 @@ interface WindowStore {
   getCustomCategories: () => CustomCategory[];
   getCategoryById: (id: string) => CustomCategory | undefined;
   getWindowCategories: (windowId: string) => CustomCategory[];
+  getSSHProfileCategories: (profileId: string) => CustomCategory[];
   getGroupCategories: (groupId: string) => CustomCategory[];
 }
 
@@ -2098,6 +2101,53 @@ export const useWindowStore = create<WindowStore>()(
     },
 
     /**
+     * 添加 SSH 配置到分类
+     * @param categoryId 分类 ID
+     * @param profileId SSH 配置 ID
+     */
+    addSSHProfileToCategory: async (categoryId, profileId) => {
+      const category = get().customCategories.find(c => c.id === categoryId);
+      if (!category) {
+        console.warn(`[WindowStore] Category not found: ${categoryId}`);
+        return;
+      }
+
+      if ((category.sshProfileIds ?? []).includes(profileId)) {
+        return;
+      }
+
+      set((state) => {
+        const index = state.customCategories.findIndex(c => c.id === categoryId);
+        if (index >= 0) {
+          const sshProfileIds = state.customCategories[index].sshProfileIds ?? [];
+          state.customCategories[index].sshProfileIds = [...sshProfileIds, profileId];
+          state.customCategories[index].updatedAt = new Date().toISOString();
+        }
+      });
+
+      await updateSettingsCategories(get().customCategories);
+    },
+
+    /**
+     * 从分类中移除 SSH 配置
+     * @param categoryId 分类 ID
+     * @param profileId SSH 配置 ID
+     */
+    removeSSHProfileFromCategory: async (categoryId, profileId) => {
+      set((state) => {
+        const index = state.customCategories.findIndex(c => c.id === categoryId);
+        if (index >= 0) {
+          state.customCategories[index].sshProfileIds = (state.customCategories[index].sshProfileIds ?? []).filter(
+            id => id !== profileId
+          );
+          state.customCategories[index].updatedAt = new Date().toISOString();
+        }
+      });
+
+      await updateSettingsCategories(get().customCategories);
+    },
+
+    /**
      * 添加组到分类
      * @param categoryId 分类 ID
      * @param groupId 组 ID
@@ -2179,6 +2229,15 @@ export const useWindowStore = create<WindowStore>()(
      */
     getWindowCategories: (windowId) => {
       return get().customCategories.filter(c => c.windowIds.includes(windowId));
+    },
+
+    /**
+     * 获取 SSH 配置所属的所有分类
+     * @param profileId SSH 配置 ID
+     * @returns 包含该 SSH 配置的所有分类
+     */
+    getSSHProfileCategories: (profileId) => {
+      return get().customCategories.filter(c => (c.sshProfileIds ?? []).includes(profileId));
     },
 
     /**

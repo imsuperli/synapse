@@ -20,6 +20,7 @@ import { normalizeShellProgram } from '../utils/shell';
 import { getSupportedIDEIds } from '../utils/ideScanner';
 import { isSessionlessPane } from '../../shared/utils/terminalCapabilities';
 import { DEFAULT_APPEARANCE_SETTINGS, normalizeAppearanceSettings } from '../../shared/utils/appearance';
+import { DEFAULT_RECENT_TERMINAL_LIMIT, normalizeRecentTerminalLimit } from '../../shared/utils/recentTerminals';
 import { getDefaultKeyboardShortcuts, normalizeKeyboardShortcuts } from '../../shared/utils/keyboardShortcuts';
 
 type PersistedPane = Omit<PaneNode['pane'], 'status' | 'pid' | 'sessionId'>;
@@ -1288,6 +1289,7 @@ export class WorkspaceManagerImpl implements IWorkspaceManager {
       keyboardShortcuts: normalizeKeyboardShortcuts(settings?.keyboardShortcuts ?? defaults.keyboardShortcuts),
       customCategories: settings?.customCategories ?? defaults.customCategories,
       defaultSidebarTab: settings?.defaultSidebarTab ?? defaults.defaultSidebarTab,
+      recentTerminalLimit: normalizeRecentTerminalLimit(settings?.recentTerminalLimit ?? defaults.recentTerminalLimit),
     };
   }
 
@@ -1340,6 +1342,7 @@ export class WorkspaceManagerImpl implements IWorkspaceManager {
       keyboardShortcuts: getDefaultKeyboardShortcuts(),
       customCategories: [],
       defaultSidebarTab: 'active',
+      recentTerminalLimit: DEFAULT_RECENT_TERMINAL_LIMIT,
     };
   }
 

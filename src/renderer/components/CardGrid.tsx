@@ -17,7 +17,7 @@ import { SSHProfileCard } from './SSHProfileCard';
 import { DeleteSSHCardDialog } from './DeleteSSHCardDialog';
 import { CanvasWorkspaceCard } from './CanvasWorkspaceCard';
 import { Dialog } from './ui/Dialog';
-import { DraggableWindowCard, DraggableGroupCard, DropZone } from './dnd';
+import { DraggableWindowCard, DraggableGroupCard, DraggableSSHProfileCard, DropZone } from './dnd';
 import type { WindowCardDragItem, DropResult } from './dnd';
 import { useWindowDirectoryGuard } from '../hooks/useWindowDirectoryGuard';
 import { useDeleteWindowDialog } from '../hooks/useDeleteWindowDialog';
@@ -44,6 +44,7 @@ import {
   destroyWindowResourcesKeepRecord,
 } from '../utils/windowDestruction';
 import { createCanvasWindowBlock } from '../utils/canvasWorkspace';
+import { getRecentTerminalWindows } from '../utils/recentTerminals';
 
 // 统一的卡片项类型
 type CardItem =
@@ -114,6 +115,7 @@ interface CardGridProps {
   onDeleteSSHProfile?: (profile: SSHProfile) => void | Promise<void>;
   searchQuery?: string;
   currentTab?: 'all' | 'active' | 'archived' | string;
+  recentTerminalLimit?: number;
 }
 
 /**
@@ -137,6 +139,7 @@ export const CardGrid = React.memo<CardGridProps>(({
   onDeleteSSHProfile,
   searchQuery = '',
   currentTab = 'active',
+  recentTerminalLimit,
 }) => {
   const { t } = useI18n();
   const windows = useWindowStore((state) => state.windows);
@@ -151,6 +154,7 @@ export const CardGrid = React.memo<CardGridProps>(({
   const groups = useWindowStore((state) => state.groups);
   const canvasWorkspaces = useWindowStore((state) => state.canvasWorkspaces);
   const startedCanvasWorkspaceIds = useWindowStore((state) => state.startedCanvasWorkspaceIds);
+  const mruList = useWindowStore((state) => state.mruList);
   const removeGroup = useWindowStore((state) => state.removeGroup);
   const updateGroup = useWindowStore((state) => state.updateGroup);
   const archiveGroup = useWindowStore((state) => state.archiveGroup);
@@ -322,6 +326,32 @@ export const CardGrid = React.memo<CardGridProps>(({
       ));
     };
 
+    if (currentTab === 'active') {
+      const activeWindows = standalonePersistableWindows.filter((window) => (
+        !window.archived && !groupedWindowIds.has(window.id)
+      ));
+      const seenSSHProfileIds = new Set<string>();
+      return getRecentTerminalWindows(activeWindows, mruList, recentTerminalLimit)
+        .flatMap<CardItem>((window) => {
+          if (shouldRenderWindowCard(window)) {
+            return [{ type: 'window', data: window }];
+          }
+
+          const profileId = getStandaloneSSHProfileId(window);
+          if (!profileId || seenSSHProfileIds.has(profileId)) {
+            return [];
+          }
+
+          const profile = sshProfilesById.get(profileId);
+          if (!profile) {
+            return [{ type: 'window', data: window }];
+          }
+
+          seenSSHProfileIds.add(profileId);
+          return [{ type: 'sshProfile', data: profile }];
+        });
+    }
+
     // 状态筛选标签
     if (currentTab?.startsWith('status:')) {
       const statusMap: Record<string, WindowStatus> = {
@@ -384,6 +414,7 @@ export const CardGrid = React.memo<CardGridProps>(({
     if (activeCustomCategory) {
       const seenSSHProfileIds = new Set<string>();
       const categoryGroups = groups.filter((group) => activeCustomCategory.groupIds.includes(group.id));
+      const explicitSSHProfileIds = new Set(activeCustomCategory.sshProfileIds ?? []);
       const categoryWindows = sortWindows(
         standalonePersistableWindows.filter((window) => activeCustomCategory.windowIds.includes(window.id)),
         'createdAt',
@@ -408,8 +439,13 @@ export const CardGrid = React.memo<CardGridProps>(({
         seenSSHProfileIds.add(profileId);
         return [{ type: 'sshProfile', data: profile } satisfies CardItem];
       });
+      const sshProfileItems: CardItem[] = sshEnabled
+        ? sortedSSHProfiles
+          .filter((profile) => explicitSSHProfileIds.has(profile.id) && !seenSSHProfileIds.has(profile.id))
+          .map((profile) => ({ type: 'sshProfile', data: profile }))
+        : [];
 
-      return [...groupItems, ...windowItems];
+      return [...groupItems, ...windowItems, ...sshProfileItems];
     }
 
     if (isCustomCategoryTab) {
@@ -456,7 +492,7 @@ export const CardGrid = React.memo<CardGridProps>(({
       ...sortWindows(activeWindows, 'createdAt').map(w => ({ type: 'window' as const, data: w })),
       ...(sshEnabled ? sortedSSHProfiles.map(profile => ({ type: 'sshProfile' as const, data: profile })) : []),
     ];
-  }, [activeCanvasWorkspaceItems, activeCustomCategory, archivedCanvasWorkspaceItems, currentTab, groupHasKind, groupHasStatus, groupedWindowIds, groups, isCustomCategoryTab, shouldRenderWindowCard, sortedSSHProfiles, sshEnabled, sshProfilesById, standalonePersistableWindows, statusSetByWindowId, windowKindById]);
+  }, [activeCanvasWorkspaceItems, activeCustomCategory, archivedCanvasWorkspaceItems, currentTab, groupHasKind, groupHasStatus, groupedWindowIds, groups, isCustomCategoryTab, mruList, recentTerminalLimit, shouldRenderWindowCard, sortedSSHProfiles, sshEnabled, sshProfilesById, standalonePersistableWindows, statusSetByWindowId, windowKindById]);
 
   // 全局搜索：始终搜索所有终端和组，不受 currentTab 限制
   const allCardItems = useMemo<CardItem[]>(() => {
@@ -1166,7 +1202,15 @@ export const CardGrid = React.memo<CardGridProps>(({
                 );
               }
 
-              return sshCard;
+              return (
+                <DraggableSSHProfileCard
+                  key={`ssh-profile-${profile.id}`}
+                  profileId={profile.id}
+                  profileName={profile.name}
+                >
+                  {sshCard}
+                </DraggableSSHProfileCard>
+              );
             })}
             {!searchQuery && <NewWindowCard onClick={onCreateWindow || (() => {})} />}
           </div>
