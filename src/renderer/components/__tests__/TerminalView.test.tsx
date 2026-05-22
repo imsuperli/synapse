@@ -865,6 +865,94 @@ describe('TerminalView', () => {
     ]);
   });
 
+  it('preserves active split layouts while whole-window stop is still pending', async () => {
+    let resolveDeleteWindow: ((value: { success: true }) => void) | null = null;
+    vi.mocked(window.electronAPI.deleteWindow).mockReturnValueOnce(new Promise((resolve) => {
+      resolveDeleteWindow = resolve;
+    }));
+
+    const currentWindow = createTwoTerminalPaneWindow({
+      status: WindowStatus.Running,
+      secondStatus: WindowStatus.Running,
+    });
+
+    useWindowStore.setState({
+      windows: [currentWindow],
+      activeWindowId: currentWindow.id,
+      mruList: [currentWindow.id],
+      sidebarExpanded: false,
+      sidebarWidth: 200,
+    });
+
+    render(
+      <TerminalView
+        window={currentWindow}
+        onReturn={vi.fn()}
+        onWindowSwitch={vi.fn()}
+        isActive
+      />
+    );
+
+    const destroyPromise = import('../../utils/windowDestruction').then(({ destroyWindowResourcesKeepRecord }) => (
+      destroyWindowResourcesKeepRecord(currentWindow.id)
+    ));
+
+    await waitFor(() => {
+      expect(window.electronAPI.closeWindow).toHaveBeenCalledWith(currentWindow.id);
+      expect(window.electronAPI.deleteWindow).toHaveBeenCalledWith(currentWindow.id);
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+    });
+
+    let updatedWindow = useWindowStore.getState().getWindowById(currentWindow.id);
+    expect(updatedWindow?.layout.type).toBe('split');
+    expect(getAllPanes(updatedWindow!.layout).map((pane) => pane.id)).toEqual(['pane-local-1', 'pane-local-2']);
+    expect(window.electronAPI.closePane).not.toHaveBeenCalled();
+
+    resolveDeleteWindow?.({ success: true });
+    await destroyPromise;
+
+    updatedWindow = useWindowStore.getState().getWindowById(currentWindow.id);
+    expect(updatedWindow?.layout.type).toBe('split');
+    expect(getAllPanes(updatedWindow!.layout).map((pane) => pane.status)).toEqual([
+      WindowStatus.Completed,
+      WindowStatus.Completed,
+    ]);
+  });
+
+  it('preserves active stopped split layouts when the terminal view is mounted again', () => {
+    const stoppedWindow = createTwoTerminalPaneWindow({
+      status: WindowStatus.Completed,
+      secondStatus: WindowStatus.Completed,
+    });
+
+    useWindowStore.setState({
+      windows: [stoppedWindow],
+      activeWindowId: stoppedWindow.id,
+      mruList: [stoppedWindow.id],
+      sidebarExpanded: false,
+      sidebarWidth: 200,
+    });
+
+    render(
+      <TerminalView
+        window={stoppedWindow}
+        onReturn={vi.fn()}
+        onWindowSwitch={vi.fn()}
+        isActive
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+
+    const updatedWindow = useWindowStore.getState().getWindowById(stoppedWindow.id);
+    expect(updatedWindow?.layout.type).toBe('split');
+    expect(getAllPanes(updatedWindow!.layout).map((pane) => pane.id)).toEqual(['pane-local-1', 'pane-local-2']);
+    expect(window.electronAPI.closePane).not.toHaveBeenCalled();
+  });
+
   it('still closes one inactive split pane when another terminal pane is still running', () => {
     const inactiveWindow = createTwoTerminalPaneWindow({
       status: WindowStatus.Completed,

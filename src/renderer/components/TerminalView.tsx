@@ -615,15 +615,14 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       if (!terminalWindow) return;
       const exitingPane = panes.find((pane) => pane.id === paneId);
 
-      const shouldPreserveInactiveStoppedSplit = !embedded
-        && !isActive
+      const shouldPreserveStoppedSplit = !embedded
         && terminalPaneCount > 1
         && (
           isWindowResourceDestructionPending(terminalWindow.id)
           || terminalPanes.every((pane) => isInactiveTerminalPaneStatus(pane.status))
         );
 
-      if (exitingPane && isTerminalPane(exitingPane) && shouldPreserveInactiveStoppedSplit) {
+      if (exitingPane && isTerminalPane(exitingPane) && shouldPreserveStoppedSplit) {
         return;
       }
 
