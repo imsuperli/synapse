@@ -8,7 +8,6 @@ import { CardGrid } from '../CardGrid';
 import { useWindowStore } from '../../stores/windowStore';
 import { SSHProfile } from '../../../shared/types/ssh';
 import { Window, WindowStatus } from '../../types/window';
-import { getStatusColorValue } from '../../utils/statusHelpers';
 import { CanvasWorkspace } from '../../../shared/types/canvas';
 
 function createSSHProfile(overrides: Partial<SSHProfile> = {}): SSHProfile {
@@ -186,7 +185,8 @@ describe('CardGrid SSH profile cards', () => {
 
     expect(screen.getByText('Prod Bastion')).toBeInTheDocument();
     expect(screen.getByText(/root@10.0.0.21:22/)).toBeInTheDocument();
-    expect(screen.getByText('已保存密码')).toBeInTheDocument();
+    expect(screen.getByLabelText('已保存密码')).toBeInTheDocument();
+    expect(screen.queryByText('已保存密码')).not.toBeInTheDocument();
     expect(screen.queryByText('密码')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '启动' }));
@@ -284,7 +284,7 @@ describe('CardGrid SSH profile cards', () => {
     expect(screen.queryByText(/已被 .* 个窗口使用/)).not.toBeInTheDocument();
   });
 
-  it('uses the paused status color for unbound SSH profile cards', () => {
+  it('uses the default border color for unbound SSH profile cards', () => {
     const profile = createSSHProfile();
 
     renderCardGrid({
@@ -293,7 +293,7 @@ describe('CardGrid SSH profile cards', () => {
     });
 
     expect(screen.getByRole('button', { name: 'Prod Bastion root@10.0.0.21:22' }).getAttribute('style'))
-      .toContain(`border-top: 1px solid ${getStatusColorValue(WindowStatus.Paused)}`);
+      .toContain('border-top: 1px solid rgb(var(--border))');
   });
 
   it('binds a standalone SSH runtime window back onto the SSH profile card', async () => {
@@ -667,7 +667,7 @@ describe('CardGrid SSH profile cards', () => {
     expect(within(dialog).getByRole('button', { name: '删除 SSH 卡片' })).toBeEnabled();
   });
 
-  it('uses the paused status color for bound SSH cards', () => {
+  it('uses the default border color for paused SSH cards', () => {
     const profile = createSSHProfile();
     const runtimeWindow = createStandaloneSSHWindow(profile, {
       layout: {
@@ -703,6 +703,6 @@ describe('CardGrid SSH profile cards', () => {
     });
 
     expect(screen.getByRole('button', { name: 'Prod Bastion root@10.0.0.21:22' }).getAttribute('style'))
-      .toContain(`border-top: 1px solid ${getStatusColorValue(WindowStatus.Paused)}`);
+      .toContain('border-top: 1px solid rgb(var(--border))');
   });
 });

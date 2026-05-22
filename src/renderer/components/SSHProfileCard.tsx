@@ -39,6 +39,14 @@ interface SSHProfileCardProps {
   onDelete?: (profile: SSHProfile) => void;
 }
 
+function getCardTopBorderColor(status: WindowStatus | null): string {
+  if (!status || status === WindowStatus.Completed || status === WindowStatus.Paused) {
+    return 'rgb(var(--border))';
+  }
+
+  return getStatusColorValue(status);
+}
+
 export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
   profile,
   window,
@@ -56,6 +64,8 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
 }) => {
   const { t } = useI18n();
   const badgeClassName = `${idePopupPillClassName} text-[rgb(var(--foreground))]`;
+  const tagBadgeClassName = `${idePopupPillClassName} border-[rgb(var(--primary))]/45 bg-[rgb(var(--primary))]/10 text-[rgb(var(--primary))]`;
+  const remoteMetaIconClassName = 'inline-flex h-6 w-6 items-center justify-center rounded-md border border-[rgb(var(--border))] bg-[var(--appearance-pane-chrome-background)]';
   const tooltipClassName = idePopupTooltipClassName;
   const cardButtonClassName = `${idePopupTonalButtonClassName} shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]`;
   const runtimeStatus = useMemo(
@@ -63,7 +73,7 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
     [window],
   );
   const isWindowRunning = runtimeStatus === WindowStatus.Running || runtimeStatus === WindowStatus.WaitingForInput;
-  const topBorderColor = getStatusColorValue(runtimeStatus ?? WindowStatus.Completed);
+  const topBorderColor = getCardTopBorderColor(runtimeStatus);
   const statusTooltip = useMemo(() => {
     if (!runtimeStatus) {
       return null;
@@ -165,7 +175,7 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
       )}
 
       <div className="flex-1 p-4 space-y-3 flex flex-col min-h-0">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 min-w-0">
               <TerminalTypeLogo variant="ssh" size="md" data-testid="ssh-profile-card-logo" />
@@ -256,11 +266,60 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
         <div className="border-t border-[rgb(var(--border))]" />
 
         <div className="space-y-2 flex-1 min-h-0">
-          <div className="flex items-center gap-2 text-xs text-[rgb(var(--muted-foreground))]">
-            <Link2 size={13} className="text-[rgb(var(--muted-foreground))]" />
-            <span className="truncate">
-              {t('sshProfileCard.remoteCwd')}: {profile.defaultRemoteCwd || '~'}
-            </span>
+          <div className="flex items-center justify-between gap-3 text-xs text-[rgb(var(--muted-foreground))]">
+            <div className="flex min-w-0 items-center gap-2">
+              <Link2 size={13} className="shrink-0 text-[rgb(var(--muted-foreground))]" />
+              <span className="truncate">
+                {t('sshProfileCard.remoteCwd')}: {profile.defaultRemoteCwd || '~'}
+              </span>
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <Tooltip.Provider>
+                <Tooltip.Root delayDuration={300}>
+                  <Tooltip.Trigger asChild>
+                    <span
+                      className={remoteMetaIconClassName}
+                      aria-label={profile.verifyHostKeys ? t('sshProfileCard.hostKeyVerifyOn') : t('sshProfileCard.hostKeyVerifyOff')}
+                    >
+                      <ShieldCheck size={13} className={profile.verifyHostKeys ? 'text-emerald-400' : 'text-amber-400'} />
+                    </span>
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Content
+                      className={tooltipClassName}
+                      side="top"
+                      sideOffset={5}
+                    >
+                      {profile.verifyHostKeys ? t('sshProfileCard.hostKeyVerifyOn') : t('sshProfileCard.hostKeyVerifyOff')}
+                    </Tooltip.Content>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              </Tooltip.Provider>
+
+              {credentialState?.hasPassword && (
+                <Tooltip.Provider>
+                  <Tooltip.Root delayDuration={300}>
+                    <Tooltip.Trigger asChild>
+                      <span
+                        className={remoteMetaIconClassName}
+                        aria-label={t('sshProfileCard.passwordSaved')}
+                      >
+                        <LockKeyhole size={13} className="text-[rgb(var(--primary))]" />
+                      </span>
+                    </Tooltip.Trigger>
+                    <Tooltip.Portal>
+                      <Tooltip.Content
+                        className={tooltipClassName}
+                        side="top"
+                        sideOffset={5}
+                      >
+                        {t('sshProfileCard.passwordSaved')}
+                      </Tooltip.Content>
+                    </Tooltip.Portal>
+                  </Tooltip.Root>
+                </Tooltip.Provider>
+              )}
+            </div>
           </div>
 
           {profile.notes && (
@@ -285,18 +344,6 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
           )}
 
           <div className="flex flex-wrap gap-2">
-            <span className={badgeClassName}>
-              <ShieldCheck size={12} className={profile.verifyHostKeys ? 'text-emerald-400' : 'text-amber-400'} />
-              {profile.verifyHostKeys ? t('sshProfileCard.hostKeyVerifyOn') : t('sshProfileCard.hostKeyVerifyOff')}
-            </span>
-
-            {credentialState?.hasPassword && (
-              <span className={badgeClassName}>
-                <LockKeyhole size={12} className="text-[rgb(var(--primary))]" />
-                {t('sshProfileCard.passwordSaved')}
-              </span>
-            )}
-
             {credentialState?.hasPassphrase && (
               <span className={badgeClassName}>
                 <KeyRound size={12} className="text-violet-400" />
@@ -316,16 +363,16 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
             {visibleTags.map((tag) => (
               <span
                 key={tag}
-                className={badgeClassName}
+                className={tagBadgeClassName}
               >
-                #{tag}
+                {tag}
               </span>
             ))}
           </div>
         </div>
       </div>
 
-      <div className={`${idePopupListCardFooterClassName} flex flex-shrink-0 items-center justify-between gap-2 px-4 py-2`}>
+      <div className={`${idePopupListCardFooterClassName} relative flex flex-shrink-0 items-center justify-between gap-2 !border-t-transparent px-4 py-2 before:absolute before:left-4 before:right-4 before:top-0 before:border-t before:border-[rgb(var(--border))] before:content-['']`}>
         <button
           onClick={(event) => handleButtonClick(event, handlePrimaryAction)}
           disabled={isConnecting}

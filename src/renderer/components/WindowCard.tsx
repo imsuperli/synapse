@@ -116,6 +116,14 @@ function findActiveTerminalPane(panes: Pane[], activePaneId: string): Pane | nul
     ?? null;
 }
 
+function getCardTopBorderColor(status: WindowStatus): string {
+  if (status === WindowStatus.Completed || status === WindowStatus.Paused) {
+    return 'rgb(var(--border))';
+  }
+
+  return getStatusColorValue(status);
+}
+
 /**
  * WindowCard 组件
  * 显示单个窗口的关键信息和状态
@@ -272,7 +280,7 @@ export const WindowCard = React.memo<WindowCardProps>(({
       onKeyDown={handleKeyDown}
       aria-label={ariaLabel}
       className={`${idePopupInteractiveListCardClassName} flex h-56 min-w-[280px] flex-col`}
-      style={{ borderTop: `1px solid ${getStatusColorValue(aggregatedStatus)}` }}
+      style={{ borderTop: `1px solid ${getCardTopBorderColor(aggregatedStatus)}` }}
     >
       {/* 启动中加载遮罩 */}
       {aggregatedStatus === WindowStatus.Restoring && (
@@ -435,7 +443,7 @@ export const WindowCard = React.memo<WindowCardProps>(({
       </div>
 
       {/* 底部按钮栏 - 两行布局 */}
-      <div className={`${idePopupListCardFooterClassName} flex flex-shrink-0 flex-col gap-1.5 px-4 py-2`}>
+      <div className={`${idePopupListCardFooterClassName} relative flex flex-shrink-0 flex-col gap-1.5 !border-t-transparent px-4 py-2 before:absolute before:left-4 before:right-4 before:top-0 before:border-t before:border-[rgb(var(--border))] before:content-['']`}>
         {/* 第一行：启动/停止按钮 */}
         <div className="flex items-center justify-between">
           <div>
