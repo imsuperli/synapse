@@ -4,6 +4,29 @@ import { useWindowStore } from '../stores/windowStore';
 import { usePaneNoteStore } from '../stores/paneNoteStore';
 import { getDestroyableSSHWindowIds, isEphemeralSSHCloneWindow } from './sshWindowBindings';
 
+const pendingWindowResourceDestructionCounts = new Map<string, number>();
+
+function beginWindowResourceDestruction(windowId: string): () => void {
+  pendingWindowResourceDestructionCounts.set(
+    windowId,
+    (pendingWindowResourceDestructionCounts.get(windowId) ?? 0) + 1,
+  );
+
+  return () => {
+    const nextCount = (pendingWindowResourceDestructionCounts.get(windowId) ?? 1) - 1;
+    if (nextCount <= 0) {
+      pendingWindowResourceDestructionCounts.delete(windowId);
+      return;
+    }
+
+    pendingWindowResourceDestructionCounts.set(windowId, nextCount);
+  };
+}
+
+export function isWindowResourceDestructionPending(windowId: string): boolean {
+  return pendingWindowResourceDestructionCounts.has(windowId);
+}
+
 function assertIpcSuccess(response: IpcResponse<void> | undefined, fallbackMessage: string): void {
   if (response && !response.success) {
     throw new Error(response.error || fallbackMessage);
@@ -19,27 +42,39 @@ async function destroyWindowResources(windowId: string): Promise<void> {
 }
 
 export async function destroyWindowResourcesKeepRecord(windowId: string): Promise<void> {
-  await destroyWindowResources(windowId);
-  usePaneNoteStore.getState().removeWindowNotes(windowId);
+  const endPendingDestruction = beginWindowResourceDestruction(windowId);
 
-  const { getWindowById, clearWindowRuntimeSession } = useWindowStore.getState();
-  const targetWindow = getWindowById(windowId);
-  if (!targetWindow) {
-    return;
+  try {
+    await destroyWindowResources(windowId);
+    usePaneNoteStore.getState().removeWindowNotes(windowId);
+
+    const { getWindowById, clearWindowRuntimeSession } = useWindowStore.getState();
+    const targetWindow = getWindowById(windowId);
+    if (!targetWindow) {
+      return;
+    }
+
+    if (targetWindow.ephemeral) {
+      useWindowStore.getState().removeWindow(windowId);
+      return;
+    }
+
+    clearWindowRuntimeSession(windowId);
+  } finally {
+    endPendingDestruction();
   }
-
-  if (targetWindow.ephemeral) {
-    useWindowStore.getState().removeWindow(windowId);
-    return;
-  }
-
-  clearWindowRuntimeSession(windowId);
 }
 
 export async function destroyWindowResourcesAndRemoveRecord(windowId: string): Promise<void> {
-  await destroyWindowResources(windowId);
-  usePaneNoteStore.getState().removeWindowNotes(windowId);
-  useWindowStore.getState().removeWindow(windowId);
+  const endPendingDestruction = beginWindowResourceDestruction(windowId);
+
+  try {
+    await destroyWindowResources(windowId);
+    usePaneNoteStore.getState().removeWindowNotes(windowId);
+    useWindowStore.getState().removeWindow(windowId);
+  } finally {
+    endPendingDestruction();
+  }
 }
 
 export async function destroySSHWindowFamilyResources(

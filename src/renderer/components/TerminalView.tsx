@@ -65,7 +65,7 @@ import {
 } from '../utils/sshWindowBindings';
 import { preventMouseButtonFocus } from '../utils/buttonFocus';
 import { requestActiveTerminalFocus } from '../utils/terminalFocus';
-import { destroyWindowResourcesKeepRecord } from '../utils/windowDestruction';
+import { destroyWindowResourcesKeepRecord, isWindowResourceDestructionPending } from '../utils/windowDestruction';
 import { idePopupIconButtonClassName } from './ui/ide-popup';
 import { getInactiveWindowStatus, getStartablePanes, hasAnyLiveTerminalSession, isInactiveTerminalPaneStatus } from '../utils/windowLifecycle';
 import { appearanceTitlebarSurfaceStyle } from '../utils/appearance';
@@ -615,6 +615,18 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       if (!terminalWindow) return;
       const exitingPane = panes.find((pane) => pane.id === paneId);
 
+      const shouldPreserveInactiveStoppedSplit = !embedded
+        && !isActive
+        && terminalPaneCount > 1
+        && (
+          isWindowResourceDestructionPending(terminalWindow.id)
+          || terminalPanes.every((pane) => isInactiveTerminalPaneStatus(pane.status))
+        );
+
+      if (exitingPane && isTerminalPane(exitingPane) && shouldPreserveInactiveStoppedSplit) {
+        return;
+      }
+
       if (exitingPane && isTerminalPane(exitingPane) && terminalPaneCount <= 1) {
         if (canvasEmbedded) {
           void destroyWindowResourcesKeepRecord(terminalWindow.id).catch((error) => {
@@ -672,6 +684,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     [
       terminalWindow,
       panes,
+      terminalPanes,
       terminalPaneCount,
       canvasEmbedded,
       embedded,

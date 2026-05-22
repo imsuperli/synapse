@@ -306,6 +306,56 @@ function createMixedLocalAndSshWindow(): Window {
   };
 }
 
+function createTwoTerminalPaneWindow(options?: {
+  status?: WindowStatus;
+  secondStatus?: WindowStatus;
+  secondPid?: number | null;
+}): Window {
+  const status = options?.status ?? WindowStatus.Running;
+  const secondStatus = options?.secondStatus ?? status;
+
+  return {
+    id: 'win-local-split-1',
+    name: 'Split Local Window',
+    activePaneId: 'pane-local-1',
+    createdAt: new Date().toISOString(),
+    lastActiveAt: new Date().toISOString(),
+    layout: {
+      type: 'split',
+      direction: 'horizontal',
+      sizes: [0.5, 0.5],
+      children: [
+        {
+          type: 'pane',
+          id: 'pane-local-1',
+          pane: {
+            id: 'pane-local-1',
+            cwd: '/workspace/project',
+            command: 'bash',
+            status,
+            pid: status === WindowStatus.Completed || status === WindowStatus.Error || status === WindowStatus.Paused ? null : 101,
+          },
+        },
+        {
+          type: 'pane',
+          id: 'pane-local-2',
+          pane: {
+            id: 'pane-local-2',
+            cwd: '/workspace/project',
+            command: 'bash',
+            status: secondStatus,
+            pid: options?.secondPid ?? (
+              secondStatus === WindowStatus.Completed || secondStatus === WindowStatus.Error || secondStatus === WindowStatus.Paused
+                ? null
+                : 202
+            ),
+          },
+        },
+      ],
+    },
+  };
+}
+
 function createBrowserOnlyWindow(kind: Window['kind'] = 'local'): Window {
   const paneId = 'pane-browser-only-1';
 
@@ -651,7 +701,9 @@ describe('TerminalView', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+    });
 
     await waitFor(() => {
       expect(window.electronAPI.closeWindow).toHaveBeenCalledWith(currentWindow.id);
@@ -713,6 +765,141 @@ describe('TerminalView', () => {
     expect(onWindowSwitch).not.toHaveBeenCalled();
     expect(onReturn).not.toHaveBeenCalled();
     expect(useWindowStore.getState().activeWindowId).toBe(activeWindow.id);
+  });
+
+  it('preserves inactive split layouts after a whole-window stop completes', () => {
+    const inactiveWindow = createTwoTerminalPaneWindow({
+      status: WindowStatus.Completed,
+      secondStatus: WindowStatus.Completed,
+    });
+    const activeWindow: Window = {
+      ...createLocalWindow(WindowStatus.Running),
+      id: 'win-local-2',
+      name: 'Active Window',
+    };
+
+    useWindowStore.setState({
+      windows: [inactiveWindow, activeWindow],
+      activeWindowId: activeWindow.id,
+      mruList: [activeWindow.id, inactiveWindow.id],
+      sidebarExpanded: false,
+      sidebarWidth: 200,
+    });
+
+    render(
+      <TerminalView
+        window={inactiveWindow}
+        onReturn={vi.fn()}
+        onWindowSwitch={vi.fn()}
+        isActive={false}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+
+    const updatedWindow = useWindowStore.getState().getWindowById(inactiveWindow.id);
+    expect(updatedWindow?.layout.type).toBe('split');
+    expect(getAllPanes(updatedWindow!.layout).map((pane) => pane.id)).toEqual(['pane-local-1', 'pane-local-2']);
+    expect(window.electronAPI.closePane).not.toHaveBeenCalled();
+  });
+
+  it('preserves inactive split layouts while whole-window stop is still pending', async () => {
+    let resolveDeleteWindow: ((value: { success: true }) => void) | null = null;
+    vi.mocked(window.electronAPI.deleteWindow).mockReturnValueOnce(new Promise((resolve) => {
+      resolveDeleteWindow = resolve;
+    }));
+
+    const inactiveWindow = createTwoTerminalPaneWindow({
+      status: WindowStatus.Running,
+      secondStatus: WindowStatus.Running,
+    });
+    const activeWindow: Window = {
+      ...createLocalWindow(WindowStatus.Running),
+      id: 'win-local-2',
+      name: 'Active Window',
+    };
+
+    useWindowStore.setState({
+      windows: [inactiveWindow, activeWindow],
+      activeWindowId: activeWindow.id,
+      mruList: [activeWindow.id, inactiveWindow.id],
+      sidebarExpanded: false,
+      sidebarWidth: 200,
+    });
+
+    render(
+      <TerminalView
+        window={inactiveWindow}
+        onReturn={vi.fn()}
+        onWindowSwitch={vi.fn()}
+        isActive={false}
+      />
+    );
+
+    const destroyPromise = import('../../utils/windowDestruction').then(({ destroyWindowResourcesKeepRecord }) => (
+      destroyWindowResourcesKeepRecord(inactiveWindow.id)
+    ));
+
+    await waitFor(() => {
+      expect(window.electronAPI.closeWindow).toHaveBeenCalledWith(inactiveWindow.id);
+      expect(window.electronAPI.deleteWindow).toHaveBeenCalledWith(inactiveWindow.id);
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+    });
+
+    let updatedWindow = useWindowStore.getState().getWindowById(inactiveWindow.id);
+    expect(updatedWindow?.layout.type).toBe('split');
+    expect(getAllPanes(updatedWindow!.layout).map((pane) => pane.id)).toEqual(['pane-local-1', 'pane-local-2']);
+    expect(window.electronAPI.closePane).not.toHaveBeenCalled();
+
+    resolveDeleteWindow?.({ success: true });
+    await destroyPromise;
+
+    updatedWindow = useWindowStore.getState().getWindowById(inactiveWindow.id);
+    expect(updatedWindow?.layout.type).toBe('split');
+    expect(getAllPanes(updatedWindow!.layout).map((pane) => pane.status)).toEqual([
+      WindowStatus.Completed,
+      WindowStatus.Completed,
+    ]);
+  });
+
+  it('still closes one inactive split pane when another terminal pane is still running', () => {
+    const inactiveWindow = createTwoTerminalPaneWindow({
+      status: WindowStatus.Completed,
+      secondStatus: WindowStatus.Running,
+    });
+    const activeWindow: Window = {
+      ...createLocalWindow(WindowStatus.Running),
+      id: 'win-local-2',
+      name: 'Active Window',
+    };
+
+    useWindowStore.setState({
+      windows: [inactiveWindow, activeWindow],
+      activeWindowId: activeWindow.id,
+      mruList: [activeWindow.id, inactiveWindow.id],
+      sidebarExpanded: false,
+      sidebarWidth: 200,
+    });
+
+    render(
+      <TerminalView
+        window={inactiveWindow}
+        onReturn={vi.fn()}
+        onWindowSwitch={vi.fn()}
+        isActive={false}
+      />
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+    });
+
+    const updatedWindow = useWindowStore.getState().getWindowById(inactiveWindow.id);
+    expect(getAllPanes(updatedWindow!.layout).map((pane) => pane.id)).toEqual(['pane-local-2']);
+    expect(window.electronAPI.closePane).toHaveBeenCalledWith(inactiveWindow.id, 'pane-local-1');
   });
 
   it('keeps remote tabs visible for embedded ssh windows even when inactive', () => {
