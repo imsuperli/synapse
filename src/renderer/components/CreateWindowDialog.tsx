@@ -9,6 +9,7 @@ import { useI18n } from '../i18n'
 import type { Window } from '../types/window'
 import type { CanvasWorkspace } from '../../shared/types/canvas'
 import { SSHAuthType, SSHCredentialState, SSHProfile, SSHProfileInput } from '../../shared/types/ssh'
+import { DEFAULT_SSH_READY_TIMEOUT_MS } from '../../shared/utils/sshDefaults'
 import { TerminalTypeLogo } from './icons/TerminalTypeLogo'
 import {
   idePopupActionButtonClassName,
@@ -1567,7 +1568,7 @@ export function CreateWindowDialog({
                                 min={1}
                                 value={sshForm.readyTimeout}
                                 onChange={(event) => setSSHField('readyTimeout', event.target.value)}
-                                placeholder="15000"
+                                placeholder={String(DEFAULT_SSH_READY_TIMEOUT_MS)}
                                 className={textFieldClassName}
                               />
                             </div>

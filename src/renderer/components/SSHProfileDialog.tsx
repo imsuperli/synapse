@@ -13,6 +13,7 @@ import {
   SSHProfile,
   SSHProfileInput,
 } from '../../shared/types/ssh';
+import { DEFAULT_SSH_READY_TIMEOUT_MS } from '../../shared/utils/sshDefaults';
 
 interface SSHProfileDialogProps {
   open: boolean;
@@ -1131,6 +1132,7 @@ export function SSHProfileDialog({
               min="1"
               value={form.readyTimeout}
               onChange={(event) => setField('readyTimeout', event.target.value)}
+              placeholder={String(DEFAULT_SSH_READY_TIMEOUT_MS)}
               className="w-full px-3 py-2 bg-bg-app border border-border-subtle rounded text-text-primary placeholder-text-disabled focus:outline-none focus:ring-2 focus:ring-status-running"
             />
           </div>

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SSH_AUTH_FAILED_ERROR_CODE } from '../../../shared/types/electron-api';
+import { DEFAULT_SSH_READY_TIMEOUT_MS } from '../../../shared/utils/sshDefaults';
 import type { SSHSessionConfig } from '../../types/process';
 import { SSHClientConnection } from '../ssh/SSHClientConnection';
 
@@ -261,6 +262,32 @@ describe('SSHClientConnection', () => {
     await vi.advanceTimersByTimeAsync(60);
 
     await expect(rejectedPromise).resolves.toBeInstanceOf(Error);
+    await expect(rejectedPromise).resolves.toMatchObject({
+      message: 'Timed out while waiting for handshake',
+    });
+    expect(fakeClient.end).toHaveBeenCalledTimes(1);
+    expect(fakeClient.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the default handshake timeout when the profile does not override it', async () => {
+    vi.useFakeTimers();
+
+    const fakeClient = new FakeSSHClient();
+    const connection = new SSHClientConnection(createSSHConfig({ readyTimeout: null }));
+    (connection as any).client = fakeClient;
+
+    const connectPromise = connection.connect();
+    const rejectedPromise = connectPromise.then(
+      () => null,
+      (error) => error as Error,
+    );
+    await flushPromises();
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_SSH_READY_TIMEOUT_MS - 1);
+    expect(fakeClient.destroy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
     await expect(rejectedPromise).resolves.toMatchObject({
       message: 'Timed out while waiting for handshake',
     });

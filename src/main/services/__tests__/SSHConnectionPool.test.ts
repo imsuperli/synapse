@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_SSH_READY_TIMEOUT_MS } from '../../../shared/utils/sshDefaults';
 import type { SSHSessionConfig } from '../../types/process';
 import { buildSSHConnectionKey, SSHConnectionPool } from '../ssh/SSHConnectionPool';
 
@@ -109,5 +110,12 @@ describe('SSHConnectionPool', () => {
     expect(relaxedVerifyKey).not.toBe(baseKey);
     expect(customLocaleKey).not.toBe(baseKey);
     expect(algorithmKey).not.toBe(baseKey);
+  });
+
+  it('treats an omitted ready timeout as the default timeout in the reuse key', () => {
+    expect(buildSSHConnectionKey(createSSHConfig({ readyTimeout: null })))
+      .toBe(buildSSHConnectionKey(createSSHConfig({ readyTimeout: DEFAULT_SSH_READY_TIMEOUT_MS })));
+    expect(buildSSHConnectionKey(createSSHConfig({ readyTimeout: DEFAULT_SSH_READY_TIMEOUT_MS + 1 })))
+      .not.toBe(buildSSHConnectionKey(createSSHConfig({ readyTimeout: null })));
   });
 });

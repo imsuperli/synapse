@@ -13,6 +13,7 @@ import type {
   SSHSessionMetrics,
 } from '../../../shared/types/ssh';
 import { SSH_AUTH_FAILED_ERROR_CODE } from '../../../shared/types/electron-api';
+import { resolveSSHReadyTimeoutMs } from '../../../shared/utils/sshDefaults';
 import type {
   SSHExecCommandCallbacks,
   SSHExecCommandHandle,
@@ -360,23 +361,26 @@ export class SSHClientConnection implements ISSHConnection {
         reject(error);
       };
 
-      this.connectTimeoutController = createConnectTimeoutController(this.ssh.readyTimeout, () => {
-        this.hostKeyVerificationError = new Error('Timed out while waiting for handshake');
+      this.connectTimeoutController = createConnectTimeoutController(
+        resolveSSHReadyTimeoutMs(this.ssh.readyTimeout),
+        () => {
+          this.hostKeyVerificationError = new Error('Timed out while waiting for handshake');
 
-        try {
-          this.client.end();
-        } catch {
-          // Ignore connection teardown races during timeout handling.
-        }
+          try {
+            this.client.end();
+          } catch {
+            // Ignore connection teardown races during timeout handling.
+          }
 
-        try {
-          this.client.destroy();
-        } catch {
-          // Ignore connection teardown races during timeout handling.
-        }
+          try {
+            this.client.destroy();
+          } catch {
+            // Ignore connection teardown races during timeout handling.
+          }
 
-        rejectOnce(this.hostKeyVerificationError);
-      });
+          rejectOnce(this.hostKeyVerificationError);
+        },
+      );
 
       this.client.setNoDelay(true);
 

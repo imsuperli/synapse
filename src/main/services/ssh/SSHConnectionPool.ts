@@ -1,4 +1,5 @@
 import type { SSHSessionConfig } from '../../types/process';
+import { resolveSSHReadyTimeoutMs } from '../../../shared/utils/sshDefaults';
 import type { ISSHKnownHostsStore } from './SSHKnownHostsStore';
 import type { ISSHHostKeyPromptService } from './SSHHostKeyPromptService';
 import {
@@ -174,7 +175,7 @@ export function buildSSHConnectionKey(config: SSHSessionConfig): string {
     privateKeys: [...config.privateKeys].sort(),
     keepaliveInterval: config.keepaliveInterval,
     keepaliveCountMax: config.keepaliveCountMax,
-    readyTimeout: config.readyTimeout,
+    readyTimeout: resolveSSHReadyTimeoutMs(config.readyTimeout),
     verifyHostKeys: config.verifyHostKeys,
     agentForward: config.agentForward,
     jumpHostProfileId: config.jumpHostProfileId ?? null,
