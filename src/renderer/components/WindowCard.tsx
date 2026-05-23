@@ -350,7 +350,7 @@ export const WindowCard = React.memo<WindowCardProps>(({
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  className={ideMenuContentClassName}
+                  className={`${ideMenuContentClassName} !min-w-[140px]`}
                   side="bottom"
                   align="end"
                   sideOffset={6}
