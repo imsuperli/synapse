@@ -208,10 +208,11 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  className={`${ideMenuContentClassName} !min-w-[168px]`}
+                  className={ideMenuContentClassName}
                   side="bottom"
                   align="end"
                   sideOffset={6}
+                  style={{ width: 150, minWidth: 0 }}
                   onClick={(event) => event.stopPropagation()}
                 >
                   {window && (
