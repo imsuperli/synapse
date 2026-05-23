@@ -21,6 +21,7 @@ import { useWindowStore } from './stores/windowStore';
 import { useViewSwitcher } from './hooks/useViewSwitcher';
 import { useWindowSwitcher } from './hooks/useWindowSwitcher';
 import { useWorkspaceRestore } from './hooks/useWorkspaceRestore';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { subscribeToPaneStatusChange, subscribeToWindowGitBranchChange } from './api/events';
 import { Pane, Window, WindowStatus } from './types/window';
 import { WindowGroup } from '../shared/types/window-group';
@@ -84,6 +85,9 @@ type CanvasLiveTerminalRect = {
 };
 const LazyQuickNavPanel = lazy(async () => ({
   default: (await import('./components/QuickNavPanel')).QuickNavPanel,
+}));
+const LazyQuickSwitcher = lazy(async () => ({
+  default: (await import('./components/QuickSwitcher')).QuickSwitcher,
 }));
 const LazySettingsPanel = lazy(async () => ({
   default: (await import('./components/SettingsPanel')).SettingsPanel,
@@ -517,6 +521,7 @@ function AppContent() {
   const [recentTerminalLimit, setRecentTerminalLimit] = useState(DEFAULT_RECENT_TERMINAL_LIMIT);
   const [searchQuery, setSearchQuery] = useState(''); // 搜索状态
   const [isQuickNavOpen, setIsQuickNavOpen] = useState(false); // 快捷导航面板状态
+  const [isUnifiedQuickSwitcherOpen, setIsUnifiedQuickSwitcherOpen] = useState(false);
   const [sshHostKeyPromptQueue, setSSHHostKeyPromptQueue] = useState<SSHHostKeyPromptPayload[]>([]);
   const [sshPasswordPromptRequest, setSSHPasswordPromptRequest] = useState<SSHPasswordPromptRequest | null>(null);
   const [appNotice, setAppNotice] = useState<{ message: string; tone: 'error' | 'success' } | null>(null);
@@ -1593,6 +1598,49 @@ function AppContent() {
     await handleGroupSwitch(groupId);
   }, [canvasTerminalReturnTargetId, handleGroupSwitch, setActiveGroup]);
   const activeSSHHostKeyPrompt = sshHostKeyPromptQueue[0] ?? null;
+  const handleUnifiedQuickSwitcherSelect = useCallback((windowId: string) => {
+    setIsUnifiedQuickSwitcherOpen(false);
+    handleWindowSwitch(windowId);
+  }, [handleWindowSwitch]);
+
+  const handleUnifiedQuickSwitcherSelectGroup = useCallback((groupId: string) => {
+    setIsUnifiedQuickSwitcherOpen(false);
+    void handleGroupSwitch(groupId);
+  }, [handleGroupSwitch]);
+
+  const handleUnifiedQuickSwitcherSelectCanvas = useCallback((canvasWorkspaceId: string) => {
+    setIsUnifiedQuickSwitcherOpen(false);
+    void handleEnterCanvasWorkspace(canvasWorkspaceId);
+  }, [handleEnterCanvasWorkspace]);
+
+  const handleUnifiedQuickSwitcherClose = useCallback(() => {
+    setIsUnifiedQuickSwitcherOpen(false);
+  }, []);
+
+  useKeyboardShortcuts({
+    quickSwitcherShortcut: keyboardShortcuts.quickSwitcher,
+    onCtrlTab: () => {
+      setIsQuickNavOpen(false);
+      setIsUnifiedQuickSwitcherOpen(true);
+    },
+    onEscape: () => {
+      if (isUnifiedQuickSwitcherOpen) {
+        setIsUnifiedQuickSwitcherOpen(false);
+        return true;
+      }
+
+      return false;
+    },
+    enabled:
+      currentView === 'unified'
+      && !activeGroupId
+      && !isDialogOpen
+      && !showCreateGroupDialog
+      && !isSSHDialogOpen
+      && !isQuickNavOpen
+      && !sshPasswordPromptRequest
+      && !activeSSHHostKeyPrompt,
+  });
   const activeLiveCanvasBlocks = useMemo(
     () => getLiveCanvasWindowBlocks(canvasWorkspaces, currentActiveCanvasWorkspaceId, currentView),
     [canvasWorkspaces, currentActiveCanvasWorkspaceId, currentView],
@@ -1948,6 +1996,23 @@ function AppContent() {
           <LazyQuickNavPanel
             open={isQuickNavOpen}
             onClose={() => setIsQuickNavOpen(false)}
+          />
+        </Suspense>
+      )}
+
+      {/* 主界面快速切换面板 */}
+      {isUnifiedQuickSwitcherOpen && (
+        <Suspense fallback={null}>
+          <LazyQuickSwitcher
+            isOpen={isUnifiedQuickSwitcherOpen}
+            currentWindowId={activeWindowId}
+            currentGroupId={activeGroupId}
+            currentCanvasWorkspaceId={currentActiveCanvasWorkspaceId}
+            sshProfiles={sshProfiles}
+            onSelect={handleUnifiedQuickSwitcherSelect}
+            onSelectGroup={handleUnifiedQuickSwitcherSelectGroup}
+            onSelectCanvas={handleUnifiedQuickSwitcherSelectCanvas}
+            onClose={handleUnifiedQuickSwitcherClose}
           />
         </Suspense>
       )}

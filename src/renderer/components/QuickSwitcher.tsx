@@ -18,11 +18,9 @@ import { getWindowKind } from '../../shared/utils/terminalCapabilities';
 import {
   IdePopupShell,
   idePopupBadgeClassName,
-  idePopupHeaderMetaClassName,
   idePopupOverlayClassName,
   idePopupScrollAreaClassName,
   idePopupSectionClassName,
-  idePopupSubtitleClassName,
   idePopupTitleClassName,
 } from './ui/ide-popup';
 
@@ -410,11 +408,9 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
       >
         <IdePopupShell className="flex max-h-[72vh] flex-col">
           <div className={`${idePopupSectionClassName} px-5 py-3`}>
-            <div className={idePopupHeaderMetaClassName}>Quick Switcher</div>
-            <div className="mt-1 flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className={idePopupTitleClassName}>{t('quickSwitcher.title')}</div>
-                <div className={idePopupSubtitleClassName}>{t('quickSwitcher.shortcutHint')}</div>
               </div>
               {query ? (
                 <span className="rounded-md border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_72%,transparent)] px-2 py-1 text-[11px] text-[rgb(var(--muted-foreground))]">
@@ -518,9 +514,6 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
                 <kbd className={QUICK_SWITCHER_KEYCAP_CLASS_NAME}>Esc</kbd>
                 <span>{t('quickSwitcher.cancel')}</span>
               </span>
-            </div>
-            <div className="text-[rgb(var(--muted-foreground))]">
-              {t('quickSwitcher.shortcutHint')}
             </div>
           </div>
         </IdePopupShell>

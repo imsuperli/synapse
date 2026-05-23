@@ -2,9 +2,18 @@ import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useWindowStore } from '../stores/windowStore';
 
-const { mockQuickNavPanel, mockUseViewSwitcher, mockUseWindowSwitcher, mockUseWorkspaceRestore } = vi.hoisted(() => ({
+const {
+  mockQuickNavPanel,
+  mockQuickSwitcher,
+  mockUseViewSwitcher,
+  mockUseWindowSwitcher,
+  mockUseWorkspaceRestore,
+} = vi.hoisted(() => ({
   mockQuickNavPanel: vi.fn(({ open }: { open: boolean }) => (
     open ? <div data-testid="quick-nav-state">open</div> : null
+  )),
+  mockQuickSwitcher: vi.fn(({ isOpen }: { isOpen: boolean }) => (
+    isOpen ? <div data-testid="quick-switcher-state">open</div> : null
   )),
   mockUseViewSwitcher: vi.fn(),
   mockUseWindowSwitcher: vi.fn(),
@@ -55,6 +64,10 @@ vi.mock('../components/QuickNavPanel', () => ({
   QuickNavPanel: mockQuickNavPanel,
 }));
 
+vi.mock('../components/QuickSwitcher', () => ({
+  QuickSwitcher: mockQuickSwitcher,
+}));
+
 vi.mock('../components/SSHHostKeyPromptDialog', () => ({
   SSHHostKeyPromptDialog: () => null,
 }));
@@ -80,6 +93,10 @@ import App from '../App';
 function pressKey(key: string) {
   window.dispatchEvent(new KeyboardEvent('keydown', { key }));
   window.dispatchEvent(new KeyboardEvent('keyup', { key }));
+}
+
+function pressCtrlTab() {
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true }));
 }
 
 async function renderApp() {
@@ -191,5 +208,19 @@ describe('App quick navigation shortcut', () => {
     });
 
     expect(screen.getByTestId('quick-nav-state')).toHaveTextContent('open');
+  });
+
+  it('opens the quick switcher from the unified view with Ctrl+Tab', async () => {
+    await renderApp();
+
+    expect(screen.queryByTestId('quick-switcher-state')).not.toBeInTheDocument();
+
+    await act(async () => {
+      pressCtrlTab();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('quick-switcher-state')).toHaveTextContent('open');
   });
 });
