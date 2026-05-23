@@ -422,42 +422,101 @@ export const WindowCard = React.memo<WindowCardProps>(({
         </Tooltip.Provider>
 
         {/* 第三行：时间信息 */}
-        <div className="flex flex-col gap-1 flex-1">
-          <div className="flex items-center justify-between">
+        <div className="flex flex-1 flex-wrap content-start items-start justify-between gap-x-4 gap-y-1">
+          <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
             <span className="text-xs text-[rgb(var(--muted-foreground))]">
               {t('windowCard.createdAt')}
             </span>
-            <span className="text-xs text-[rgb(var(--muted-foreground))] flex-shrink-0">
+            <span className="flex-shrink-0 text-xs text-[rgb(var(--muted-foreground))]">
               {formattedCreatedTime}
             </span>
           </div>
-          <div className="flex items-center justify-between">
+          <div className="ml-auto flex min-w-0 items-center gap-1.5 whitespace-nowrap">
             <span className="text-xs text-[rgb(var(--muted-foreground))]">
               {t('windowCard.lastRun')}
             </span>
-            <span className="text-xs text-[rgb(var(--muted-foreground))] flex-shrink-0">
+            <span className="flex-shrink-0 text-xs text-[rgb(var(--muted-foreground))]">
               {formattedLastActiveTime}
             </span>
           </div>
         </div>
       </div>
 
-      {/* 底部按钮栏 - 两行布局 */}
-      <div className={`${idePopupListCardFooterClassName} relative flex flex-shrink-0 flex-col gap-1.5 !border-t-transparent px-4 py-2 before:absolute before:left-4 before:right-4 before:top-0 before:border-t before:border-[rgb(var(--border))] before:content-['']`}>
-        {/* 第一行：启动/停止按钮 */}
-        <div className="flex items-center justify-between">
-          <div>
-            {aggregatedStatus === WindowStatus.Completed && (
-              <Tooltip.Provider>
+      {/* 底部按钮栏 */}
+      <div className={`${idePopupListCardFooterClassName} relative flex flex-shrink-0 flex-wrap items-center gap-1.5 !border-t-transparent px-4 py-2 before:absolute before:left-4 before:right-4 before:top-0 before:border-t before:border-[rgb(var(--border))] before:content-['']`}>
+        {aggregatedStatus === WindowStatus.Completed && (
+          <Tooltip.Provider>
+            <Tooltip.Root delayDuration={300}>
+              <Tooltip.Trigger asChild>
+                <button
+                  onClick={(e) => handleButtonClick(e, () => onStart?.(window))}
+                  className={`flex items-center gap-1.5 pl-2 pr-3 py-1.5 text-xs text-[rgb(var(--primary))] ${cardButtonClassName} focus:outline-none focus:ring-2 focus:ring-[rgb(var(--ring))] font-semibold whitespace-nowrap`}
+                  aria-label={t('windowCard.start')}
+                >
+                  <Play size={14} />
+                  <span>{t('windowCard.start')}</span>
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content
+                  className={tooltipClassName}
+                  side="top"
+                  sideOffset={5}
+                >
+                  {t('windowCard.start')}
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+          </Tooltip.Provider>
+        )}
+        {aggregatedStatus === WindowStatus.Restoring && (
+          <button
+            disabled
+            className={`flex items-center gap-1.5 pl-2 pr-3 py-1.5 text-xs text-[rgb(var(--muted-foreground))] ${cardButtonClassName} cursor-not-allowed opacity-60 whitespace-nowrap`}
+            aria-label={t('windowCard.starting')}
+          >
+            <Loader2 size={14} className="animate-spin" />
+            <span>{t('windowCard.starting')}</span>
+          </button>
+        )}
+        {(aggregatedStatus === WindowStatus.Running || aggregatedStatus === WindowStatus.WaitingForInput) && (
+          <Tooltip.Provider>
+            <Tooltip.Root delayDuration={300}>
+              <Tooltip.Trigger asChild>
+                <button
+                  onClick={(e) => handleButtonClick(e, () => onDestroySession?.(window))}
+                  className={`flex items-center gap-1.5 pl-2 pr-3 py-1.5 text-xs !text-red-500 ${cardButtonClassName} focus:outline-none focus:ring-2 focus:!ring-red-500/45 whitespace-nowrap`}
+                  aria-label={t('windowCard.stop')}
+                >
+                  <Square size={14} fill="currentColor" />
+                  <span>{t('windowCard.stop')}</span>
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content
+                  className={tooltipClassName}
+                  side="top"
+                  sideOffset={5}
+                >
+                  {t('windowCard.stop')}
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+          </Tooltip.Provider>
+        )}
+
+        {hasLeftShortcuts && (
+          <>
+            {activeTerminalPane && canPaneOpenInIDE(activeTerminalPane) && enabledIDEs.slice(0, 3).map((ide) => (
+              <Tooltip.Provider key={ide.id}>
                 <Tooltip.Root delayDuration={300}>
                   <Tooltip.Trigger asChild>
                     <button
-                      onClick={(e) => handleButtonClick(e, () => onStart?.(window))}
-                      className={`flex items-center gap-1.5 pl-2 pr-3 py-1.5 text-xs text-[rgb(var(--primary))] ${cardButtonClassName} focus:outline-none focus:ring-2 focus:ring-[rgb(var(--ring))] font-semibold whitespace-nowrap`}
-                      aria-label={t('windowCard.start')}
+                      onClick={(e) => handleButtonClick(e, () => onOpenInIDE?.(ide.id, window))}
+                      className={`flex h-7 w-7 flex-shrink-0 items-center justify-center text-[rgb(var(--foreground))] ${cardButtonClassName} border-0 focus:outline-none focus:ring-0`}
+                      aria-label={t('common.openInIDE', { name: ide.name })}
                     >
-                      <Play size={14} />
-                      <span>{t('windowCard.start')}</span>
+                      <IDEIcon icon={ide.icon || ''} size={16} />
                     </button>
                   </Tooltip.Trigger>
                   <Tooltip.Portal>
@@ -466,33 +525,23 @@ export const WindowCard = React.memo<WindowCardProps>(({
                       side="top"
                       sideOffset={5}
                     >
-                      {t('windowCard.start')}
+                      {t('common.openInIDE', { name: ide.name })}
                     </Tooltip.Content>
                   </Tooltip.Portal>
                 </Tooltip.Root>
               </Tooltip.Provider>
-            )}
-            {aggregatedStatus === WindowStatus.Restoring && (
-              <button
-                disabled
-                className={`flex items-center gap-1.5 pl-2 pr-3 py-1.5 text-xs text-[rgb(var(--muted-foreground))] ${cardButtonClassName} cursor-not-allowed opacity-60 whitespace-nowrap`}
-                aria-label={t('windowCard.starting')}
-              >
-                <Loader2 size={14} className="animate-spin" />
-                <span>{t('windowCard.starting')}</span>
-              </button>
-            )}
-            {(aggregatedStatus === WindowStatus.Running || aggregatedStatus === WindowStatus.WaitingForInput) && (
+            ))}
+
+            {workingDirectory && activeTerminalPane && canPaneOpenLocalFolder(activeTerminalPane) && (
               <Tooltip.Provider>
                 <Tooltip.Root delayDuration={300}>
                   <Tooltip.Trigger asChild>
                     <button
-                      onClick={(e) => handleButtonClick(e, () => onDestroySession?.(window))}
-                      className={`flex items-center gap-1.5 pl-2 pr-3 py-1.5 text-xs !text-red-500 ${cardButtonClassName} focus:outline-none focus:ring-2 focus:!ring-red-500/45 whitespace-nowrap`}
-                      aria-label={t('windowCard.stop')}
+                      onClick={(e) => handleButtonClick(e, () => onOpenFolder?.(window))}
+                      className={`flex h-7 w-7 flex-shrink-0 items-center justify-center text-[rgb(var(--foreground))] ${cardButtonClassName} focus:outline-none focus:ring-2 focus:ring-[rgb(var(--ring))]`}
+                      aria-label={t('common.openFolder')}
                     >
-                      <Square size={14} fill="currentColor" />
-                      <span>{t('windowCard.stop')}</span>
+                      <FolderOpen size={16} />
                     </button>
                   </Tooltip.Trigger>
                   <Tooltip.Portal>
@@ -501,122 +550,58 @@ export const WindowCard = React.memo<WindowCardProps>(({
                       side="top"
                       sideOffset={5}
                     >
-                      {t('windowCard.stop')}
+                      {t('common.openFolder')}
                     </Tooltip.Content>
                   </Tooltip.Portal>
                 </Tooltip.Root>
               </Tooltip.Provider>
             )}
-          </div>
-        </div>
 
-        {/* 第二行：快捷导航区域 - 固定 6:4 比例 */}
-        <div className="flex items-center gap-1.5">
-          {/* 左侧（60%）：快捷打开方式（IDE + 文件夹） */}
-          {hasLeftShortcuts && (
-            <div className="flex items-center gap-1 flex-[6]">
-              {/* 显示前 3 个 IDE 图标 */}
-              {activeTerminalPane && canPaneOpenInIDE(activeTerminalPane) && enabledIDEs.slice(0, 3).map((ide) => (
-                <Tooltip.Provider key={ide.id}>
-                  <Tooltip.Root delayDuration={300}>
-                    <Tooltip.Trigger asChild>
-                      <button
-                        onClick={(e) => handleButtonClick(e, () => onOpenInIDE?.(ide.id, window))}
-                        className={`flex items-center justify-center w-7 h-7 text-[rgb(var(--foreground))] ${cardButtonClassName} focus:outline-none focus:ring-0 border-0 flex-shrink-0`}
-                        aria-label={t('common.openInIDE', { name: ide.name })}
+            {activeTerminalPane && canPaneOpenInIDE(activeTerminalPane) && enabledIDEs.length > 3 && (
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-[rgb(var(--muted-foreground))] transition-colors hover:text-[rgb(var(--foreground))] focus:outline-none"
+                    aria-label={t('common.more')}
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    className={ideMenuContentClassName}
+                    side="top"
+                    sideOffset={5}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {enabledIDEs.slice(3).map((ide) => (
+                      <DropdownMenu.Item
+                        key={ide.id}
+                        className={ideMenuItemClassName}
+                        onSelect={() => onOpenInIDE?.(ide.id, window)}
                       >
-                        <IDEIcon icon={ide.icon || ''} size={16} />
-                      </button>
-                    </Tooltip.Trigger>
-                    <Tooltip.Portal>
-                      <Tooltip.Content
-                        className={tooltipClassName}
-                        side="top"
-                        sideOffset={5}
-                      >
-                        {t('common.openInIDE', { name: ide.name })}
-                      </Tooltip.Content>
-                    </Tooltip.Portal>
-                  </Tooltip.Root>
-                </Tooltip.Provider>
-              ))}
+                        <IdeMenuItemContent
+                          icon={<IDEIcon icon={ide.icon || ''} size={16} />}
+                          label={ide.name}
+                        />
+                      </DropdownMenu.Item>
+                    ))}
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            )}
+          </>
+        )}
 
-              {/* 文件夹图标 */}
-              {workingDirectory && activeTerminalPane && canPaneOpenLocalFolder(activeTerminalPane) && (
-                <Tooltip.Provider>
-                  <Tooltip.Root delayDuration={300}>
-                    <Tooltip.Trigger asChild>
-                      <button
-                        onClick={(e) => handleButtonClick(e, () => onOpenFolder?.(window))}
-                        className={`flex items-center justify-center w-7 h-7 text-[rgb(var(--foreground))] ${cardButtonClassName} focus:outline-none focus:ring-2 focus:ring-[rgb(var(--ring))] flex-shrink-0`}
-                        aria-label={t('common.openFolder')}
-                      >
-                        <FolderOpen size={16} />
-                      </button>
-                    </Tooltip.Trigger>
-                    <Tooltip.Portal>
-                      <Tooltip.Content
-                        className={tooltipClassName}
-                        side="top"
-                        sideOffset={5}
-                      >
-                        {t('common.openFolder')}
-                      </Tooltip.Content>
-                    </Tooltip.Portal>
-                  </Tooltip.Root>
-                </Tooltip.Provider>
-              )}
-
-              {/* 如果有超过 3 个 IDE，显示"更多"按钮 */}
-              {activeTerminalPane && canPaneOpenInIDE(activeTerminalPane) && enabledIDEs.length > 3 && (
-                <DropdownMenu.Root>
-                  <DropdownMenu.Trigger asChild>
-                    <button
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex items-center justify-center w-5 h-5 text-[rgb(var(--muted-foreground))] hover:text-[rgb(var(--foreground))] transition-colors focus:outline-none flex-shrink-0"
-                      aria-label={t('common.more')}
-                    >
-                      <ChevronDown size={14} />
-                    </button>
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content
-                      className={ideMenuContentClassName}
-                      side="top"
-                      sideOffset={5}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {enabledIDEs.slice(3).map((ide) => (
-                        <DropdownMenu.Item
-                          key={ide.id}
-                          className={ideMenuItemClassName}
-                          onSelect={() => onOpenInIDE?.(ide.id, window)}
-                        >
-                          <IdeMenuItemContent
-                            icon={<IDEIcon icon={ide.icon || ''} size={16} />}
-                            label={ide.name}
-                          />
-                        </DropdownMenu.Item>
-                      ))}
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
-              )}
-            </div>
-          )}
-
-          {/* 右侧（40%）：项目链接（如果存在） */}
-          {hasProjectLinks && window.projectConfig?.links && (
-            <div className="flex items-center gap-1 justify-end flex-[4]">
-              <ProjectLinks
-                links={window.projectConfig.links}
-                variant="card"
-                maxDisplay={2}
-                onOpenLink={handleOpenLink}
-              />
-            </div>
-          )}
-        </div>
+        {hasProjectLinks && window.projectConfig?.links && (
+          <ProjectLinks
+            links={window.projectConfig.links}
+            variant="card"
+            maxDisplay={2}
+            onOpenLink={handleOpenLink}
+          />
+        )}
       </div>
     </div>
   );
