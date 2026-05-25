@@ -17,8 +17,11 @@ import { startWindowPanes } from '../utils/paneSessionActions';
 import type { SSHProfile } from '../../shared/types/ssh';
 import { getWindowKind, isTerminalPane } from '../../shared/utils/terminalCapabilities';
 import { isEphemeralSSHCloneWindow } from '../utils/sshWindowBindings';
-import { destroyWindowResourcesKeepRecord } from '../utils/windowDestruction';
-import { destroyWindowResourcesAndRemoveRecord } from '../utils/windowDestruction';
+import {
+  destroySSHWindowFamilyResources,
+  destroyWindowResourcesAndRemoveRecord,
+  destroyWindowResourcesKeepRecord,
+} from '../utils/windowDestruction';
 import { preventMouseButtonFocus } from '../utils/buttonFocus';
 import { CUSTOM_TITLEBAR_ACTIONS_SLOT_ID } from './CustomTitleBar';
 import { getStartablePanes } from '../utils/windowLifecycle';
@@ -202,6 +205,14 @@ export const GroupView: React.FC<GroupViewProps> = ({
 
       if (isEphemeralSSHCloneWindow(targetWindow)) {
         await destroyWindowResourcesAndRemoveRecord(windowId);
+        continue;
+      }
+
+      if (getWindowKind(targetWindow) === 'ssh') {
+        await destroySSHWindowFamilyResources(targetWindow, {
+          removeTargetRecord: false,
+          includeOwnedClones: true,
+        });
         continue;
       }
 

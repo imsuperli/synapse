@@ -471,6 +471,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const onActivateRef = useRef(onActivate);
   const suppressNativePasteUntilRef = useRef(0); // 短时间屏蔽原生 paste，避免与手动 Ctrl+V 粘贴重复
   const lastStatusRef = useRef<WindowStatus>(pane.status); // 跟踪上一次的状态
+  const lastProcessExitStatusRef = useRef<WindowStatus>(pane.status);
   const lastSessionRef = useRef({ pid: pane.pid, status: pane.status });
   const lastLayoutPaneCountRef = useRef(layoutPaneCount);
   const isHistoryLoadedRef = useRef(false);
@@ -850,10 +851,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     lastStatusRef.current = currentStatus;
   }, [pane.status, forceResizeToContainer]);
 
-  // 进程退出后通知父组件处理
+  // 进程退出后通知父组件处理。只响应从活动态进入退出态的变化，避免恢复/挂载已停止窗口时误判为新退出。
   useEffect(() => {
-    const isExited = pane.status === WindowStatus.Completed || pane.status === WindowStatus.Error;
-    if (!isExited) return;
+    const previousStatus = lastProcessExitStatusRef.current;
+    const currentStatus = pane.status;
+    lastProcessExitStatusRef.current = currentStatus;
+
+    const isExited = currentStatus === WindowStatus.Completed || currentStatus === WindowStatus.Error;
+    const wasInactive = isInactiveTerminalPaneStatus(previousStatus);
+    if (!isExited || wasInactive) return;
     onProcessExit?.();
   }, [pane.status, onProcessExit]);
 

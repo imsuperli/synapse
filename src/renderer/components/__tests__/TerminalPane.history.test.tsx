@@ -221,6 +221,79 @@ describe('TerminalPane history replay', () => {
     expect((terminalInstances[0].options.theme as { background?: string }).background).toBe('transparent');
   });
 
+  it('does not report a process exit when mounted with an already completed pane', async () => {
+    const onProcessExit = vi.fn();
+
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Completed,
+          pid: null,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+        onProcessExit={onProcessExit}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances).toHaveLength(1);
+    });
+
+    expect(onProcessExit).not.toHaveBeenCalled();
+  });
+
+  it('reports a process exit when a live pane transitions to completed', async () => {
+    const onProcessExit = vi.fn();
+    const { rerender } = render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+        onProcessExit={onProcessExit}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances).toHaveLength(1);
+    });
+    expect(onProcessExit).not.toHaveBeenCalled();
+
+    rerender(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Completed,
+          pid: null,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+        onProcessExit={onProcessExit}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onProcessExit).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('enables enhanced keyboard reporting for Windows PTYs', async () => {
     render(
       <TerminalPane
