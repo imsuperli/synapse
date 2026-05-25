@@ -21,6 +21,22 @@ function compactSearchValue(value: string): string {
   return Array.from(value).filter(isCompactableChar).join('');
 }
 
+function shouldUseCompactTokenMatch(token: string): boolean {
+  const compactToken = compactSearchValue(token);
+  if (compactToken.length === 0) {
+    return false;
+  }
+
+  // Short all-numeric queries such as "198" should only match a real contiguous
+  // fragment. Longer numeric strings still support compact IP input such as
+  // "172309198" for "172.30.9.198".
+  if (/^\d+$/.test(compactToken) && token === compactToken) {
+    return compactToken.length >= 4;
+  }
+
+  return true;
+}
+
 function shouldUseLiteralTokenMatch(token: string): boolean {
   return /\d/.test(token) || /[./\\:_@-]/.test(token);
 }
@@ -42,11 +58,11 @@ function searchTokenMatches(token: string, target: string): boolean {
   }
 
   if (shouldUseLiteralTokenMatch(token)) {
-    const compactToken = compactSearchValue(token);
-    if (compactToken.length === 0) {
+    if (!shouldUseCompactTokenMatch(token)) {
       return false;
     }
 
+    const compactToken = compactSearchValue(token);
     return compactSearchValue(target).includes(compactToken);
   }
 
@@ -139,10 +155,11 @@ function buildCompactIndex(text: string): { compactText: string; indexMap: numbe
 }
 
 function addCompactMatches(matchedIndices: Set<number>, lowerText: string, token: string): boolean {
-  const compactToken = compactSearchValue(token);
-  if (!compactToken) {
+  if (!shouldUseCompactTokenMatch(token)) {
     return false;
   }
+
+  const compactToken = compactSearchValue(token);
 
   const { compactText, indexMap } = buildCompactIndex(lowerText);
   let compactIndex = compactText.indexOf(compactToken);

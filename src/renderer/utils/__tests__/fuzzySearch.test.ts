@@ -10,6 +10,9 @@ describe('fuzzySearch', () => {
   it('does not split numeric queries into unrelated fuzzy digits', () => {
     expect(fuzzyMatch('198', '172.30.9.198')).toBe(true);
     expect(fuzzyMatch('198', '192.168.3.25')).toBe(false);
+    expect(fuzzyMatch('198', '1.98')).toBe(false);
+    expect(fuzzyMatch('198', '1/98')).toBe(false);
+    expect(fuzzyMatch('198', '1-98')).toBe(false);
   });
 
   it('matches compact IP and path queries across separators', () => {
@@ -55,6 +58,10 @@ describe('fuzzySearch', () => {
 
     expect(highlightMatches('root@192.168.3.25:22', '198')).toEqual([
       { text: 'root@192.168.3.25:22', highlight: false },
+    ]);
+
+    expect(highlightMatches('root@1.98:22', '198')).toEqual([
+      { text: 'root@1.98:22', highlight: false },
     ]);
   });
 });
