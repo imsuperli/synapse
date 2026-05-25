@@ -35,7 +35,7 @@ import { chatDebugError, chatDebugInfo, previewText } from '../utils/chatDebugLo
 import { ISSHConnectionPool, SSHConnectionPool } from './ssh/SSHConnectionPool';
 import { ISSHKnownHostsStore } from './ssh/SSHKnownHostsStore';
 import { SSHPtySession } from './ssh/SSHPtySession';
-import { ISSHHostKeyPromptService } from './ssh/SSHHostKeyPromptService';
+import type { ISSHHostKeyPromptService } from './ssh/SSHHostKeyPromptService';
 
 type PaneHistoryEntry = {
   seq: number;
@@ -1205,6 +1205,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       });
 
       const ptyProcess = pty.spawn(executable, args, ptySpawnOptions);
+      this.guardExitedWindowsPtyResize(ptyProcess);
       this.appendTmuxDebugFile('PTY spawned', {
         pid: ptyProcess.pid,
         executable,
@@ -1232,6 +1233,52 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
         executableExists: existsSync(executable),
       });
       throw error;
+    }
+  }
+
+  private guardExitedWindowsPtyResize(ptyProcess: any): void {
+    const agent = ptyProcess?._agent;
+    if (!agent || typeof agent.resize !== 'function' || agent.__synapseResizeGuarded) {
+      return;
+    }
+
+    const originalResize = agent.resize.bind(agent);
+    Object.defineProperty(agent, '__synapseResizeGuarded', {
+      value: true,
+      configurable: true,
+    });
+
+    agent.resize = (...args: unknown[]) => {
+      try {
+        return originalResize(...args);
+      } catch (error) {
+        if (!this.isExitedPtyResizeError(error)) {
+          throw error;
+        }
+
+        const pid = typeof ptyProcess?.pid === 'number' ? ptyProcess.pid : null;
+        if (pid !== null) {
+          this.finalizeProcessExit(pid, this.readPtyExitCode(ptyProcess) ?? 0);
+        }
+      }
+    };
+  }
+
+  private readPtyExitCode(ptyProcess: any): number | undefined {
+    try {
+      const ptyExitCode = ptyProcess?.exitCode;
+      if (typeof ptyExitCode === 'number') {
+        return ptyExitCode;
+      }
+    } catch {
+      // Ignore exit code getter failures from partially torn down PTYs.
+    }
+
+    try {
+      const agentExitCode = ptyProcess?._agent?.exitCode;
+      return typeof agentExitCode === 'number' ? agentExitCode : undefined;
+    } catch {
+      return undefined;
     }
   }
 

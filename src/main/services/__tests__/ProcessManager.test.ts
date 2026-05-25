@@ -432,6 +432,46 @@ describe('ProcessManager', () => {
         spawnSpy.mockRestore();
       }
     });
+
+    it('ignores deferred Windows agent resize after node-pty marks the PTY exited', async () => {
+      const ptyModule = getPtyModule();
+      const agentResizeSpy = vi.fn(() => {
+        throw new Error('Cannot resize a pty that has already exited');
+      });
+      const ptyProcess = {
+        ...makeMockPtyProcess(4326),
+        _agent: {
+          resize: agentResizeSpy,
+          exitCode: 9,
+        },
+        resize(cols: number, rows: number) {
+          this._agent.resize(cols, rows);
+        },
+      };
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ptyProcess as any);
+
+      try {
+        const handle = await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-deferred-resize-exit',
+          paneId: 'pane-deferred-resize-exit',
+        });
+
+        expect(() => ptyProcess.resize(120, 40)).not.toThrow();
+        expect(agentResizeSpy).toHaveBeenCalledWith(120, 40);
+        expect(processManager.getProcessStatus(handle.pid)).toEqual(
+          expect.objectContaining({
+            status: ProcessStatus.Exited,
+            exitCode: 9,
+          }),
+        );
+        expect(processManager.getPidByPane('win-deferred-resize-exit', 'pane-deferred-resize-exit')).toBeNull();
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
   });
 
   describe('PTY history', () => {
