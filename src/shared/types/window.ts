@@ -1,5 +1,5 @@
 import { ProjectConfig } from './project-config';
-import type { SSHAuthType } from './ssh';
+import type { SSHAuthType, SSHRoutingMode } from './ssh';
 import type { ChatPaneState } from './chat';
 import type { CodePaneRunTargetCustomization } from './electron-api';
 
@@ -132,6 +132,7 @@ export interface SshPaneBinding {
   user?: string;
   authType?: SSHAuthType;
   remoteCwd?: string;
+  routingMode?: SSHRoutingMode;
   jumpHostProfileId?: string;
   proxyCommand?: string;
   reuseSession?: boolean;

@@ -12,6 +12,7 @@ import {
   SSHPortForwardType,
   SSHProfile,
   SSHProfileInput,
+  SSHRoutingMode,
 } from '../../shared/types/ssh';
 import { DEFAULT_SSH_READY_TIMEOUT_MS } from '../../shared/utils/sshDefaults';
 
@@ -23,8 +24,6 @@ interface SSHProfileDialogProps {
   credentialState?: SSHCredentialState | null;
   onSaved: (profile: SSHProfile, credentialState: SSHCredentialState) => void;
 }
-
-type SSHRoutingMode = 'direct' | 'jumpHost' | 'proxyCommand' | 'socks' | 'http';
 
 interface SSHProfileFormState {
   name: string;
@@ -70,6 +69,8 @@ const DEFAULT_CREDENTIAL_STATE: SSHCredentialState = {
   hasPassphrase: false,
 };
 
+const SSH_ROUTING_MODES: SSHRoutingMode[] = ['direct', 'jumpHost', 'proxyCommand', 'socks', 'http'];
+
 const SSH_ALGORITHM_GROUPS: Array<{
   type: SSHAlgorithmType;
   labelKey:
@@ -113,6 +114,11 @@ function trimOptional(value: string): string | undefined {
   return normalized || undefined;
 }
 
+function parseOptionalProxyPort(value: string): number | undefined {
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
+}
+
 function createEmptyAlgorithmPreferences(): SSHAlgorithmPreferences {
   return {
     kex: [],
@@ -140,23 +146,7 @@ function resolveAlgorithmPreferences(
 }
 
 function resolveRoutingMode(profile?: SSHProfile | null): SSHRoutingMode {
-  if (profile?.proxyCommand) {
-    return 'proxyCommand';
-  }
-
-  if (profile?.socksProxyHost) {
-    return 'socks';
-  }
-
-  if (profile?.httpProxyHost) {
-    return 'http';
-  }
-
-  if (profile?.jumpHostProfileId) {
-    return 'jumpHost';
-  }
-
-  return 'direct';
+  return profile?.routingMode ?? 'direct';
 }
 
 function createEmptyPortForwardDraft(): SSHPortForwardDraft {
@@ -234,6 +224,7 @@ export function SSHProfileDialog({
     () => parseLineList(form.privateKeysText),
     [form.privateKeysText],
   );
+  const activeRoutingModeLabel = t(`sshProfileDialog.routing.${form.routingMode}` as any);
   const availableJumpHosts = useMemo(
     () => profiles.filter((item) => item.id !== profile?.id),
     [profile?.id, profiles],
@@ -395,8 +386,8 @@ export function SSHProfileDialog({
     const keepaliveInterval = Number(form.keepaliveInterval);
     const keepaliveCountMax = Number(form.keepaliveCountMax);
     const readyTimeout = form.readyTimeout.trim() ? Number(form.readyTimeout) : null;
-    const socksProxyPort = Number(form.socksProxyPort);
-    const httpProxyPort = Number(form.httpProxyPort);
+    const socksProxyPort = parseOptionalProxyPort(form.socksProxyPort);
+    const httpProxyPort = parseOptionalProxyPort(form.httpProxyPort);
 
     if (!name || !host || !user) {
       setSaveError(t('sshProfileDialog.error.required'));
@@ -428,18 +419,10 @@ export function SSHProfileDialog({
       return;
     }
 
-    const jumpHostProfileId = form.routingMode === 'jumpHost'
-      ? form.jumpHostProfileId.trim()
-      : undefined;
-    const proxyCommand = form.routingMode === 'proxyCommand'
-      ? trimOptional(form.proxyCommand)
-      : undefined;
-    const socksProxyHost = form.routingMode === 'socks'
-      ? trimOptional(form.socksProxyHost)
-      : undefined;
-    const httpProxyHost = form.routingMode === 'http'
-      ? trimOptional(form.httpProxyHost)
-      : undefined;
+    const jumpHostProfileId = trimOptional(form.jumpHostProfileId);
+    const proxyCommand = trimOptional(form.proxyCommand);
+    const socksProxyHost = trimOptional(form.socksProxyHost);
+    const httpProxyHost = trimOptional(form.httpProxyHost);
 
     if (form.routingMode === 'jumpHost' && !jumpHostProfileId) {
       setSaveError(t('sshProfileDialog.error.jumpHostRequired'));
@@ -457,7 +440,7 @@ export function SSHProfileDialog({
         return;
       }
 
-      if (!Number.isInteger(socksProxyPort) || socksProxyPort <= 0 || socksProxyPort > 65535) {
+      if (socksProxyPort === undefined) {
         setSaveError(t('sshProfileDialog.error.proxyPort'));
         return;
       }
@@ -469,7 +452,7 @@ export function SSHProfileDialog({
         return;
       }
 
-      if (!Number.isInteger(httpProxyPort) || httpProxyPort <= 0 || httpProxyPort > 65535) {
+      if (httpProxyPort === undefined) {
         setSaveError(t('sshProfileDialog.error.proxyPort'));
         return;
       }
@@ -488,6 +471,7 @@ export function SSHProfileDialog({
       verifyHostKeys: form.verifyHostKeys,
       x11: profile?.x11 ?? false,
       skipBanner: form.skipBanner,
+      routingMode: form.routingMode,
       jumpHostProfileId,
       agentForward: form.agentForward,
       warnOnClose: form.warnOnClose,
@@ -717,25 +701,45 @@ export function SSHProfileDialog({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="ssh-profile-routing-mode" className="block text-sm font-medium text-text-primary mb-2">
-                {t('sshProfileDialog.routingModeLabel')}
-              </label>
-              <select
-                id="ssh-profile-routing-mode"
-                value={form.routingMode}
-                onChange={(event) => setField('routingMode', event.target.value as SSHRoutingMode)}
-                className="w-full px-3 py-2 bg-bg-app border border-border-subtle rounded text-text-primary focus:outline-none focus:ring-2 focus:ring-status-running"
-              >
-                <option value="direct">{t('sshProfileDialog.routing.direct')}</option>
-                <option value="jumpHost">{t('sshProfileDialog.routing.jumpHost')}</option>
-                <option value="proxyCommand">{t('sshProfileDialog.routing.proxyCommand')}</option>
-                <option value="socks">{t('sshProfileDialog.routing.socks')}</option>
-                <option value="http">{t('sshProfileDialog.routing.http')}</option>
-              </select>
-            </div>
+          <div
+            className="rounded-lg border border-[rgb(var(--primary))] bg-[color-mix(in_srgb,rgb(var(--primary))_14%,transparent)] px-4 py-3 text-sm text-text-primary"
+            role="status"
+          >
+            {t('sshProfileDialog.activeRoutingMode', { mode: activeRoutingModeLabel })}
+          </div>
 
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            {SSH_ROUTING_MODES.map((mode) => {
+              const selected = mode === form.routingMode;
+              const label = t(`sshProfileDialog.routing.${mode}` as any);
+
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={selected}
+                  aria-label={t('sshProfileDialog.routingOptionAriaLabel', {
+                    mode: label,
+                    status: selected
+                      ? t('sshProfileDialog.routingEnabled')
+                      : t('sshProfileDialog.routingAvailable'),
+                  })}
+                  onClick={() => setField('routingMode', mode)}
+                  className={[
+                    'inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors',
+                    selected
+                      ? 'border-[rgb(var(--primary))] bg-[rgb(var(--primary))] text-[rgb(var(--primary-foreground))]'
+                      : 'border-border-subtle bg-bg-app text-text-secondary hover:border-[rgb(var(--primary))] hover:text-text-primary',
+                  ].join(' ')}
+                >
+                  {selected && <span aria-hidden="true">✓</span>}
+                  <span>{label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {form.routingMode === 'jumpHost' && (
               <div>
                 <label htmlFor="ssh-profile-jump-host" className="block text-sm font-medium text-text-primary mb-2">

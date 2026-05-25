@@ -178,6 +178,7 @@ export function buildSSHConnectionKey(config: SSHSessionConfig): string {
     readyTimeout: resolveSSHReadyTimeoutMs(config.readyTimeout),
     verifyHostKeys: config.verifyHostKeys,
     agentForward: config.agentForward,
+    routingMode: config.routingMode,
     jumpHostProfileId: config.jumpHostProfileId ?? null,
     jumpHost: config.jumpHost ? buildSSHConnectionKey(config.jumpHost) : null,
     proxyCommand: config.proxyCommand ?? null,

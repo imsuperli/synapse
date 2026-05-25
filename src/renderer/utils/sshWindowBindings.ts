@@ -12,9 +12,10 @@ function getPaneSSHTargetKey(pane: Pane): string | null {
     return null;
   }
 
-  const jumpHostProfileId = ssh.jumpHostProfileId?.trim() ?? '';
-  const proxyCommand = ssh.proxyCommand?.trim() ?? '';
-  const scopeSuffix = `|jump:${jumpHostProfileId}|proxy:${proxyCommand}`;
+  const routingMode = ssh.routingMode ?? 'direct';
+  const jumpHostProfileId = routingMode === 'jumpHost' ? ssh.jumpHostProfileId?.trim() ?? '' : '';
+  const proxyCommand = routingMode === 'proxyCommand' ? ssh.proxyCommand?.trim() ?? '' : '';
+  const scopeSuffix = `|route:${routingMode}|jump:${jumpHostProfileId}|proxy:${proxyCommand}`;
   const host = ssh.host?.trim().toLowerCase();
 
   if (host) {

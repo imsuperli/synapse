@@ -724,6 +724,7 @@ describe('CreateWindowDialog', () => {
       expect(mockElectronAPI.updateSSHProfile).toHaveBeenCalledWith('ssh-profile-1', expect.objectContaining({
         name: 'Prod Ubuntu',
         host: 'new.example.com',
+        routingMode: 'direct',
         tags: ['prod'],
         notes: 'existing notes',
       }))
@@ -735,5 +736,122 @@ describe('CreateWindowDialog', () => {
       { hasPassword: true, hasPassphrase: false },
     )
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('preserves inactive ssh route details when editing the active route to direct', async () => {
+    const user = userEvent.setup()
+    const existingProfile = {
+      id: 'ssh-profile-1',
+      name: 'Prod Ubuntu',
+      host: 'old.example.com',
+      port: 22,
+      user: 'root',
+      auth: 'password',
+      privateKeys: [],
+      keepaliveInterval: 30,
+      keepaliveCountMax: 3,
+      readyTimeout: null,
+      verifyHostKeys: true,
+      x11: false,
+      skipBanner: false,
+      routingMode: 'jumpHost',
+      jumpHostProfileId: 'jump-1',
+      proxyCommand: 'ssh -W %h:%p bastion',
+      agentForward: false,
+      warnOnClose: true,
+      reuseSession: true,
+      forwardedPorts: [],
+      tags: ['prod'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as const
+    const jumpProfile = {
+      ...existingProfile,
+      id: 'jump-1',
+      name: 'Bastion',
+      host: 'bastion.example.com',
+      routingMode: 'direct',
+      jumpHostProfileId: undefined,
+      proxyCommand: undefined,
+    } as const
+
+    render(
+      <CreateWindowDialog
+        open={true}
+        onOpenChange={() => {}}
+        sshEnabled={true}
+        sshProfiles={[existingProfile as any, jumpProfile as any]}
+        editingSSHProfile={existingProfile as any}
+        sshCredentialState={{ hasPassword: true, hasPassphrase: false }}
+      />,
+    )
+
+    await user.click(screen.getByRole('tab', { name: '路由' }))
+
+    expect(screen.getByText('当前启用：跳板机')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '直接连接，可切换' }))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(mockElectronAPI.updateSSHProfile).toHaveBeenCalledWith('ssh-profile-1', expect.objectContaining({
+        routingMode: 'direct',
+        jumpHostProfileId: 'jump-1',
+        proxyCommand: 'ssh -W %h:%p bastion',
+      }))
+    })
+  })
+
+  it('does not block direct saves when inactive proxy port input is temporarily empty', async () => {
+    const user = userEvent.setup()
+    const existingProfile = {
+      id: 'ssh-profile-1',
+      name: 'Prod Ubuntu',
+      host: 'old.example.com',
+      port: 22,
+      user: 'root',
+      auth: 'password',
+      privateKeys: [],
+      keepaliveInterval: 30,
+      keepaliveCountMax: 3,
+      readyTimeout: null,
+      verifyHostKeys: true,
+      x11: false,
+      skipBanner: false,
+      routingMode: 'socks',
+      socksProxyHost: '127.0.0.1',
+      socksProxyPort: 1080,
+      agentForward: false,
+      warnOnClose: true,
+      reuseSession: true,
+      forwardedPorts: [],
+      tags: ['prod'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as const
+
+    render(
+      <CreateWindowDialog
+        open={true}
+        onOpenChange={() => {}}
+        sshEnabled={true}
+        sshProfiles={[existingProfile as any]}
+        editingSSHProfile={existingProfile as any}
+        sshCredentialState={{ hasPassword: true, hasPassphrase: false }}
+      />,
+    )
+
+    await user.click(screen.getByRole('tab', { name: '路由' }))
+    await user.clear(screen.getByLabelText('代理端口'))
+    await user.click(screen.getByRole('tab', { name: '直接连接，可切换' }))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(mockElectronAPI.updateSSHProfile).toHaveBeenCalledWith('ssh-profile-1', expect.objectContaining({
+        routingMode: 'direct',
+        socksProxyHost: '127.0.0.1',
+        socksProxyPort: undefined,
+      }))
+    })
   })
 })

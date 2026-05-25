@@ -8,7 +8,7 @@ import { useWindowStore } from '../stores/windowStore'
 import { useI18n } from '../i18n'
 import type { Window } from '../types/window'
 import type { CanvasWorkspace } from '../../shared/types/canvas'
-import { SSHAuthType, SSHCredentialState, SSHProfile, SSHProfileInput } from '../../shared/types/ssh'
+import { SSHAuthType, SSHCredentialState, SSHProfile, SSHProfileInput, SSHRoutingMode } from '../../shared/types/ssh'
 import { DEFAULT_SSH_READY_TIMEOUT_MS } from '../../shared/utils/sshDefaults'
 import { TerminalTypeLogo } from './icons/TerminalTypeLogo'
 import {
@@ -50,7 +50,6 @@ interface ShellProgramOption {
 }
 
 type CreateWindowTab = 'local' | 'ssh' | 'canvas'
-type SSHRoutingMode = 'direct' | 'jumpHost' | 'proxyCommand' | 'socks' | 'http'
 type SSHSettingsTab = 'basic' | 'auth' | 'routing' | 'session'
 
 interface SSHCreateFormState {
@@ -104,24 +103,13 @@ function trimOptional(value: string): string | undefined {
   return normalized || undefined
 }
 
+function parseOptionalProxyPort(value: string): number | undefined {
+  const port = Number(value)
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined
+}
+
 function resolveRoutingMode(profile?: SSHProfile | null): SSHRoutingMode {
-  if (profile?.proxyCommand) {
-    return 'proxyCommand'
-  }
-
-  if (profile?.socksProxyHost) {
-    return 'socks'
-  }
-
-  if (profile?.httpProxyHost) {
-    return 'http'
-  }
-
-  if (profile?.jumpHostProfileId) {
-    return 'jumpHost'
-  }
-
-  return 'direct'
+  return profile?.routingMode ?? 'direct'
 }
 
 function createInitialSSHForm(profile?: SSHProfile | null, duplicate = false): SSHCreateFormState {
@@ -313,8 +301,7 @@ export function CreateWindowDialog({
   const sshSummaryUser = sshForm.user.trim() || 'user'
   const sshSummaryName = sshForm.name.trim() || sshForm.host.trim() || `${sshSummaryUser}@${sshSummaryHost}`
   const sshSummaryRoute = t(`sshProfileDialog.routing.${sshForm.routingMode}` as any)
-  const sshSummaryAuth = t(`createWindow.sshAuth.${sshForm.auth}` as any)
-  const sshSummaryRemoteCwd = sshForm.defaultRemoteCwd.trim() || t('createWindow.sshPreviewValueDefault')
+  const sshRoutingModes: SSHRoutingMode[] = ['direct', 'jumpHost', 'proxyCommand', 'socks', 'http']
 
   const setSSHField = <K extends keyof SSHCreateFormState>(field: K, value: SSHCreateFormState[K]) => {
     setSSHForm((previous) => ({
@@ -610,8 +597,8 @@ export function CreateWindowDialog({
     const keepaliveInterval = Number(sshForm.keepaliveInterval)
     const keepaliveCountMax = Number(sshForm.keepaliveCountMax)
     const readyTimeout = sshForm.readyTimeout.trim() ? Number(sshForm.readyTimeout) : null
-    const socksProxyPort = Number(sshForm.socksProxyPort)
-    const httpProxyPort = Number(sshForm.httpProxyPort)
+    const socksProxyPort = parseOptionalProxyPort(sshForm.socksProxyPort)
+    const httpProxyPort = parseOptionalProxyPort(sshForm.httpProxyPort)
 
     setSSHError('')
     setShowSSHRequiredErrors(true)
@@ -647,18 +634,10 @@ export function CreateWindowDialog({
       return
     }
 
-    const jumpHostProfileId = sshForm.routingMode === 'jumpHost'
-      ? sshForm.jumpHostProfileId.trim()
-      : undefined
-    const proxyCommand = sshForm.routingMode === 'proxyCommand'
-      ? trimOptional(sshForm.proxyCommand)
-      : undefined
-    const socksProxyHost = sshForm.routingMode === 'socks'
-      ? trimOptional(sshForm.socksProxyHost)
-      : undefined
-    const httpProxyHost = sshForm.routingMode === 'http'
-      ? trimOptional(sshForm.httpProxyHost)
-      : undefined
+    const jumpHostProfileId = trimOptional(sshForm.jumpHostProfileId)
+    const proxyCommand = trimOptional(sshForm.proxyCommand)
+    const socksProxyHost = trimOptional(sshForm.socksProxyHost)
+    const httpProxyHost = trimOptional(sshForm.httpProxyHost)
 
     if (sshForm.routingMode === 'jumpHost' && !jumpHostProfileId) {
       setSSHError(t('sshProfileDialog.error.jumpHostRequired'))
@@ -676,7 +655,7 @@ export function CreateWindowDialog({
         return
       }
 
-      if (!Number.isInteger(socksProxyPort) || socksProxyPort <= 0 || socksProxyPort > 65535) {
+      if (socksProxyPort === undefined) {
         setSSHError(t('sshProfileDialog.error.proxyPort'))
         return
       }
@@ -688,7 +667,7 @@ export function CreateWindowDialog({
         return
       }
 
-      if (!Number.isInteger(httpProxyPort) || httpProxyPort <= 0 || httpProxyPort > 65535) {
+      if (httpProxyPort === undefined) {
         setSSHError(t('sshProfileDialog.error.proxyPort'))
         return
       }
@@ -707,6 +686,7 @@ export function CreateWindowDialog({
       verifyHostKeys: sshForm.verifyHostKeys,
       x11: sshForm.x11,
       skipBanner: sshForm.skipBanner,
+      routingMode: sshForm.routingMode,
       jumpHostProfileId,
       agentForward: sshForm.agentForward,
       warnOnClose: sshForm.warnOnClose,
@@ -886,9 +866,10 @@ export function CreateWindowDialog({
   const dialogActionButtonClassName = 'w-full sm:w-auto sm:min-w-[132px]'
   const sshTabListClassName = 'mb-5 flex gap-1 rounded-[14px] bg-[color-mix(in_srgb,rgb(var(--secondary))_72%,transparent)] p-1'
   const sshRouteTabListClassName = 'grid grid-cols-2 gap-1.5 rounded-[14px] bg-[color-mix(in_srgb,rgb(var(--secondary))_72%,transparent)] p-1 sm:grid-cols-3 lg:grid-cols-5'
-  const sshRouteTabTriggerClassName = 'rounded-[10px] px-2.5 py-2 text-xs font-medium text-[rgb(var(--muted-foreground))] transition-all hover:text-[rgb(var(--foreground))] data-[state=active]:bg-[color-mix(in_srgb,rgb(var(--card))_78%,transparent)] data-[state=active]:text-[rgb(var(--foreground))] data-[state=active]:shadow-sm'
+  const sshRouteTabTriggerClassName = 'rounded-[10px] border border-transparent px-2.5 py-2 text-xs font-medium text-[rgb(var(--muted-foreground))] transition-all hover:text-[rgb(var(--foreground))] data-[state=active]:border-[rgb(var(--primary))] data-[state=active]:bg-[rgb(var(--primary))] data-[state=active]:text-[rgb(var(--primary-foreground))] data-[state=active]:shadow-sm'
   const sshInlineCardClassName = `${idePopupSubtlePanelClassName} rounded-[14px] p-4`
   const sshRouteSummaryCardClassName = `${idePopupSubtlePanelClassName} rounded-[12px] px-4 py-3`
+  const sshActiveRouteClassName = 'rounded-[12px] border border-[rgb(var(--primary))] bg-[color-mix(in_srgb,rgb(var(--primary))_14%,transparent)] px-4 py-3 text-sm text-[rgb(var(--foreground))]'
   const asideCardClassName = `${sectionShellClassName}`
   const localSummaryName = name.trim() || placeholderName
   const localSummaryDirectory = workingDirectory.trim() || t('createWindow.workingDirectoryPlaceholder')
@@ -1376,18 +1357,30 @@ export function CreateWindowDialog({
                         </Tabs.Content>
 
                         <Tabs.Content value="routing" className="space-y-4 data-[state=inactive]:hidden">
+                          <div className={sshActiveRouteClassName}>
+                            {t('sshProfileDialog.activeRoutingMode', { mode: sshSummaryRoute })}
+                          </div>
                           <Tabs.Root
                             value={sshForm.routingMode}
                             onValueChange={(value) => setSSHField('routingMode', value as SSHRoutingMode)}
                           >
                             <Tabs.List className={sshRouteTabListClassName}>
-                              {(['direct', 'jumpHost', 'proxyCommand', 'socks', 'http'] as SSHRoutingMode[]).map((mode) => (
+                              {sshRoutingModes.map((mode) => (
                                 <Tabs.Trigger
                                   key={mode}
                                   value={mode}
                                   className={sshRouteTabTriggerClassName}
+                                  aria-label={t('sshProfileDialog.routingOptionAriaLabel', {
+                                    mode: t(`sshProfileDialog.routing.${mode}` as any),
+                                    status: mode === sshForm.routingMode
+                                      ? t('sshProfileDialog.routingEnabled')
+                                      : t('sshProfileDialog.routingAvailable'),
+                                  })}
                                 >
-                                  {t(`sshProfileDialog.routing.${mode}` as any)}
+                                  <span className="flex items-center justify-center gap-1.5">
+                                    {mode === sshForm.routingMode && <Check size={13} strokeWidth={2.4} />}
+                                    <span>{t(`sshProfileDialog.routing.${mode}` as any)}</span>
+                                  </span>
                                 </Tabs.Trigger>
                               ))}
                             </Tabs.List>

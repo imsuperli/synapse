@@ -18,6 +18,7 @@ function createSSHConfig(overrides: Partial<SSHSessionConfig> = {}): SSHSessionC
     verifyHostKeys: true,
     agentForward: false,
     reuseSession: true,
+    routingMode: 'direct',
     forwardedPorts: [],
     ...overrides,
   };
@@ -88,8 +89,8 @@ describe('SSHConnectionPool', () => {
 
   it('includes routing and verification settings in the reuse key', () => {
     const baseKey = buildSSHConnectionKey(createSSHConfig());
-    const jumpKey = buildSSHConnectionKey(createSSHConfig({ jumpHostProfileId: 'jump-1' }));
-    const proxyKey = buildSSHConnectionKey(createSSHConfig({ proxyCommand: 'nc %h %p' }));
+    const jumpKey = buildSSHConnectionKey(createSSHConfig({ routingMode: 'jumpHost', jumpHostProfileId: 'jump-1' }));
+    const proxyKey = buildSSHConnectionKey(createSSHConfig({ routingMode: 'proxyCommand', proxyCommand: 'nc %h %p' }));
     const relaxedVerifyKey = buildSSHConnectionKey(createSSHConfig({ verifyHostKeys: false }));
     const customLocaleKey = buildSSHConnectionKey(createSSHConfig({
       remoteLocaleMode: 'custom',

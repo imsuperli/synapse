@@ -84,6 +84,8 @@ describe('SSHProfileStore', () => {
       verifyHostKeys: true,
       x11: false,
       skipBanner: false,
+      routingMode: 'proxyCommand',
+      proxyCommand: 'ssh -W %h:%p old-jump',
       agentForward: false,
       warnOnClose: true,
       reuseSession: true,
@@ -115,6 +117,7 @@ describe('SSHProfileStore', () => {
     expect(updated.updatedAt).toBe('2026-03-22T11:00:00.000Z');
     expect(updated.privateKeys).toEqual(['/keys/id_ed25519', '/keys/id_rsa']);
     expect(updated.notes).toBe('rotated keys');
+    expect(updated.routingMode).toBe('proxyCommand');
     expect(updated.proxyCommand).toBe('ssh -W %h:%p jump');
     expect(updated.remoteLocaleMode).toBe('custom');
     expect(updated.remoteLocale).toBe('zh_CN.UTF-8');
@@ -125,6 +128,120 @@ describe('SSHProfileStore', () => {
       hmac: ['hmac-sha2-256'],
       compression: ['none'],
     });
+  });
+
+  it('defaults missing routingMode to direct while preserving inactive routing details', async () => {
+    const store = new SSHProfileStore({
+      filePath,
+      now: () => '2026-03-22T10:00:00.000Z',
+    });
+
+    const profile = await store.create({
+      name: 'prod-web-01',
+      host: '10.0.0.21',
+      port: 22,
+      user: 'root',
+      auth: 'password',
+      privateKeys: [],
+      keepaliveInterval: 15,
+      keepaliveCountMax: 2,
+      readyTimeout: null,
+      verifyHostKeys: true,
+      x11: false,
+      skipBanner: false,
+      jumpHostProfileId: 'jump-1',
+      proxyCommand: 'ssh -W %h:%p bastion',
+      agentForward: false,
+      warnOnClose: true,
+      reuseSession: true,
+      forwardedPorts: [],
+      tags: [],
+    });
+
+    expect(profile.routingMode).toBeUndefined();
+    expect(profile.jumpHostProfileId).toBe('jump-1');
+    expect(profile.proxyCommand).toBe('ssh -W %h:%p bastion');
+  });
+
+  it('keeps saved route details when switching the active route back to direct', async () => {
+    const store = new SSHProfileStore({
+      filePath,
+      now: () => '2026-03-22T10:00:00.000Z',
+    });
+
+    const profile = await store.create({
+      name: 'prod-web-01',
+      host: '10.0.0.21',
+      port: 22,
+      user: 'root',
+      auth: 'password',
+      privateKeys: [],
+      keepaliveInterval: 15,
+      keepaliveCountMax: 2,
+      readyTimeout: null,
+      verifyHostKeys: true,
+      x11: false,
+      skipBanner: false,
+      routingMode: 'jumpHost',
+      jumpHostProfileId: 'jump-1',
+      proxyCommand: 'ssh -W %h:%p bastion',
+      agentForward: false,
+      warnOnClose: true,
+      reuseSession: true,
+      forwardedPorts: [],
+      tags: [],
+    });
+
+    const updated = await store.update(profile.id, {
+      routingMode: 'direct',
+    });
+
+    expect(updated.routingMode).toBeUndefined();
+    expect(updated.jumpHostProfileId).toBe('jump-1');
+    expect(updated.proxyCommand).toBe('ssh -W %h:%p bastion');
+  });
+
+  it('rejects active routing modes when the required route details are missing', async () => {
+    const store = new SSHProfileStore({
+      filePath,
+      now: () => '2026-03-22T10:00:00.000Z',
+    });
+    const baseInput = {
+      name: 'prod-web-01',
+      host: '10.0.0.21',
+      port: 22,
+      user: 'root',
+      auth: 'password' as const,
+      privateKeys: [],
+      keepaliveInterval: 15,
+      keepaliveCountMax: 2,
+      readyTimeout: null,
+      verifyHostKeys: true,
+      x11: false,
+      skipBanner: false,
+      agentForward: false,
+      warnOnClose: true,
+      reuseSession: true,
+      forwardedPorts: [],
+      tags: [],
+    };
+
+    await expect(store.create({
+      ...baseInput,
+      routingMode: 'jumpHost',
+    })).rejects.toThrow('requires a jump host profile');
+    await expect(store.create({
+      ...baseInput,
+      routingMode: 'proxyCommand',
+    })).rejects.toThrow('requires a proxy command');
+    await expect(store.create({
+      ...baseInput,
+      routingMode: 'socks',
+    })).rejects.toThrow('requires a proxy host');
+    await expect(store.create({
+      ...baseInput,
+      routingMode: 'http',
+    })).rejects.toThrow('requires a proxy host');
   });
 
   it('rejects invalid public key profiles without key paths', async () => {

@@ -92,16 +92,19 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
   );
   const routingBadges = useMemo(() => {
     const badges: string[] = [];
+    const routingMode = profile.routingMode ?? 'direct';
 
-    if (profile.jumpHostProfileId) {
+    if (routingMode === 'direct') {
+      badges.push(t('sshProfileDialog.routing.direct'));
+    } else if (routingMode === 'jumpHost') {
       badges.push(t('sshProfileCard.jumpHost'));
     }
 
-    if (profile.proxyCommand) {
+    if (routingMode === 'proxyCommand') {
       badges.push(t('sshProfileCard.proxyCommand'));
-    } else if (profile.socksProxyHost) {
+    } else if (routingMode === 'socks') {
       badges.push(t('sshProfileCard.socksProxy'));
-    } else if (profile.httpProxyHost) {
+    } else if (routingMode === 'http') {
       badges.push(t('sshProfileCard.httpProxy'));
     }
 
@@ -112,10 +115,7 @@ export const SSHProfileCard = React.memo<SSHProfileCardProps>(({
     return badges;
   }, [
     profile.forwardedPorts.length,
-    profile.httpProxyHost,
-    profile.jumpHostProfileId,
-    profile.proxyCommand,
-    profile.socksProxyHost,
+    profile.routingMode,
     t,
   ]);
 

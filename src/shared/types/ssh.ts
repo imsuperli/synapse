@@ -6,6 +6,13 @@ export type SSHAuthType =
 
 export type SSHRemoteLocaleMode = 'auto' | 'custom';
 
+export type SSHRoutingMode =
+  | 'direct'
+  | 'jumpHost'
+  | 'proxyCommand'
+  | 'socks'
+  | 'http';
+
 export type SSHAlgorithmType =
   | 'kex'
   | 'hostKey'
@@ -104,6 +111,7 @@ export interface SSHProfile {
   verifyHostKeys: boolean;
   x11: boolean;
   skipBanner: boolean;
+  routingMode?: SSHRoutingMode;
   jumpHostProfileId?: string;
   agentForward: boolean;
   warnOnClose: boolean;

@@ -159,6 +159,7 @@ describe('SSHProfileDialog', () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     const savedProfile = createSavedProfile({
+      routingMode: 'jumpHost',
       jumpHostProfileId: 'jump-1',
       forwardedPorts: [
         {
@@ -205,13 +206,14 @@ describe('SSHProfileDialog', () => {
     await user.clear(screen.getByLabelText('用户名'));
     await user.type(screen.getByLabelText('用户名'), 'root');
     await user.type(screen.getByLabelText('密码 / 交互认证密钥'), 'super-secret');
-    await user.selectOptions(screen.getByLabelText('路由模式'), 'jumpHost');
+    await user.click(screen.getByRole('button', { name: '跳板机，可切换' }));
     await user.selectOptions(screen.getByLabelText('跳板机配置'), 'jump-1');
     await user.click(screen.getByRole('button', { name: '添加端口转发' }));
     await user.click(screen.getByRole('button', { name: '创建' }));
 
     await waitFor(() => {
       expect(window.electronAPI.createSSHProfile).toHaveBeenCalledWith(expect.objectContaining({
+        routingMode: 'jumpHost',
         jumpHostProfileId: 'jump-1',
         forwardedPorts: [
           expect.objectContaining({
@@ -234,6 +236,7 @@ describe('SSHProfileDialog', () => {
     vi.mocked(window.electronAPI.createSSHProfile).mockResolvedValueOnce({
       success: true,
       data: createSavedProfile({
+        routingMode: 'proxyCommand',
         proxyCommand: 'ssh -W %h:%p bastion',
       }),
     });
@@ -258,15 +261,139 @@ describe('SSHProfileDialog', () => {
     await user.clear(screen.getByLabelText('用户名'));
     await user.type(screen.getByLabelText('用户名'), 'deploy');
     await user.type(screen.getByLabelText('密码 / 交互认证密钥'), 'super-secret');
-    await user.selectOptions(screen.getByLabelText('路由模式'), 'proxyCommand');
+    await user.click(screen.getByRole('button', { name: 'ProxyCommand，可切换' }));
     await user.type(screen.getByLabelText('ProxyCommand'), 'ssh -W %h:%p bastion');
     await user.click(screen.getByRole('button', { name: '创建' }));
 
     await waitFor(() => {
       expect(window.electronAPI.createSSHProfile).toHaveBeenCalledWith(expect.objectContaining({
+        routingMode: 'proxyCommand',
         proxyCommand: 'ssh -W %h:%p bastion',
       }));
     });
+  });
+
+  it('keeps inactive routing details when switching back to direct', async () => {
+    const user = userEvent.setup();
+    const existingProfile = createSavedProfile({
+      routingMode: 'jumpHost',
+      jumpHostProfileId: 'jump-1',
+      proxyCommand: 'ssh -W %h:%p bastion',
+    });
+
+    vi.mocked(window.electronAPI.updateSSHProfile).mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...existingProfile,
+        routingMode: undefined,
+      },
+    });
+    vi.mocked(window.electronAPI.getSSHCredentialState).mockResolvedValueOnce({
+      success: true,
+      data: {
+        hasPassword: true,
+        hasPassphrase: false,
+      },
+    });
+
+    render(
+      <SSHProfileDialog
+        open={true}
+        onOpenChange={() => undefined}
+        profile={existingProfile}
+        profiles={[
+          existingProfile,
+          createSavedProfile({
+            id: 'jump-1',
+            name: 'Bastion',
+            host: '10.0.0.10',
+          }),
+        ]}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('当前启用：跳板机');
+
+    await user.click(screen.getByRole('button', { name: '直接连接，可切换' }));
+    await user.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateSSHProfile).toHaveBeenCalledWith(existingProfile.id, expect.objectContaining({
+        routingMode: 'direct',
+        jumpHostProfileId: 'jump-1',
+        proxyCommand: 'ssh -W %h:%p bastion',
+      }));
+    });
+  });
+
+  it('does not block direct saves when inactive proxy port input is temporarily empty', async () => {
+    const user = userEvent.setup();
+    const existingProfile = createSavedProfile({
+      routingMode: 'socks',
+      socksProxyHost: '127.0.0.1',
+      socksProxyPort: 1080,
+    });
+
+    vi.mocked(window.electronAPI.updateSSHProfile).mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...existingProfile,
+        routingMode: undefined,
+      },
+    });
+    vi.mocked(window.electronAPI.getSSHCredentialState).mockResolvedValueOnce({
+      success: true,
+      data: {
+        hasPassword: true,
+        hasPassphrase: false,
+      },
+    });
+
+    render(
+      <SSHProfileDialog
+        open={true}
+        onOpenChange={() => undefined}
+        profile={existingProfile}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    await user.clear(screen.getByLabelText('代理端口'));
+    await user.click(screen.getByRole('button', { name: '直接连接，可切换' }));
+    await user.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateSSHProfile).toHaveBeenCalledWith(existingProfile.id, expect.objectContaining({
+        routingMode: 'direct',
+        socksProxyHost: '127.0.0.1',
+        socksProxyPort: undefined,
+      }));
+    });
+  });
+
+  it('requires a proxy port when SOCKS routing is active', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SSHProfileDialog
+        open={true}
+        onOpenChange={() => undefined}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    await user.type(screen.getByLabelText('连接名称'), 'Prod SOCKS');
+    await user.type(screen.getByLabelText('主机地址'), '10.0.0.21');
+    await user.clear(screen.getByLabelText('用户名'));
+    await user.type(screen.getByLabelText('用户名'), 'root');
+    await user.click(screen.getByRole('button', { name: 'SOCKS 代理，可切换' }));
+    await user.type(screen.getByLabelText('代理主机'), '127.0.0.1');
+    await user.clear(screen.getByLabelText('代理端口'));
+    await user.click(screen.getByRole('button', { name: '创建' }));
+
+    expect(await screen.findByText('请输入有效的代理端口。')).toBeInTheDocument();
+    expect(window.electronAPI.createSSHProfile).not.toHaveBeenCalled();
   });
 
   it('saves custom SSH algorithm preferences', async () => {

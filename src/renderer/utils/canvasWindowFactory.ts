@@ -76,6 +76,7 @@ export function createCanvasSSHWindowDraft(profile: SSHProfile, options?: {
         user: profile.user,
         authType: profile.auth,
         remoteCwd: cwd,
+        ...(profile.routingMode && profile.routingMode !== 'direct' ? { routingMode: profile.routingMode } : {}),
         jumpHostProfileId: profile.jumpHostProfileId,
         proxyCommand: profile.proxyCommand,
         reuseSession: profile.reuseSession,

@@ -116,6 +116,7 @@ describe('registerSSHSessionHandlers', () => {
         profileId: 'profile-1',
         password: 'secret',
         reuseSession: true,
+        routingMode: 'direct',
         remoteCwd: '/srv/app',
         command: 'bash',
       }),
@@ -444,6 +445,7 @@ describe('registerSSHSessionHandlers', () => {
 
         return {
           ...createProfile(),
+          routingMode: 'jumpHost',
           jumpHostProfileId: 'jump-1',
         };
       }),
@@ -483,6 +485,7 @@ describe('registerSSHSessionHandlers', () => {
     expect(processManager.spawnTerminal).toHaveBeenCalledWith(expect.objectContaining({
       ssh: expect.objectContaining({
         profileId: 'profile-1',
+        routingMode: 'jumpHost',
         jumpHostProfileId: 'jump-1',
         jumpHost: expect.objectContaining({
           profileId: 'jump-1',
@@ -491,6 +494,100 @@ describe('registerSSHSessionHandlers', () => {
         }),
       }),
     }));
+  });
+
+  it('treats profiles without routingMode as direct even when old route fields remain', async () => {
+    const processManager = {
+      spawnTerminal: vi.fn().mockResolvedValue({ pid: 2205, sessionId: 'ssh-session-5' }),
+      subscribePtyData: vi.fn().mockReturnValue(vi.fn()),
+      getLatestPaneOutputSeq: vi.fn().mockReturnValue(0),
+    };
+    const sshProfileStore = {
+      get: vi.fn().mockResolvedValue({
+        ...createProfile(),
+        jumpHostProfileId: 'jump-1',
+        proxyCommand: 'ssh -W %h:%p bastion',
+      }),
+    };
+
+    registerSSHSessionHandlers({
+      mainWindow: null,
+      processManager: processManager as any,
+      statusPoller: { addPane: vi.fn() } as any,
+      viewSwitcher: null,
+      workspaceManager: null,
+      autoSaveManager: null,
+      ptySubscriptionManager: { add: vi.fn() } as any,
+      gitBranchWatcher: null,
+      currentWorkspace: null,
+      getCurrentWorkspace: () => null,
+      setCurrentWorkspace: () => undefined,
+      sshProfileStore: sshProfileStore as any,
+      sshVaultService: { get: vi.fn().mockResolvedValue(null) } as any,
+      sshKnownHostsStore: null,
+    } as HandlerContext);
+
+    const handler = getRegisteredHandler('create-ssh-window');
+    await handler({}, {
+      profileId: 'profile-1',
+    });
+
+    expect(sshProfileStore.get).toHaveBeenCalledTimes(1);
+    expect(processManager.spawnTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      ssh: expect.objectContaining({
+        profileId: 'profile-1',
+        routingMode: 'direct',
+      }),
+    }));
+    expect(processManager.spawnTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      ssh: expect.not.objectContaining({
+        jumpHostProfileId: expect.anything(),
+        jumpHost: expect.anything(),
+        proxyCommand: expect.anything(),
+      }),
+    }));
+  });
+
+  it('returns an error instead of falling back to direct when the active route is incomplete', async () => {
+    const processManager = {
+      spawnTerminal: vi.fn().mockResolvedValue({ pid: 2206, sessionId: 'ssh-session-6' }),
+      subscribePtyData: vi.fn().mockReturnValue(vi.fn()),
+      getLatestPaneOutputSeq: vi.fn().mockReturnValue(0),
+    };
+    const sshProfileStore = {
+      get: vi.fn().mockResolvedValue({
+        ...createProfile(),
+        routingMode: 'proxyCommand',
+      }),
+    };
+
+    registerSSHSessionHandlers({
+      mainWindow: null,
+      processManager: processManager as any,
+      statusPoller: { addPane: vi.fn() } as any,
+      viewSwitcher: null,
+      workspaceManager: null,
+      autoSaveManager: null,
+      ptySubscriptionManager: { add: vi.fn() } as any,
+      gitBranchWatcher: null,
+      currentWorkspace: null,
+      getCurrentWorkspace: () => null,
+      setCurrentWorkspace: () => undefined,
+      sshProfileStore: sshProfileStore as any,
+      sshVaultService: { get: vi.fn().mockResolvedValue(null) } as any,
+      sshKnownHostsStore: null,
+    } as HandlerContext);
+
+    const handler = getRegisteredHandler('create-ssh-window');
+    const response = await handler({}, {
+      profileId: 'profile-1',
+    });
+
+    expect(response).toMatchObject({
+      success: false,
+      error: 'SSH ProxyCommand routing requires a proxy command for profile-1',
+    });
+    expect(processManager.spawnTerminal).not.toHaveBeenCalled();
   });
 
   it('clones SSH panes from the current workspace layout', async () => {

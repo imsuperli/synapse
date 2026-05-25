@@ -80,6 +80,45 @@ describe('OpenSSHProfileImporter', () => {
     ]);
   });
 
+  it('sets the active routing mode for OpenSSH ProxyJump and ProxyCommand entries', async () => {
+    await fs.writeFile(path.join(sshDir, 'config'), [
+      'Host app',
+      '  HostName 10.0.0.21',
+      '  ProxyJump bastion',
+      '',
+      'Host proxy-app',
+      '  HostName 10.0.0.31',
+      '  ProxyCommand ssh -W %h:%p bastion',
+      '',
+    ].join('\n'));
+
+    const importer = new OpenSSHProfileImporter({ homeDir: tempDir });
+    const profiles = await importer.importProfiles();
+    const appProfile = profiles.find((profile) => profile.input.name === 'app (.ssh/config)');
+    const proxyProfile = profiles.find((profile) => profile.input.name === 'proxy-app (.ssh/config)');
+
+    expect(appProfile?.input.routingMode).toBe('jumpHost');
+    expect(appProfile?.input.jumpHostProfileId).toEqual(expect.stringMatching(/^openssh-config:/));
+    expect(proxyProfile?.input.routingMode).toBe('proxyCommand');
+    expect(proxyProfile?.input.proxyCommand).toBe('ssh -W %h:%p bastion');
+  });
+
+  it('treats OpenSSH ProxyJump none as a direct connection', async () => {
+    await fs.writeFile(path.join(sshDir, 'config'), [
+      'Host direct-app',
+      '  HostName 10.0.0.41',
+      '  ProxyJump none',
+      '',
+    ].join('\n'));
+
+    const importer = new OpenSSHProfileImporter({ homeDir: tempDir });
+    const profiles = await importer.importProfiles();
+    const directProfile = profiles.find((profile) => profile.input.name === 'direct-app (.ssh/config)');
+
+    expect(directProfile?.input.routingMode).toBeUndefined();
+    expect(directProfile?.input.jumpHostProfileId).toBeUndefined();
+  });
+
   it('detects local private keys from ~/.ssh like Tabby', async () => {
     await fs.writeFile(path.join(sshDir, 'id_ed25519'), 'PRIVATE KEY');
     await fs.writeFile(path.join(sshDir, 'id_rsa'), 'PRIVATE KEY');

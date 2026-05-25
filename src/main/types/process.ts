@@ -4,6 +4,7 @@ import {
   SSHAlgorithmPreferences,
   SSHAuthType,
   SSHRemoteLocaleMode,
+  SSHRoutingMode,
   SSHSftpDirectoryListing,
   SSHSessionMetrics,
 } from '../../shared/types/ssh';
@@ -57,6 +58,7 @@ export interface SSHSessionConfig {
   verifyHostKeys: boolean;
   agentForward: boolean;
   reuseSession: boolean;
+  routingMode: SSHRoutingMode;
   jumpHost?: SSHSessionConfig;
   jumpHostProfileId?: string;
   proxyCommand?: string;

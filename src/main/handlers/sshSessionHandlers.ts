@@ -18,7 +18,7 @@ import {
   UploadSSHSftpDirectoryConfig,
   UploadSSHSftpFilesConfig,
 } from '../../shared/types/electron-api';
-import { SSHProfile, SSHVaultEntry } from '../../shared/types/ssh';
+import { SSHProfile, SSHRoutingMode, SSHVaultEntry } from '../../shared/types/ssh';
 import { Pane, Window, WindowStatus } from '../../shared/types/window';
 import { getPaneCapabilities } from '../../shared/utils/terminalCapabilities';
 import { HandlerContext } from './HandlerContext';
@@ -476,6 +476,7 @@ async function buildSSHSessionConfig(
 ): Promise<SSHSessionConfig> {
   const nextContext = context;
   const remoteCwd = resolveSSHRemoteCwd(options.remoteCwd, profile.defaultRemoteCwd);
+  const routingMode = resolveProfileRoutingMode(profile);
 
   if (nextContext.visitedProfileIds.has(profile.id)) {
     throw new Error(`SSH jump host chain contains a loop at profile ${profile.id}`);
@@ -486,7 +487,11 @@ async function buildSSHSessionConfig(
   try {
     let jumpHost: SSHSessionConfig | undefined;
 
-    if (profile.jumpHostProfileId) {
+    if (routingMode === 'jumpHost') {
+      if (!profile.jumpHostProfileId) {
+        throw new Error(`SSH jump host routing requires a jump host profile for ${profile.id}`);
+      }
+
       if (!nextContext.sshProfileStore) {
         throw new Error('SSH profile store is required to resolve jump host profiles');
       }
@@ -494,6 +499,18 @@ async function buildSSHSessionConfig(
       const jumpProfile = await requireSSHProfile(nextContext.sshProfileStore, profile.jumpHostProfileId);
       const jumpVaultEntry = await nextContext.sshVaultService?.get(jumpProfile.id) ?? null;
       jumpHost = await buildSSHSessionConfig(jumpProfile, jumpVaultEntry, {}, nextContext);
+    }
+
+    if (routingMode === 'proxyCommand' && !profile.proxyCommand) {
+      throw new Error(`SSH ProxyCommand routing requires a proxy command for ${profile.id}`);
+    }
+
+    if (routingMode === 'socks' && !profile.socksProxyHost) {
+      throw new Error(`SSH SOCKS proxy routing requires a proxy host for ${profile.id}`);
+    }
+
+    if (routingMode === 'http' && !profile.httpProxyHost) {
+      throw new Error(`SSH HTTP proxy routing requires a proxy host for ${profile.id}`);
     }
 
     return {
@@ -511,13 +528,14 @@ async function buildSSHSessionConfig(
       verifyHostKeys: profile.verifyHostKeys,
       agentForward: profile.agentForward,
       reuseSession: profile.reuseSession,
+      routingMode,
       ...(jumpHost ? { jumpHost } : {}),
-      ...(profile.jumpHostProfileId ? { jumpHostProfileId: profile.jumpHostProfileId } : {}),
-      ...(profile.proxyCommand ? { proxyCommand: profile.proxyCommand } : {}),
-      ...(profile.socksProxyHost ? { socksProxyHost: profile.socksProxyHost } : {}),
-      ...(profile.socksProxyPort !== undefined ? { socksProxyPort: profile.socksProxyPort } : {}),
-      ...(profile.httpProxyHost ? { httpProxyHost: profile.httpProxyHost } : {}),
-      ...(profile.httpProxyPort !== undefined ? { httpProxyPort: profile.httpProxyPort } : {}),
+      ...(routingMode === 'jumpHost' && profile.jumpHostProfileId ? { jumpHostProfileId: profile.jumpHostProfileId } : {}),
+      ...(routingMode === 'proxyCommand' && profile.proxyCommand ? { proxyCommand: profile.proxyCommand } : {}),
+      ...(routingMode === 'socks' && profile.socksProxyHost ? { socksProxyHost: profile.socksProxyHost } : {}),
+      ...(routingMode === 'socks' && profile.socksProxyPort !== undefined ? { socksProxyPort: profile.socksProxyPort } : {}),
+      ...(routingMode === 'http' && profile.httpProxyHost ? { httpProxyHost: profile.httpProxyHost } : {}),
+      ...(routingMode === 'http' && profile.httpProxyPort !== undefined ? { httpProxyPort: profile.httpProxyPort } : {}),
       forwardedPorts: profile.forwardedPorts,
       ...(profile.algorithms ? { algorithms: profile.algorithms } : {}),
       x11: profile.x11,
@@ -530,6 +548,10 @@ async function buildSSHSessionConfig(
   } finally {
     nextContext.visitedProfileIds.delete(profile.id);
   }
+}
+
+function resolveProfileRoutingMode(profile: SSHProfile): SSHRoutingMode {
+  return profile.routingMode ?? 'direct';
 }
 
 function createSshPaneDraft(

@@ -14,6 +14,7 @@ export interface OpenSSHProfileImporterOptions {
 }
 
 const SIMPLE_ALIAS_PATTERN = /^[A-Za-z0-9._-]+$/;
+const DISABLED_PROXY_JUMP_VALUES = new Set(['none']);
 
 export class OpenSSHProfileImporter {
   private readonly homeDir: string;
@@ -154,8 +155,10 @@ function convertHostToImportedProfile(
   const resolvedHost = readFirstString(settings.hostname) ?? alias;
   const privateKeys = expandIdentityFiles(settings.identityfile, homeDir);
   const proxyJump = readFirstString(settings.proxyjump);
+  const jumpHostProfileId = resolveJumpHostReference(proxyJump);
   const proxyCommand = normalizeOptionalString(readFirstString(settings.proxycommand));
   const remoteCommand = normalizeOptionalString(readFirstString(settings.remotecommand));
+  const routingMode = jumpHostProfileId ? 'jumpHost' : proxyCommand ? 'proxyCommand' : 'direct';
 
   return {
     id: buildImportedProfileId(alias),
@@ -172,7 +175,8 @@ function convertHostToImportedProfile(
       verifyHostKeys: true,
       x11: readYesNo(settings.forwardx11, false),
       skipBanner: false,
-      ...(resolveJumpHostReference(proxyJump) ? { jumpHostProfileId: resolveJumpHostReference(proxyJump) } : {}),
+      ...(routingMode !== 'direct' ? { routingMode } : {}),
+      ...(jumpHostProfileId ? { jumpHostProfileId } : {}),
       agentForward: readYesNo(settings.forwardagent, false),
       warnOnClose: true,
       ...(proxyCommand ? { proxyCommand } : {}),
@@ -298,6 +302,10 @@ function expandHomePath(value: string, homeDir: string): string {
 function resolveJumpHostReference(proxyJump: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(proxyJump);
   if (!normalized) {
+    return undefined;
+  }
+
+  if (DISABLED_PROXY_JUMP_VALUES.has(normalized.toLowerCase())) {
     return undefined;
   }
 

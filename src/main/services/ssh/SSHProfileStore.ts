@@ -6,6 +6,7 @@ import {
   SSHProfile,
   SSHProfileInput,
   SSHProfilePatch,
+  SSHRoutingMode,
 } from '../../../shared/types/ssh';
 import {
   normalizeOptionalString,
@@ -171,6 +172,7 @@ function normalizeProfile(input: Partial<SSHProfile> & Pick<SSHProfile, 'id' | '
   const verifyHostKeys = normalizeBoolean(input.verifyHostKeys, true);
   const x11 = normalizeBoolean(input.x11, false);
   const skipBanner = normalizeBoolean(input.skipBanner, false);
+  const routingMode = normalizeRoutingMode(input.routingMode);
   const jumpHostProfileId = normalizeOptionalString(input.jumpHostProfileId);
   const agentForward = normalizeBoolean(input.agentForward, false);
   const warnOnClose = normalizeBoolean(input.warnOnClose, true);
@@ -201,6 +203,22 @@ function normalizeProfile(input: Partial<SSHProfile> & Pick<SSHProfile, 'id' | '
     throw new Error('SSH jump host profile cannot reference itself');
   }
 
+  if (routingMode === 'jumpHost' && !jumpHostProfileId) {
+    throw new Error('SSH jump host routing requires a jump host profile');
+  }
+
+  if (routingMode === 'proxyCommand' && !proxyCommand) {
+    throw new Error('SSH ProxyCommand routing requires a proxy command');
+  }
+
+  if (routingMode === 'socks' && !socksProxyHost) {
+    throw new Error('SSH SOCKS proxy routing requires a proxy host');
+  }
+
+  if (routingMode === 'http' && !httpProxyHost) {
+    throw new Error('SSH HTTP proxy routing requires a proxy host');
+  }
+
   if (!socksProxyHost && socksProxyPort !== undefined) {
     throw new Error('SSH SOCKS proxy host is required when SOCKS proxy port is set');
   }
@@ -223,6 +241,7 @@ function normalizeProfile(input: Partial<SSHProfile> & Pick<SSHProfile, 'id' | '
     verifyHostKeys,
     x11,
     skipBanner,
+    ...(routingMode !== 'direct' ? { routingMode } : {}),
     ...(jumpHostProfileId ? { jumpHostProfileId } : {}),
     agentForward,
     warnOnClose,
@@ -333,6 +352,23 @@ function normalizeAuthType(value: unknown): SSHAuthType {
       return value;
     default:
       throw new Error(`Unsupported SSH auth type: ${String(value)}`);
+  }
+}
+
+function normalizeRoutingMode(value: unknown): SSHRoutingMode {
+  switch (value) {
+    case 'jumpHost':
+    case 'proxyCommand':
+    case 'socks':
+    case 'http':
+      return value;
+    case 'direct':
+    case undefined:
+    case null:
+    case '':
+      return 'direct';
+    default:
+      throw new Error(`Unsupported SSH routing mode: ${String(value)}`);
   }
 }
 

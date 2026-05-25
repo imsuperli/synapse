@@ -268,6 +268,7 @@ function mergeImportedProfile(
     verifyHostKeys: existingProfile?.verifyHostKeys ?? importedInput.verifyHostKeys,
     x11: importedInput.x11,
     skipBanner: existingProfile?.skipBanner ?? importedInput.skipBanner,
+    ...(importedInput.routingMode && importedInput.routingMode !== 'direct' ? { routingMode: importedInput.routingMode } : {}),
     ...(importedInput.jumpHostProfileId ? { jumpHostProfileId: importedInput.jumpHostProfileId } : {}),
     agentForward: importedInput.agentForward,
     warnOnClose: existingProfile?.warnOnClose ?? importedInput.warnOnClose,
