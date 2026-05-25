@@ -157,6 +157,34 @@ describe('QuickSwitcher SSH profile bindings', () => {
     });
   });
 
+  it('does not return fuzzy-only matches that the home search would not return', async () => {
+    const user = userEvent.setup();
+    const profile = createSSHProfile({ name: 'Release Bastion' });
+    const runtimeWindow = createStandaloneSSHWindow(profile);
+
+    useWindowStore.setState({
+      windows: [runtimeWindow],
+      groups: [],
+    });
+
+    render(
+      <QuickSwitcher
+        isOpen
+        currentWindowId={runtimeWindow.id}
+        onClose={() => {}}
+        onSelect={() => {}}
+        sshProfiles={[profile]}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox'), 'rls');
+
+    expect(screen.queryByText((_, element) => element?.textContent === 'Release Bastion')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/No matching windows, groups, canvases, or SSH connections found|没有找到匹配的窗口、窗口组、画布或 SSH 连接/),
+    ).toBeInTheDocument();
+  });
+
   it('matches standalone SSH runtime windows by contiguous IP fragments only', async () => {
     const user = userEvent.setup();
     const matchingProfile = createSSHProfile({
@@ -245,6 +273,41 @@ describe('QuickSwitcher SSH profile bindings', () => {
     expect(screen.queryByText((_, element) => element?.textContent === 'Unrelated Host')).not.toBeInTheDocument();
     expect(screen.getByText((_, element) => element?.textContent === 'root@172.30.9.198:22 | /srv/app')).toBeInTheDocument();
     expect(screen.queryByText((_, element) => element?.textContent === 'root@192.168.3.25:22 | /srv/app')).not.toBeInTheDocument();
+  });
+
+  it('matches SSH profile cards by IP fragments before a runtime window exists', async () => {
+    const user = userEvent.setup();
+    const profile = createSSHProfile({
+      id: 'ssh-profile-198',
+      name: 'LLM Gateway',
+      host: '172.30.9.198',
+      defaultRemoteCwd: '/srv/llm',
+      tags: ['llm'],
+    });
+    const onSelectSSHProfile = vi.fn();
+
+    render(
+      <QuickSwitcher
+        isOpen
+        currentWindowId={null}
+        onClose={() => {}}
+        onSelect={() => {}}
+        onSelectSSHProfile={onSelectSSHProfile}
+        sshProfiles={[profile]}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox'), '198');
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText((_, element) => element?.textContent === 'LLM Gateway').length,
+      ).toBeGreaterThan(0);
+    });
+    expect(screen.getByText((_, element) => element?.textContent === 'root@172.30.9.198:22 | /srv/llm')).toBeInTheDocument();
+
+    await user.keyboard('{Enter}');
+    expect(onSelectSSHProfile).toHaveBeenCalledWith(profile);
   });
 
   it('matches SSH profile tags and remote paths when filtering', async () => {
@@ -381,7 +444,7 @@ describe('QuickSwitcher SSH profile bindings', () => {
     await user.keyboard('{ArrowDown}{Enter}');
 
     expect(
-      screen.getByText(/No matching windows, groups, or canvases found|没有找到匹配的窗口、窗口组或画布/),
+      screen.getByText(/No matching windows, groups, canvases, or SSH connections found|没有找到匹配的窗口、窗口组、画布或 SSH 连接/),
     ).toBeInTheDocument();
     expect(onSelect).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();

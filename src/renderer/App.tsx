@@ -2008,10 +2008,12 @@ function AppContent() {
             currentWindowId={activeWindowId}
             currentGroupId={activeGroupId}
             currentCanvasWorkspaceId={currentActiveCanvasWorkspaceId}
+            sshEnabled={sshEnabled}
             sshProfiles={sshProfiles}
             onSelect={handleUnifiedQuickSwitcherSelect}
             onSelectGroup={handleUnifiedQuickSwitcherSelectGroup}
             onSelectCanvas={handleUnifiedQuickSwitcherSelectCanvas}
+            onSelectSSHProfile={handleConnectSSHProfile}
             onClose={handleUnifiedQuickSwitcherClose}
           />
         </Suspense>

@@ -338,9 +338,9 @@ export const zhCNMessages = {
   'about.logoAlt': '{appName} Logo',
 
   'quickSwitcher.title': '快速切换',
-  'quickSwitcher.searchPlaceholder': '搜索窗口或窗口组（名称、IP、路径、标签）...',
+  'quickSwitcher.searchPlaceholder': '搜索窗口、窗口组、画布或 SSH 连接（名称、IP、路径、标签）...',
   'quickSwitcher.resultsCount': '{count} 个结果',
-  'quickSwitcher.noResults': '没有找到匹配的窗口、窗口组或画布',
+  'quickSwitcher.noResults': '没有找到匹配的窗口、窗口组、画布或 SSH 连接',
   'quickSwitcher.noResultsHint': '尝试使用不同的关键词搜索',
   'quickSwitcher.emptyHint': '创建一个新窗口开始使用',
   'quickSwitcher.select': '选择',
@@ -2151,9 +2151,9 @@ export const enUSMessages: Record<TranslationKey, string> = {
   'about.logoAlt': '{appName} logo',
 
   'quickSwitcher.title': 'Quick Switcher',
-  'quickSwitcher.searchPlaceholder': 'Search windows and groups (name, IP, path, tags)...',
+  'quickSwitcher.searchPlaceholder': 'Search windows, groups, canvases, or SSH connections (name, IP, path, tags)...',
   'quickSwitcher.resultsCount': '{count} results',
-  'quickSwitcher.noResults': 'No matching windows, groups, or canvases found',
+  'quickSwitcher.noResults': 'No matching windows, groups, canvases, or SSH connections found',
   'quickSwitcher.noResultsHint': 'Try a different keyword',
   'quickSwitcher.emptyHint': 'Create a new window to get started',
   'quickSwitcher.select': 'Select',

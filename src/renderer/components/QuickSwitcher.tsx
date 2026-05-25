@@ -4,7 +4,8 @@ import { useWindowStore } from '../stores/windowStore';
 import { QuickSwitcherItem } from './QuickSwitcherItem';
 import { QuickSwitcherGroupItem } from './QuickSwitcherGroupItem';
 import { QuickSwitcherCanvasItem } from './QuickSwitcherCanvasItem';
-import { matchSearchTerms } from '../utils/fuzzySearch';
+import { QuickSwitcherSSHProfileItem } from './QuickSwitcherSSHProfileItem';
+import { matchSearchTermsLiteral } from '../utils/fuzzySearch';
 import { Pane, Window, WindowStatus } from '../types/window';
 import { WindowGroup } from '../../shared/types/window-group';
 import { CanvasWorkspace } from '../../shared/types/canvas';
@@ -23,9 +24,16 @@ import {
   idePopupSectionClassName,
   idePopupTitleClassName,
 } from './ui/ide-popup';
+import {
+  getCanvasWorkspaceSearchTerms,
+  getSSHProfileSearchTerms,
+  getSSHTargetLabel,
+  getWindowSearchTerms,
+  SearchTermValue,
+} from '../utils/searchTerms';
 
 const QUICK_SWITCHER_KEYCAP_CLASS_NAME = `rounded border px-1.5 py-0.5 ${idePopupBadgeClassName('zinc')}`;
-type SearchTermValue = string | number | null | undefined;
+type SwitcherItemType = SwitcherItem['type'];
 
 interface QuickSwitcherProps {
   isOpen: boolean;
@@ -33,9 +41,11 @@ interface QuickSwitcherProps {
   onSelect: (windowId: string) => void;
   onSelectGroup?: (groupId: string) => void;
   onSelectCanvas?: (canvasWorkspaceId: string) => void;
+  onSelectSSHProfile?: (profile: SSHProfile) => void;
   currentWindowId: string | null;
   currentGroupId?: string | null;
   currentCanvasWorkspaceId?: string | null;
+  sshEnabled?: boolean;
   sshProfiles?: SSHProfile[];
 }
 
@@ -51,6 +61,15 @@ type SwitcherItem =
       windowKind: NonNullable<Window['kind']>;
       activePane: Pane | null;
       workingDirectory: string;
+      priority: number;
+      lastActiveAtTime: number;
+      searchTerms: string[];
+    }
+  | {
+      type: 'sshProfile';
+      data: SSHProfile;
+      targetLabel: string;
+      secondaryText: string;
       priority: number;
       lastActiveAtTime: number;
       searchTerms: string[];
@@ -96,6 +115,19 @@ function getCanvasPriority(canvasWorkspace: CanvasWorkspace): number {
   return canvasWorkspace.archived ? 4 : 0;
 }
 
+function getSwitcherItemRank(type: SwitcherItemType): number {
+  switch (type) {
+    case 'canvas':
+      return 0;
+    case 'group':
+      return 1;
+    case 'window':
+      return 2;
+    case 'sshProfile':
+      return 3;
+  }
+}
+
 function normalizeSearchTerms(values: SearchTermValue[]): string[] {
   const seen = new Set<string>();
   const terms: string[] = [];
@@ -113,75 +145,6 @@ function normalizeSearchTerms(values: SearchTermValue[]): string[] {
   return terms;
 }
 
-function getPaneSearchTerms(pane: Pane): SearchTermValue[] {
-  return [
-    pane.cwd,
-    pane.command,
-    pane.title,
-    pane.teamName,
-    pane.agentId,
-    pane.agentName,
-    pane.ssh?.profileId,
-    pane.ssh?.host,
-    pane.ssh?.port,
-    pane.ssh?.user,
-    pane.ssh?.remoteCwd,
-    pane.ssh?.routingMode ?? (pane.ssh ? 'direct' : undefined),
-    pane.ssh?.jumpHostProfileId,
-    pane.ssh?.proxyCommand,
-    pane.browser?.url,
-    pane.code?.rootPath,
-    pane.code?.activeFilePath,
-    pane.code?.selectedPath,
-    ...(pane.code?.openFiles?.map((file) => file.path) ?? []),
-    ...(pane.code?.expandedPaths ?? []),
-    ...(pane.code?.bookmarks?.flatMap((bookmark) => [bookmark.filePath, bookmark.label]) ?? []),
-    ...(pane.code?.breakpoints?.map((breakpoint) => breakpoint.filePath) ?? []),
-  ];
-}
-
-function getWindowSearchTerms(window: Window, panes: Pane[], workingDirectory: string): string[] {
-  return normalizeSearchTerms([
-    window.name,
-    workingDirectory,
-    window.gitBranch,
-    window.claudeModel,
-    window.claudeModelId,
-    ...(window.tags ?? []),
-    ...(window.projectConfig?.links.flatMap((link) => [link.name, link.url]) ?? []),
-    ...panes.flatMap(getPaneSearchTerms),
-  ]);
-}
-
-function getSSHProfileSearchTerms(profile: SSHProfile, targetLabel: string): string[] {
-  return normalizeSearchTerms([
-    profile.name,
-    targetLabel,
-    `${profile.user}@${profile.host}`,
-    profile.host,
-    profile.port,
-    profile.user,
-    profile.defaultRemoteCwd,
-    profile.remoteCommand,
-    profile.notes,
-    profile.routingMode ?? 'direct',
-    profile.jumpHostProfileId,
-    profile.proxyCommand,
-    profile.socksProxyHost,
-    profile.socksProxyPort,
-    profile.httpProxyHost,
-    profile.httpProxyPort,
-    ...(profile.tags ?? []),
-    ...(profile.forwardedPorts ?? []).flatMap((forwardedPort) => [
-      forwardedPort.host,
-      forwardedPort.port,
-      forwardedPort.targetAddress,
-      forwardedPort.targetPort,
-      forwardedPort.description,
-    ]),
-  ]);
-}
-
 /**
  * 快速切换面板组件（Ctrl+Tab）
  * 支持搜索和键盘导航，同时显示窗口和窗口组
@@ -192,9 +155,11 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
   onSelect,
   onSelectGroup,
   onSelectCanvas,
+  onSelectSSHProfile,
   currentWindowId,
   currentGroupId,
   currentCanvasWorkspaceId,
+  sshEnabled = true,
   sshProfiles = [],
 }) => {
   const { t } = useI18n();
@@ -221,7 +186,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
       const workingDirectory = getCurrentWindowWorkingDirectory(window);
       const activePane = getCurrentWindowTerminalPane(window);
       const windowKind = getWindowKind(window);
-      const windowSearchTerms = getWindowSearchTerms(window, panes, workingDirectory);
+      const windowSearchTerms = normalizeSearchTerms(getWindowSearchTerms(window, { workingDirectory }));
 
       if (!profile) {
         return {
@@ -240,10 +205,10 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
         };
       }
 
-      const targetLabel = `${profile.user}@${profile.host}:${profile.port}`;
+      const targetLabel = getSSHTargetLabel(profile);
       const remoteCwd = workingDirectory || profile.defaultRemoteCwd || '';
       const secondaryText = remoteCwd ? `${targetLabel} | ${remoteCwd}` : targetLabel;
-      const sshProfileSearchTerms = getSSHProfileSearchTerms(profile, targetLabel);
+      const sshProfileSearchTerms = normalizeSearchTerms(getSSHProfileSearchTerms(profile, targetLabel));
 
       return {
         type: 'window' as const,
@@ -266,6 +231,38 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
       };
     })
   ), [sshProfilesById, visibleWindows]);
+  const preparedStandaloneSSHProfiles = useMemo(() => {
+    if (!sshEnabled || !onSelectSSHProfile) {
+      return [];
+    }
+
+    const representedProfileIds = new Set<string>();
+
+    for (const item of preparedWindows) {
+      const profileId = getStandaloneSSHProfileId(item.data);
+      if (profileId) {
+        representedProfileIds.add(profileId);
+      }
+    }
+
+    return sshProfiles
+      .filter((profile) => !representedProfileIds.has(profile.id))
+      .map((profile) => {
+        const targetLabel = getSSHTargetLabel(profile);
+
+        return {
+          type: 'sshProfile' as const,
+          data: profile,
+          targetLabel,
+          secondaryText: profile.defaultRemoteCwd
+            ? `${targetLabel} | ${profile.defaultRemoteCwd}`
+            : targetLabel,
+          priority: 0,
+          lastActiveAtTime: new Date(profile.updatedAt).getTime(),
+          searchTerms: normalizeSearchTerms(getSSHProfileSearchTerms(profile, targetLabel)),
+        };
+      });
+  }, [onSelectSSHProfile, preparedWindows, sshEnabled, sshProfiles]);
   const preparedGroups = useMemo(() => {
     const windowById = new Map(preparedWindows.map((item) => [item.data.id, item]));
 
@@ -297,33 +294,42 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
       blockCount: canvasWorkspace.blocks.length,
       priority: getCanvasPriority(canvasWorkspace),
       lastActiveAtTime: new Date(canvasWorkspace.updatedAt).getTime(),
-      searchTerms: [
-        canvasWorkspace.name,
-        canvasWorkspace.workingDirectory ?? '',
-        ...canvasWorkspace.blocks.map((block) => block.label ?? ''),
-        ...canvasWorkspace.blocks.flatMap((block) => block.type === 'note' ? [block.content] : []),
-        ...(canvasWorkspace.chatDefaults?.contextFilePaths ?? []),
-        canvasWorkspace.chatDefaults?.workspaceInstructions ?? '',
-        canvasWorkspace.exportSettings?.title ?? '',
-      ],
+      searchTerms: normalizeSearchTerms(getCanvasWorkspaceSearchTerms(canvasWorkspace)),
     }))
   ), [canvasWorkspaces]);
+  const selectItem = React.useCallback((item: SwitcherItem) => {
+    if (item.type === 'window') {
+      onSelect(item.data.id);
+    } else if (item.type === 'group' && onSelectGroup) {
+      onSelectGroup(item.data.id);
+    } else if (item.type === 'canvas' && onSelectCanvas) {
+      onSelectCanvas(item.data.id);
+    } else if (item.type === 'sshProfile' && onSelectSSHProfile) {
+      onSelectSSHProfile(item.data);
+    }
+
+    onClose();
+  }, [onClose, onSelect, onSelectCanvas, onSelectGroup, onSelectSSHProfile]);
 
   // 过滤并合并窗口、窗口组和画布
   const filteredItems = useMemo(() => {
     const filteredWindows: SwitcherItem[] = preparedWindows.filter((item) => (
-      matchSearchTerms(query, item.searchTerms)
+      matchSearchTermsLiteral(query, item.searchTerms)
+    ));
+
+    const filteredSSHProfiles: SwitcherItem[] = preparedStandaloneSSHProfiles.filter((item) => (
+      matchSearchTermsLiteral(query, item.searchTerms)
     ));
 
     const filteredGroups: SwitcherItem[] = preparedGroups.filter((item) => (
-      matchSearchTerms(query, item.searchTerms)
+      matchSearchTermsLiteral(query, item.searchTerms)
     ));
 
     const filteredCanvasWorkspaces: SwitcherItem[] = preparedCanvasWorkspaces.filter((item) => (
-      matchSearchTerms(query, item.searchTerms)
+      matchSearchTermsLiteral(query, item.searchTerms)
     ));
 
-    return [...filteredCanvasWorkspaces, ...filteredGroups, ...filteredWindows].sort((a, b) => {
+    return [...filteredCanvasWorkspaces, ...filteredGroups, ...filteredWindows, ...filteredSSHProfiles].sort((a, b) => {
       if (a.type === 'window' && a.data.id === currentWindowId) return -1;
       if (b.type === 'window' && b.data.id === currentWindowId) return 1;
       if (a.type === 'group' && a.data.id === currentGroupId) return -1;
@@ -333,8 +339,12 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
 
       if (a.type === 'canvas' && b.type !== 'canvas') return -1;
       if (b.type === 'canvas' && a.type !== 'canvas') return 1;
-      if (a.type === 'group' && b.type === 'window') return -1;
-      if (a.type === 'window' && b.type === 'group') return 1;
+
+      const rankA = getSwitcherItemRank(a.type);
+      const rankB = getSwitcherItemRank(b.type);
+      if (rankA !== rankB) {
+        return rankA - rankB;
+      }
 
       if (a.type === 'window' && b.type === 'window') {
         const priorityA = a.priority;
@@ -369,9 +379,13 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
         return b.lastActiveAtTime - a.lastActiveAtTime;
       }
 
+      if (a.type === 'sshProfile' && b.type === 'sshProfile') {
+        return b.lastActiveAtTime - a.lastActiveAtTime;
+      }
+
       return 0;
     });
-  }, [preparedWindows, preparedGroups, preparedCanvasWorkspaces, query, currentWindowId, currentGroupId, currentCanvasWorkspaceId]);
+  }, [preparedWindows, preparedStandaloneSSHProfiles, preparedGroups, preparedCanvasWorkspaces, query, currentWindowId, currentGroupId, currentCanvasWorkspaceId]);
 
   useEffect(() => {
     if (!filteredItems.length) {
@@ -443,14 +457,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
           e.stopPropagation();
             if (filteredItems[selectedIndex]) {
               const item = filteredItems[selectedIndex];
-              if (item.type === 'window') {
-                onSelect(item.data.id);
-              } else if (item.type === 'group' && onSelectGroup) {
-                onSelectGroup(item.data.id);
-              } else if (item.type === 'canvas' && onSelectCanvas) {
-                onSelectCanvas(item.data.id);
-              }
-              onClose();
+              selectItem(item);
             }
           break;
         case 'Escape':
@@ -469,7 +476,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filteredItems, selectedIndex, onSelect, onSelectGroup, onSelectCanvas, onClose]);
+  }, [isOpen, filteredItems, selectedIndex, selectItem, onClose]);
 
   useEffect(() => {
     if (!listRef.current || !filteredItems.length) {
@@ -545,16 +552,17 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
             ) : (
               filteredItems.map((item, index) => (
                 <div
-                  key={item.type === 'window' ? `window-${item.data.id}` : item.type === 'group' ? `group-${item.data.id}` : `canvas-${item.data.id}`}
+                  key={
+                    item.type === 'window'
+                      ? `window-${item.data.id}`
+                      : item.type === 'group'
+                        ? `group-${item.data.id}`
+                        : item.type === 'canvas'
+                          ? `canvas-${item.data.id}`
+                          : `ssh-profile-${item.data.id}`
+                  }
                   onClick={() => {
-                    if (item.type === 'window') {
-                      onSelect(item.data.id);
-                    } else if (item.type === 'group' && onSelectGroup) {
-                      onSelectGroup(item.data.id);
-                    } else if (item.type === 'canvas' && onSelectCanvas) {
-                      onSelectCanvas(item.data.id);
-                    }
-                    onClose();
+                    selectItem(item);
                   }}
                 >
                   {item.type === 'window' ? (
@@ -578,9 +586,17 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
                       isSelected={index === selectedIndex}
                       query={query}
                     />
-                  ) : (
+                  ) : item.type === 'canvas' ? (
                     <QuickSwitcherCanvasItem
                       canvasWorkspace={item.data}
+                      isSelected={index === selectedIndex}
+                      query={query}
+                    />
+                  ) : (
+                    <QuickSwitcherSSHProfileItem
+                      profile={item.data}
+                      targetLabel={item.targetLabel}
+                      secondaryText={item.secondaryText}
                       isSelected={index === selectedIndex}
                       query={query}
                     />

@@ -100,6 +100,23 @@ export function matchSearchTerms(query: string, targets: SearchValue[]): boolean
   ));
 }
 
+export function matchSearchTermsLiteral(query: string, targets: SearchValue[]): boolean {
+  const tokens = getSearchTokens(query);
+  if (tokens.length === 0) return true;
+
+  const normalizedTargets = targets
+    .map((value) => String(value ?? '').trim().toLowerCase())
+    .filter(Boolean);
+
+  if (normalizedTargets.length === 0) {
+    return false;
+  }
+
+  return tokens.every((token) => (
+    normalizedTargets.some((target) => target.includes(token))
+  ));
+}
+
 function findSubsequenceIndices(query: string, target: string): number[] | null {
   const matchedIndices: number[] = [];
   let queryIndex = 0;
