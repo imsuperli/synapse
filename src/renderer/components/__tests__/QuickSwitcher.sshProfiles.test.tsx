@@ -157,6 +157,169 @@ describe('QuickSwitcher SSH profile bindings', () => {
     });
   });
 
+  it('matches standalone SSH runtime windows by contiguous IP fragments only', async () => {
+    const user = userEvent.setup();
+    const matchingProfile = createSSHProfile({
+      id: 'ssh-profile-198',
+      name: 'Target Host',
+      host: '172.30.9.198',
+    });
+    const unrelatedProfile = createSSHProfile({
+      id: 'ssh-profile-unrelated',
+      name: 'Unrelated Host',
+      host: '192.168.3.25',
+    });
+    const matchingWindow = createStandaloneSSHWindow(matchingProfile, {
+      id: 'ssh-window-198',
+      activePaneId: 'ssh-pane-198',
+      layout: {
+        type: 'pane',
+        id: 'layout-ssh-pane-198',
+        pane: {
+          id: 'ssh-pane-198',
+          cwd: '/srv/app',
+          command: '/bin/zsh',
+          status: WindowStatus.Running,
+          pid: 1234,
+          backend: 'ssh',
+          ssh: {
+            profileId: matchingProfile.id,
+            host: matchingProfile.host,
+            port: matchingProfile.port,
+            user: matchingProfile.user,
+            authType: matchingProfile.auth,
+            remoteCwd: '/srv/app',
+            reuseSession: true,
+          },
+        },
+      },
+    });
+    const unrelatedWindow = createStandaloneSSHWindow(unrelatedProfile, {
+      id: 'ssh-window-unrelated',
+      activePaneId: 'ssh-pane-unrelated',
+      layout: {
+        type: 'pane',
+        id: 'layout-ssh-pane-unrelated',
+        pane: {
+          id: 'ssh-pane-unrelated',
+          cwd: '/srv/app',
+          command: '/bin/zsh',
+          status: WindowStatus.Running,
+          pid: 5678,
+          backend: 'ssh',
+          ssh: {
+            profileId: unrelatedProfile.id,
+            host: unrelatedProfile.host,
+            port: unrelatedProfile.port,
+            user: unrelatedProfile.user,
+            authType: unrelatedProfile.auth,
+            remoteCwd: '/srv/app',
+            reuseSession: true,
+          },
+        },
+      },
+    });
+
+    useWindowStore.setState({
+      windows: [matchingWindow, unrelatedWindow],
+      groups: [],
+    });
+
+    render(
+      <QuickSwitcher
+        isOpen
+        currentWindowId={null}
+        onClose={() => {}}
+        onSelect={() => {}}
+        sshProfiles={[matchingProfile, unrelatedProfile]}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox'), '198');
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText((_, element) => element?.textContent === 'Target Host').length,
+      ).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText((_, element) => element?.textContent === 'Unrelated Host')).not.toBeInTheDocument();
+    expect(screen.getByText((_, element) => element?.textContent === 'root@172.30.9.198:22 | /srv/app')).toBeInTheDocument();
+    expect(screen.queryByText((_, element) => element?.textContent === 'root@192.168.3.25:22 | /srv/app')).not.toBeInTheDocument();
+  });
+
+  it('matches SSH profile tags and remote paths when filtering', async () => {
+    const user = userEvent.setup();
+    const profile = createSSHProfile({
+      name: 'Reports Host',
+      host: '172.30.9.205',
+      defaultRemoteCwd: '/opt/reports/current',
+      tags: ['analytics'],
+    });
+    const runtimeWindow = createStandaloneSSHWindow(profile, {
+      layout: {
+        type: 'pane',
+        id: 'layout-ssh-pane-1',
+        pane: {
+          id: 'ssh-pane-1',
+          cwd: '/opt/reports/current',
+          command: '/bin/zsh',
+          status: WindowStatus.Running,
+          pid: 1234,
+          backend: 'ssh',
+          ssh: {
+            profileId: profile.id,
+            host: profile.host,
+            port: profile.port,
+            user: profile.user,
+            authType: profile.auth,
+            remoteCwd: '/opt/reports/current',
+            reuseSession: true,
+          },
+        },
+      },
+    });
+
+    useWindowStore.setState({
+      windows: [runtimeWindow],
+      groups: [],
+    });
+
+    const { rerender } = render(
+      <QuickSwitcher
+        isOpen
+        currentWindowId={runtimeWindow.id}
+        onClose={() => {}}
+        onSelect={() => {}}
+        sshProfiles={[profile]}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox'), 'analytics');
+    await waitFor(() => {
+      expect(
+        screen.getAllByText((_, element) => element?.textContent === 'Reports Host').length,
+      ).toBeGreaterThan(0);
+    });
+
+    rerender(
+      <QuickSwitcher
+        isOpen
+        currentWindowId={runtimeWindow.id}
+        onClose={() => {}}
+        onSelect={() => {}}
+        sshProfiles={[profile]}
+      />,
+    );
+
+    await user.clear(screen.getByRole('textbox'));
+    await user.type(screen.getByRole('textbox'), 'reports/current');
+    await waitFor(() => {
+      expect(
+        screen.getByText((_, element) => element?.textContent === 'root@172.30.9.205:22 | /opt/reports/current'),
+      ).toBeInTheDocument();
+    });
+  });
+
   it('shows an ssh clone tab in quick switcher because clone tabs are peer runtime tabs', async () => {
     const profile = createSSHProfile();
     const ownerWindow = createStandaloneSSHWindow(profile, {

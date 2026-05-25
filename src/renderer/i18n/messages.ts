@@ -338,7 +338,7 @@ export const zhCNMessages = {
   'about.logoAlt': '{appName} Logo',
 
   'quickSwitcher.title': '快速切换',
-  'quickSwitcher.searchPlaceholder': '搜索窗口或窗口组（名称、路径）...',
+  'quickSwitcher.searchPlaceholder': '搜索窗口或窗口组（名称、IP、路径、标签）...',
   'quickSwitcher.resultsCount': '{count} 个结果',
   'quickSwitcher.noResults': '没有找到匹配的窗口、窗口组或画布',
   'quickSwitcher.noResultsHint': '尝试使用不同的关键词搜索',
@@ -2147,7 +2147,7 @@ export const enUSMessages: Record<TranslationKey, string> = {
   'about.logoAlt': '{appName} logo',
 
   'quickSwitcher.title': 'Quick Switcher',
-  'quickSwitcher.searchPlaceholder': 'Search windows and groups (name, path)...',
+  'quickSwitcher.searchPlaceholder': 'Search windows and groups (name, IP, path, tags)...',
   'quickSwitcher.resultsCount': '{count} results',
   'quickSwitcher.noResults': 'No matching windows, groups, or canvases found',
   'quickSwitcher.noResultsHint': 'Try a different keyword',

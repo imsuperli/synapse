@@ -4,7 +4,7 @@ import { useWindowStore } from '../stores/windowStore';
 import { QuickSwitcherItem } from './QuickSwitcherItem';
 import { QuickSwitcherGroupItem } from './QuickSwitcherGroupItem';
 import { QuickSwitcherCanvasItem } from './QuickSwitcherCanvasItem';
-import { fuzzyMatch } from '../utils/fuzzySearch';
+import { matchSearchTerms } from '../utils/fuzzySearch';
 import { Pane, Window, WindowStatus } from '../types/window';
 import { WindowGroup } from '../../shared/types/window-group';
 import { CanvasWorkspace } from '../../shared/types/canvas';
@@ -25,6 +25,7 @@ import {
 } from './ui/ide-popup';
 
 const QUICK_SWITCHER_KEYCAP_CLASS_NAME = `rounded border px-1.5 py-0.5 ${idePopupBadgeClassName('zinc')}`;
+type SearchTermValue = string | number | null | undefined;
 
 interface QuickSwitcherProps {
   isOpen: boolean;
@@ -95,6 +96,90 @@ function getCanvasPriority(canvasWorkspace: CanvasWorkspace): number {
   return canvasWorkspace.archived ? 4 : 0;
 }
 
+function normalizeSearchTerms(values: SearchTermValue[]): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+
+  for (const value of values) {
+    const term = String(value ?? '').trim();
+    if (!term || seen.has(term)) {
+      continue;
+    }
+
+    seen.add(term);
+    terms.push(term);
+  }
+
+  return terms;
+}
+
+function getPaneSearchTerms(pane: Pane): SearchTermValue[] {
+  return [
+    pane.cwd,
+    pane.command,
+    pane.title,
+    pane.teamName,
+    pane.agentId,
+    pane.agentName,
+    pane.ssh?.profileId,
+    pane.ssh?.host,
+    pane.ssh?.port,
+    pane.ssh?.user,
+    pane.ssh?.remoteCwd,
+    pane.ssh?.jumpHostProfileId,
+    pane.ssh?.proxyCommand,
+    pane.browser?.url,
+    pane.code?.rootPath,
+    pane.code?.activeFilePath,
+    pane.code?.selectedPath,
+    ...(pane.code?.openFiles?.map((file) => file.path) ?? []),
+    ...(pane.code?.expandedPaths ?? []),
+    ...(pane.code?.bookmarks?.flatMap((bookmark) => [bookmark.filePath, bookmark.label]) ?? []),
+    ...(pane.code?.breakpoints?.map((breakpoint) => breakpoint.filePath) ?? []),
+  ];
+}
+
+function getWindowSearchTerms(window: Window, panes: Pane[], workingDirectory: string): string[] {
+  return normalizeSearchTerms([
+    window.name,
+    workingDirectory,
+    window.gitBranch,
+    window.claudeModel,
+    window.claudeModelId,
+    ...(window.tags ?? []),
+    ...(window.projectConfig?.links.flatMap((link) => [link.name, link.url]) ?? []),
+    ...panes.flatMap(getPaneSearchTerms),
+  ]);
+}
+
+function getSSHProfileSearchTerms(profile: SSHProfile, targetLabel: string): string[] {
+  return normalizeSearchTerms([
+    profile.name,
+    targetLabel,
+    `${profile.user}@${profile.host}`,
+    profile.host,
+    profile.port,
+    profile.user,
+    profile.defaultRemoteCwd,
+    profile.remoteCommand,
+    profile.notes,
+    profile.jumpHostProfileId,
+    profile.proxyCommand,
+    profile.socksProxyHost,
+    profile.socksProxyPort,
+    profile.httpProxyHost,
+    profile.httpProxyPort,
+    ...(profile.tags ?? []),
+    ...(profile.forwardedPorts ?? []).flatMap((forwardedPort) => [
+      forwardedPort.host,
+      forwardedPort.port,
+      forwardedPort.targetAddress,
+      forwardedPort.targetPort,
+      forwardedPort.description,
+    ]),
+  ]);
+}
+
 /**
  * 快速切换面板组件（Ctrl+Tab）
  * 支持搜索和键盘导航，同时显示窗口和窗口组
@@ -134,6 +219,7 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
       const workingDirectory = getCurrentWindowWorkingDirectory(window);
       const activePane = getCurrentWindowTerminalPane(window);
       const windowKind = getWindowKind(window);
+      const windowSearchTerms = getWindowSearchTerms(window, panes, workingDirectory);
 
       if (!profile) {
         return {
@@ -148,13 +234,14 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
           workingDirectory,
           priority: getWindowPriority(window, status),
           lastActiveAtTime: new Date(window.lastActiveAt).getTime(),
-          searchTerms: [window.name, workingDirectory],
+          searchTerms: windowSearchTerms,
         };
       }
 
       const targetLabel = `${profile.user}@${profile.host}:${profile.port}`;
       const remoteCwd = workingDirectory || profile.defaultRemoteCwd || '';
       const secondaryText = remoteCwd ? `${targetLabel} | ${remoteCwd}` : targetLabel;
+      const sshProfileSearchTerms = getSSHProfileSearchTerms(profile, targetLabel);
 
       return {
         type: 'window' as const,
@@ -168,17 +255,12 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
         workingDirectory,
         priority: getWindowPriority(window, status),
         lastActiveAtTime: new Date(window.lastActiveAt).getTime(),
-        searchTerms: [
-          profile.name,
-          window.name,
-          targetLabel,
-          workingDirectory,
-          profile.defaultRemoteCwd || '',
-          profile.host,
-          profile.user,
-          profile.notes || '',
-          ...profile.tags,
-        ],
+        searchTerms: normalizeSearchTerms([
+          ...sshProfileSearchTerms,
+          ...windowSearchTerms,
+          remoteCwd,
+          secondaryText,
+        ]),
       };
     })
   ), [sshProfilesById, visibleWindows]);
@@ -199,7 +281,10 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
         windowStatuses,
         priority: getGroupPriority(group),
         lastActiveAtTime: new Date(group.lastActiveAt).getTime(),
-        searchTerms: [group.name],
+        searchTerms: normalizeSearchTerms([
+          group.name,
+          ...windowIds.flatMap((windowId) => windowById.get(windowId)?.searchTerms ?? []),
+        ]),
       };
     });
   }, [groups, preparedWindows]);
@@ -215,6 +300,9 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
         canvasWorkspace.workingDirectory ?? '',
         ...canvasWorkspace.blocks.map((block) => block.label ?? ''),
         ...canvasWorkspace.blocks.flatMap((block) => block.type === 'note' ? [block.content] : []),
+        ...(canvasWorkspace.chatDefaults?.contextFilePaths ?? []),
+        canvasWorkspace.chatDefaults?.workspaceInstructions ?? '',
+        canvasWorkspace.exportSettings?.title ?? '',
       ],
     }))
   ), [canvasWorkspaces]);
@@ -222,15 +310,15 @@ export const QuickSwitcher: React.FC<QuickSwitcherProps> = ({
   // 过滤并合并窗口、窗口组和画布
   const filteredItems = useMemo(() => {
     const filteredWindows: SwitcherItem[] = preparedWindows.filter((item) => (
-      item.searchTerms.some((value) => fuzzyMatch(query, value))
+      matchSearchTerms(query, item.searchTerms)
     ));
 
     const filteredGroups: SwitcherItem[] = preparedGroups.filter((item) => (
-      item.searchTerms.some((value) => fuzzyMatch(query, value))
+      matchSearchTerms(query, item.searchTerms)
     ));
 
     const filteredCanvasWorkspaces: SwitcherItem[] = preparedCanvasWorkspaces.filter((item) => (
-      item.searchTerms.some((value) => fuzzyMatch(query, value))
+      matchSearchTerms(query, item.searchTerms)
     ));
 
     return [...filteredCanvasWorkspaces, ...filteredGroups, ...filteredWindows].sort((a, b) => {
