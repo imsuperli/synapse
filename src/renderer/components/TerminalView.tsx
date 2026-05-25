@@ -647,8 +647,14 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
         // 单窗格窗口退出
         if (embedded && onStopAndRemoveFromGroup) {
-          // 窗口组内：复用"停止并移除"逻辑
-          onStopAndRemoveFromGroup(terminalWindow.id);
+          // 窗口组内的进程退出/停止只清理会话资源，不能隐式移出窗口组。
+          if (isWindowResourceDestructionPending(terminalWindow.id)) {
+            return;
+          }
+
+          void destroyWindowResourcesKeepRecord(terminalWindow.id).catch((error) => {
+            console.error('Failed to destroy grouped window session after pane exit:', error);
+          });
         } else if (isEphemeralRemoteTab) {
           void destroyCurrentEphemeralRemoteWindow().catch((error) => {
             console.error('Failed to destroy ephemeral remote window after pane exit:', error);

@@ -1006,6 +1006,59 @@ describe('TerminalView', () => {
     expect(screen.getByTestId('remote-window-tabs')).toHaveAttribute('data-variant', 'windowHeader');
   });
 
+  it('keeps a grouped local window in its group when the pane exits', async () => {
+    const groupedWindow = createLocalWindow(WindowStatus.Running);
+    const group = {
+      id: 'group-1',
+      name: 'Local Group',
+      activeWindowId: groupedWindow.id,
+      createdAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+      layout: {
+        type: 'split' as const,
+        direction: 'horizontal' as const,
+        sizes: [1],
+        children: [
+          { type: 'window' as const, id: groupedWindow.id },
+        ],
+      },
+    };
+    const onStopAndRemoveFromGroup = vi.fn();
+    const onReturn = vi.fn();
+
+    useWindowStore.setState({
+      windows: [groupedWindow],
+      groups: [group],
+      activeGroupId: group.id,
+    });
+
+    render(
+      <TerminalView
+        window={groupedWindow}
+        onReturn={onReturn}
+        onWindowSwitch={vi.fn()}
+        onStopAndRemoveFromGroup={onStopAndRemoveFromGroup}
+        isActive
+        embedded
+        groupId={group.id}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+
+    await waitFor(() => {
+      expect(window.electronAPI.closeWindow).toHaveBeenCalledWith(groupedWindow.id);
+      expect(window.electronAPI.deleteWindow).toHaveBeenCalledWith(groupedWindow.id);
+    });
+
+    expect(onStopAndRemoveFromGroup).not.toHaveBeenCalled();
+    expect(onReturn).not.toHaveBeenCalled();
+    expect(useWindowStore.getState().getGroupById(group.id)).toBeDefined();
+    const storedWindow = useWindowStore.getState().getWindowById(groupedWindow.id);
+    expect(storedWindow).toBeDefined();
+    expect(storedWindow?.layout.type === 'pane' && storedWindow.layout.pane.status).toBe(WindowStatus.Completed);
+  });
+
   it('switches the active window inside a group when an embedded ssh remote tab is selected', async () => {
     const user = userEvent.setup();
     const ownerWindow = createSshWindow();
