@@ -44,7 +44,7 @@ import {
   destroyWindowResourcesKeepRecord,
 } from '../utils/windowDestruction';
 import { createCanvasWindowBlock } from '../utils/canvasWorkspace';
-import { getRecentTerminalWindows } from '../utils/recentTerminals';
+import { getRecentTerminalItems } from '../utils/recentTerminals';
 
 // 统一的卡片项类型
 type CardItem =
@@ -155,6 +155,7 @@ export const CardGrid = React.memo<CardGridProps>(({
   const canvasWorkspaces = useWindowStore((state) => state.canvasWorkspaces);
   const startedCanvasWorkspaceIds = useWindowStore((state) => state.startedCanvasWorkspaceIds);
   const mruList = useWindowStore((state) => state.mruList);
+  const groupMruList = useWindowStore((state) => state.groupMruList);
   const removeGroup = useWindowStore((state) => state.removeGroup);
   const updateGroup = useWindowStore((state) => state.updateGroup);
   const archiveGroup = useWindowStore((state) => state.archiveGroup);
@@ -330,9 +331,15 @@ export const CardGrid = React.memo<CardGridProps>(({
       const activeWindows = standalonePersistableWindows.filter((window) => (
         !window.archived && !groupedWindowIds.has(window.id)
       ));
+      const activeGroups = groups.filter((group) => !group.archived);
       const seenSSHProfileIds = new Set<string>();
-      return getRecentTerminalWindows(activeWindows, mruList, recentTerminalLimit)
-        .flatMap<CardItem>((window) => {
+      return getRecentTerminalItems(activeWindows, activeGroups, mruList, groupMruList, recentTerminalLimit)
+        .flatMap<CardItem>((item) => {
+          if (item.type === 'group') {
+            return [{ type: 'group', data: item.data }];
+          }
+
+          const window = item.data;
           if (shouldRenderWindowCard(window)) {
             return [{ type: 'window', data: window }];
           }
@@ -492,7 +499,7 @@ export const CardGrid = React.memo<CardGridProps>(({
       ...sortWindows(activeWindows, 'createdAt').map(w => ({ type: 'window' as const, data: w })),
       ...(sshEnabled ? sortedSSHProfiles.map(profile => ({ type: 'sshProfile' as const, data: profile })) : []),
     ];
-  }, [activeCanvasWorkspaceItems, activeCustomCategory, archivedCanvasWorkspaceItems, currentTab, groupHasKind, groupHasStatus, groupedWindowIds, groups, isCustomCategoryTab, mruList, recentTerminalLimit, shouldRenderWindowCard, sortedSSHProfiles, sshEnabled, sshProfilesById, standalonePersistableWindows, statusSetByWindowId, windowKindById]);
+  }, [activeCanvasWorkspaceItems, activeCustomCategory, archivedCanvasWorkspaceItems, currentTab, groupHasKind, groupHasStatus, groupMruList, groupedWindowIds, groups, isCustomCategoryTab, mruList, recentTerminalLimit, shouldRenderWindowCard, sortedSSHProfiles, sshEnabled, sshProfilesById, standalonePersistableWindows, statusSetByWindowId, windowKindById]);
 
   // 全局搜索：始终搜索所有终端和组，不受 currentTab 限制
   const allCardItems = useMemo<CardItem[]>(() => {

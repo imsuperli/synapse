@@ -178,6 +178,66 @@ describe('CardGrid', () => {
     expect(screen.queryByText('Old Window')).not.toBeInTheDocument();
   });
 
+  it('renders recent active group cards and hides their member windows from recent terminals', () => {
+    const groupWindowA = makeWindow({ id: 'group-a', name: 'Group A Window' });
+    const groupWindowB = makeWindow({ id: 'group-b', name: 'Group B Window' });
+    const standaloneWindow = makeWindow({
+      id: 'standalone',
+      name: 'Standalone Window',
+      lastActiveAt: '2024-01-01T10:00:00Z',
+    });
+    const group = {
+      ...createGroup('Recent Group', groupWindowA.id, groupWindowB.id),
+      lastActiveAt: '2024-01-01T12:00:00Z',
+    };
+
+    useWindowStore.setState({
+      windows: [groupWindowA, groupWindowB, standaloneWindow],
+      groups: [group],
+      mruList: [],
+      groupMruList: [],
+    });
+
+    renderCardGrid({ currentTab: 'active' });
+
+    expect(screen.getByText('Recent Group')).toBeInTheDocument();
+    expect(screen.getByText('Standalone Window')).toBeInTheDocument();
+    expect(screen.queryByText('Group A Window')).not.toBeInTheDocument();
+    expect(screen.queryByText('Group B Window')).not.toBeInTheDocument();
+  });
+
+  it('limits recent terminals across standalone windows and groups', () => {
+    const groupWindowA = makeWindow({ id: 'group-a', name: 'Group A Window' });
+    const groupWindowB = makeWindow({ id: 'group-b', name: 'Group B Window' });
+    const newestWindow = makeWindow({
+      id: 'newest',
+      name: 'Newest Window',
+      lastActiveAt: '2024-01-01T12:00:00Z',
+    });
+    const olderWindow = makeWindow({
+      id: 'older',
+      name: 'Older Window',
+      lastActiveAt: '2024-01-01T08:00:00Z',
+    });
+    const group = {
+      ...createGroup('Mid Group', groupWindowA.id, groupWindowB.id),
+      lastActiveAt: '2024-01-01T10:00:00Z',
+    };
+
+    useWindowStore.setState({
+      windows: [groupWindowA, groupWindowB, newestWindow, olderWindow],
+      groups: [group],
+      mruList: [],
+      groupMruList: [],
+    });
+
+    renderCardGrid({ currentTab: 'active', recentTerminalLimit: 2 });
+
+    expect(screen.getByText('Newest Window')).toBeInTheDocument();
+    expect(screen.getByText('Mid Group')).toBeInTheDocument();
+    expect(screen.queryByText('Older Window')).not.toBeInTheDocument();
+  });
+
   // Empty state
   it('renders nothing when windows array is empty', () => {
     const { container } = renderCardGrid();

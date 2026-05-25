@@ -3,6 +3,7 @@ import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Sidebar } from '../layout/Sidebar';
 import { useWindowStore } from '../../stores/windowStore';
+import { createGroup } from '../../utils/groupLayoutHelpers';
 import { createSinglePaneWindow } from '../../utils/layoutHelpers';
 import { WindowStatus, type Window } from '../../types/window';
 
@@ -121,6 +122,32 @@ describe('Layout Sidebar', () => {
 
     const storedWindows = useWindowStore.getState().windows;
     expect(storedWindows.map((window) => window.id)).toEqual([otherWindow.id]);
+  });
+
+  it('counts window groups in the recent terminals tab', () => {
+    const groupWindowA = createWindowWithStatus('group-a', WindowStatus.Running);
+    const groupWindowB = createWindowWithStatus('group-b', WindowStatus.Running);
+    const standaloneWindow = createWindowWithStatus('standalone-a', WindowStatus.Running);
+    const group = createGroup('Recent Group', groupWindowA.id, groupWindowB.id);
+
+    useWindowStore.setState({
+      windows: [groupWindowA, groupWindowB, standaloneWindow],
+      groups: [group],
+      mruList: [],
+      groupMruList: [],
+    });
+
+    render(
+      <Sidebar
+        currentTab="active"
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onTabChange={vi.fn()}
+      />,
+    );
+
+    const recentTab = screen.getByRole('button', { name: '最近终端2' });
+    expect(within(recentTab).getByText('2')).toBeInTheDocument();
   });
 
   it('clears ssh window records together with owned ephemeral clone tabs from the ssh tab', async () => {

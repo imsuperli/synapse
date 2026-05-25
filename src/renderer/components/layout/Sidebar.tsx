@@ -14,7 +14,7 @@ import { getAllWindowIds } from '../../utils/groupLayoutHelpers';
 import { TerminalTypeLogo } from '../icons/TerminalTypeLogo';
 import { getWindowKind } from '../../../shared/utils/terminalCapabilities';
 import { getSidebarCardCounts } from '../../utils/cardCollection';
-import { getRecentTerminalWindows } from '../../utils/recentTerminals';
+import { getRecentTerminalItems } from '../../utils/recentTerminals';
 import { destroySSHWindowFamilyResources, destroyWindowResourcesAndRemoveRecord } from '../../utils/windowDestruction';
 import {
   idePopupInputClassName,
@@ -69,6 +69,7 @@ export function Sidebar({
   const groups = useWindowStore((state) => state.groups);
   const canvasWorkspaces = useWindowStore((state) => state.canvasWorkspaces);
   const mruList = useWindowStore((state) => state.mruList);
+  const groupMruList = useWindowStore((state) => state.groupMruList);
   const addWindow = useWindowStore((state) => state.addWindow);
   const customCategories = useWindowStore((state) => state.customCategories);
   const syncCustomCategories = useWindowStore((state) => state.syncCustomCategories);
@@ -87,9 +88,23 @@ export function Sidebar({
     () => activeWindows.filter((window) => !groupedWindowIds.has(window.id)),
     [activeWindows, groupedWindowIds],
   );
-  const recentActiveWindows = useMemo(
-    () => getRecentTerminalWindows(visibleActiveWindows, mruList, recentTerminalLimit),
-    [mruList, recentTerminalLimit, visibleActiveWindows],
+  const recentActiveItems = useMemo(
+    () => getRecentTerminalItems(
+      visibleActiveWindows,
+      groups.filter((group) => !group.archived),
+      mruList,
+      groupMruList,
+      recentTerminalLimit,
+    ),
+    [groupMruList, groups, mruList, recentTerminalLimit, visibleActiveWindows],
+  );
+  const recentActiveWindowIds = useMemo(
+    () => recentActiveItems.flatMap((item) => (
+      item.type === 'group'
+        ? getAllWindowIds(item.data.layout)
+        : [item.data.id]
+    )),
+    [recentActiveItems],
   );
   const localActiveWindows = activeWindows.filter(w => getWindowKind(w) !== 'ssh');
   const sshActiveWindows = sshEnabled
@@ -100,7 +115,7 @@ export function Sidebar({
     [canvasWorkspaces, groups, sshEnabled, sshProfiles, windows],
   );
   const allCount = counts.all;
-  const activeCount = recentActiveWindows.length;
+  const activeCount = recentActiveItems.length;
   const archivedCount = counts.archived;
   const localCount = counts.local;
   const sshCount = counts.ssh;
@@ -243,7 +258,7 @@ export function Sidebar({
 
   const handleClearActiveWindows = async () => {
     try {
-      await removeWindowRecords(recentActiveWindows.map((window) => window.id));
+      await removeWindowRecords(recentActiveWindowIds);
     } catch (error) {
       console.error('Failed to clear active windows:', error);
     }
@@ -284,7 +299,7 @@ export function Sidebar({
   // 根据当前标签获取清空函数和窗口数量
   const getClearHandler = () => {
     if (currentTab === 'active') {
-      return { handler: handleClearActiveWindows, count: recentActiveWindows.length };
+      return { handler: handleClearActiveWindows, count: recentActiveItems.length };
     } else if (currentTab === 'archived') {
       return { handler: handleClearArchivedWindows, count: archivedWindows.length };
     } else if (currentTab === 'all') {
@@ -810,7 +825,7 @@ export function Sidebar({
         }
         description={
           currentTab === 'active'
-            ? t('sidebar.confirmClearActiveDescription', { count: recentActiveWindows.length })
+            ? t('sidebar.confirmClearActiveDescription', { count: recentActiveItems.length })
             : currentTab === 'archived'
             ? t('sidebar.confirmClearArchivedDescription', { count: archivedWindows.length })
             : currentTab === 'all'
