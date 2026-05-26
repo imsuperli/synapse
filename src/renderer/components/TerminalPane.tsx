@@ -218,7 +218,18 @@ function extractKeyboardProtocolState(data: unknown): PtyKeyboardProtocolState |
     return undefined;
   }
 
-  const state = keyboardState as { bracketedPasteMode?: unknown; win32InputMode?: unknown };
+  const state = keyboardState as {
+    applicationCursorKeysMode?: unknown;
+    applicationKeypadMode?: unknown;
+    bracketedPasteMode?: unknown;
+    sendFocusMode?: unknown;
+    win32InputMode?: unknown;
+    mouseTracking?: unknown;
+  };
+  const mouseTracking = state.mouseTracking as {
+    protocol?: unknown;
+    encoding?: unknown;
+  } | undefined;
   const kitty = kittyKeyboard as {
     flags?: unknown;
     mainFlags?: unknown;
@@ -239,10 +250,30 @@ function extractKeyboardProtocolState(data: unknown): PtyKeyboardProtocolState |
   }
 
   return {
+    applicationCursorKeysMode: typeof state.applicationCursorKeysMode === 'boolean'
+      ? state.applicationCursorKeysMode
+      : false,
+    applicationKeypadMode: typeof state.applicationKeypadMode === 'boolean'
+      ? state.applicationKeypadMode
+      : false,
     bracketedPasteMode: typeof state.bracketedPasteMode === 'boolean'
       ? state.bracketedPasteMode
       : false,
+    sendFocusMode: typeof state.sendFocusMode === 'boolean'
+      ? state.sendFocusMode
+      : false,
     win32InputMode: state.win32InputMode,
+    mouseTracking: {
+      protocol: mouseTracking?.protocol === 'X10'
+        || mouseTracking?.protocol === 'VT200'
+        || mouseTracking?.protocol === 'DRAG'
+        || mouseTracking?.protocol === 'ANY'
+        ? mouseTracking.protocol
+        : 'NONE',
+      encoding: mouseTracking?.encoding === 'SGR' || mouseTracking?.encoding === 'SGR_PIXELS'
+        ? mouseTracking.encoding
+        : 'DEFAULT',
+    },
     kittyKeyboard: {
       flags: kitty.flags,
       mainFlags: kitty.mainFlags,
@@ -263,7 +294,10 @@ function stripReplayProtocolQueries(data: string): string {
 
 type TerminalCoreKeyboardState = {
   decPrivateModes?: {
+    applicationCursorKeys?: boolean;
+    applicationKeypad?: boolean;
     bracketedPasteMode?: boolean;
+    sendFocus?: boolean;
     win32InputMode?: boolean;
   };
   kittyKeyboard?: {
@@ -278,13 +312,24 @@ type TerminalCoreKeyboardState = {
 type TerminalWithKeyboardState = Terminal & {
   _core?: {
     coreService?: TerminalCoreKeyboardState;
+    coreMouseService?: {
+      activeProtocol: string;
+      activeEncoding: string;
+    };
   };
 };
 
 function resetTerminalKeyboardProtocolState(terminal: Terminal): void {
   applyTerminalKeyboardProtocolState(terminal, {
+    applicationCursorKeysMode: false,
+    applicationKeypadMode: false,
     bracketedPasteMode: false,
+    sendFocusMode: false,
     win32InputMode: false,
+    mouseTracking: {
+      protocol: 'NONE',
+      encoding: 'DEFAULT',
+    },
     kittyKeyboard: {
       flags: 0,
       mainFlags: 0,
@@ -300,14 +345,23 @@ function applyTerminalKeyboardProtocolState(terminal: Terminal, state: PtyKeyboa
     return;
   }
 
-  const coreState = (terminal as TerminalWithKeyboardState)._core?.coreService;
+  const core = (terminal as TerminalWithKeyboardState)._core;
+  const coreState = core?.coreService;
   if (!coreState) {
     return;
   }
 
   if (coreState.decPrivateModes) {
+    coreState.decPrivateModes.applicationCursorKeys = state.applicationCursorKeysMode;
+    coreState.decPrivateModes.applicationKeypad = state.applicationKeypadMode;
     coreState.decPrivateModes.bracketedPasteMode = state.bracketedPasteMode;
+    coreState.decPrivateModes.sendFocus = state.sendFocusMode;
     coreState.decPrivateModes.win32InputMode = state.win32InputMode;
+  }
+
+  if (core?.coreMouseService) {
+    core.coreMouseService.activeProtocol = state.mouseTracking.protocol;
+    core.coreMouseService.activeEncoding = state.mouseTracking.encoding;
   }
 
   if (coreState.kittyKeyboard) {

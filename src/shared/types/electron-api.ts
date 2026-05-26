@@ -1612,9 +1612,19 @@ export interface PtyDataPayload {
   seq?: number;
 }
 
+export type PtyMouseTrackingProtocol = 'NONE' | 'X10' | 'VT200' | 'DRAG' | 'ANY';
+export type PtyMouseTrackingEncoding = 'DEFAULT' | 'SGR' | 'SGR_PIXELS';
+
 export interface PtyKeyboardProtocolState {
+  applicationCursorKeysMode: boolean;
+  applicationKeypadMode: boolean;
   bracketedPasteMode: boolean;
+  sendFocusMode: boolean;
   win32InputMode: boolean;
+  mouseTracking: {
+    protocol: PtyMouseTrackingProtocol;
+    encoding: PtyMouseTrackingEncoding;
+  };
   kittyKeyboard: {
     flags: number;
     mainFlags: number;

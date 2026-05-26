@@ -5,6 +5,18 @@ import {
   updateKeyboardProtocolStateFromOutput,
 } from '../ptyKeyboardProtocolState';
 
+const defaultKeyboardProtocolState = {
+  applicationCursorKeysMode: false,
+  applicationKeypadMode: false,
+  bracketedPasteMode: false,
+  sendFocusMode: false,
+  win32InputMode: false,
+  mouseTracking: {
+    protocol: 'NONE',
+    encoding: 'DEFAULT',
+  },
+};
+
 describe('ptyKeyboardProtocolState', () => {
   it('tracks win32 and kitty keyboard protocol state', () => {
     const state = createDefaultKeyboardProtocolState();
@@ -12,8 +24,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[?9001h\u001b[=5u\u001b[>3u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
-      bracketedPasteMode: false,
-      win32InputMode: true,
+      ...defaultKeyboardProtocolState,
       kittyKeyboard: {
         flags: 3,
         mainFlags: 0,
@@ -21,13 +32,13 @@ describe('ptyKeyboardProtocolState', () => {
         mainStack: [5],
         altStack: [],
       },
+      win32InputMode: true,
     });
 
     updateKeyboardProtocolStateFromOutput(state, '\u001b[<1u\u001b[?9001l\u001b[=0u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
-      bracketedPasteMode: false,
-      win32InputMode: false,
+      ...defaultKeyboardProtocolState,
       kittyKeyboard: {
         flags: 0,
         mainFlags: 0,
@@ -47,10 +58,50 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, 'u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
-      bracketedPasteMode: false,
-      win32InputMode: true,
+      ...defaultKeyboardProtocolState,
       kittyKeyboard: {
         flags: 5,
+        mainFlags: 0,
+        altFlags: 0,
+        mainStack: [],
+        altStack: [],
+      },
+      win32InputMode: true,
+    });
+  });
+
+  it('tracks xterm input modes that affect local key and mouse encoding', () => {
+    const state = createDefaultKeyboardProtocolState();
+
+    updateKeyboardProtocolStateFromOutput(state, '\u001b[?1;1004h');
+    updateKeyboardProtocolStateFromOutput(state, '\u001b');
+    updateKeyboardProtocolStateFromOutput(state, '=');
+    updateKeyboardProtocolStateFromOutput(state, '\u001b[?1002;1006h');
+
+    expect(cloneKeyboardProtocolState(state)).toEqual({
+      ...defaultKeyboardProtocolState,
+      applicationCursorKeysMode: true,
+      applicationKeypadMode: true,
+      sendFocusMode: true,
+      mouseTracking: {
+        protocol: 'DRAG',
+        encoding: 'SGR',
+      },
+      kittyKeyboard: {
+        flags: 0,
+        mainFlags: 0,
+        altFlags: 0,
+        mainStack: [],
+        altStack: [],
+      },
+    });
+
+    updateKeyboardProtocolStateFromOutput(state, '\u001b>\u001b[?1;1004;1002;1006l');
+
+    expect(cloneKeyboardProtocolState(state)).toEqual({
+      ...defaultKeyboardProtocolState,
+      kittyKeyboard: {
+        flags: 0,
         mainFlags: 0,
         altFlags: 0,
         mainStack: [],
@@ -65,8 +116,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[=7u\u001b[?1049h\u001b[=3u\u001b[?1049l');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
-      bracketedPasteMode: false,
-      win32InputMode: false,
+      ...defaultKeyboardProtocolState,
       kittyKeyboard: {
         flags: 7,
         mainFlags: 7,
@@ -83,8 +133,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[=1u\u001b[>2u\u001b[?1049h\u001b[=3u\u001b[>4u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
-      bracketedPasteMode: false,
-      win32InputMode: false,
+      ...defaultKeyboardProtocolState,
       kittyKeyboard: {
         flags: 4,
         mainFlags: 2,
@@ -97,8 +146,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[?1049l\u001b[<1u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
-      bracketedPasteMode: false,
-      win32InputMode: false,
+      ...defaultKeyboardProtocolState,
       kittyKeyboard: {
         flags: 0,
         mainFlags: 2,
@@ -150,10 +198,10 @@ describe('ptyKeyboardProtocolState', () => {
     const snapshot = cloneKeyboardProtocolState(state);
     snapshot.kittyKeyboard.flags = 99;
     snapshot.kittyKeyboard.mainStack.push(99);
+    snapshot.mouseTracking.protocol = 'ANY';
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
-      bracketedPasteMode: false,
-      win32InputMode: false,
+      ...defaultKeyboardProtocolState,
       kittyKeyboard: {
         flags: 3,
         mainFlags: 0,

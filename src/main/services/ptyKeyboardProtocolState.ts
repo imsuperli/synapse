@@ -1,4 +1,8 @@
-import type { PtyKeyboardProtocolState } from '../../shared/types/electron-api';
+import type {
+  PtyKeyboardProtocolState,
+  PtyMouseTrackingEncoding,
+  PtyMouseTrackingProtocol,
+} from '../../shared/types/electron-api';
 
 export type TrackedKeyboardProtocolState = PtyKeyboardProtocolState & {
   activeAltBuffer: boolean;
@@ -6,14 +10,21 @@ export type TrackedKeyboardProtocolState = PtyKeyboardProtocolState & {
 };
 
 const KEYBOARD_PROTOCOL_SEQUENCE_TAIL_LIMIT = 64;
-const KEYBOARD_PROTOCOL_SEQUENCE_PATTERN = /\x1b\[(?:(\?)([0-9;]*)?([hl])|=([0-9]*)(?:;([0-9]+))?u|>([0-9]*)u|<([0-9]*)u)/g;
+const KEYBOARD_PROTOCOL_SEQUENCE_PATTERN = /\x1b(?:\[(?:(\?)([0-9;]*)?([hl])|=([0-9]*)(?:;([0-9]+))?u|>([0-9]*)u|<([0-9]*)u)|([=>]))/g;
 
 export function createDefaultKeyboardProtocolState(): TrackedKeyboardProtocolState {
   return {
     activeAltBuffer: false,
+    applicationCursorKeysMode: false,
+    applicationKeypadMode: false,
     bracketedPasteMode: false,
+    sendFocusMode: false,
     pendingEscapeSequence: '',
     win32InputMode: false,
+    mouseTracking: {
+      protocol: 'NONE',
+      encoding: 'DEFAULT',
+    },
     kittyKeyboard: {
       flags: 0,
       mainFlags: 0,
@@ -26,8 +37,15 @@ export function createDefaultKeyboardProtocolState(): TrackedKeyboardProtocolSta
 
 export function cloneKeyboardProtocolState(state: TrackedKeyboardProtocolState): PtyKeyboardProtocolState {
   return {
+    applicationCursorKeysMode: state.applicationCursorKeysMode,
+    applicationKeypadMode: state.applicationKeypadMode,
     bracketedPasteMode: state.bracketedPasteMode,
+    sendFocusMode: state.sendFocusMode,
     win32InputMode: state.win32InputMode,
+    mouseTracking: {
+      protocol: state.mouseTracking.protocol,
+      encoding: state.mouseTracking.encoding,
+    },
     kittyKeyboard: {
       flags: state.kittyKeyboard.flags,
       mainFlags: state.kittyKeyboard.mainFlags,
@@ -39,7 +57,11 @@ export function cloneKeyboardProtocolState(state: TrackedKeyboardProtocolState):
 }
 
 function getPendingKeyboardProtocolSequenceTail(data: string): string {
-  const start = data.lastIndexOf('\x1b[');
+  const escapeStart = data.lastIndexOf('\x1b');
+  const csiStart = data.lastIndexOf('\x1b[');
+  const keypadApplicationStart = data.lastIndexOf('\x1b=');
+  const keypadNumericStart = data.lastIndexOf('\x1b>');
+  const start = Math.max(escapeStart, csiStart, keypadApplicationStart, keypadNumericStart);
   if (start === -1) {
     return '';
   }
@@ -50,7 +72,8 @@ function getPendingKeyboardProtocolSequenceTail(data: string): string {
   }
 
   if (
-    tail === '\x1b['
+    tail === '\x1b'
+    || tail === '\x1b['
     || /^\x1b\[\?[0-9;]*$/.test(tail)
     || /^\x1b\[=[0-9]*(?:;[0-9]*)?$/.test(tail)
     || /^\x1b\[>[0-9]*$/.test(tail)
@@ -60,6 +83,32 @@ function getPendingKeyboardProtocolSequenceTail(data: string): string {
   }
 
   return '';
+}
+
+function getMouseProtocolForSetMode(param: number): PtyMouseTrackingProtocol | undefined {
+  switch (param) {
+    case 9:
+      return 'X10';
+    case 1000:
+      return 'VT200';
+    case 1002:
+      return 'DRAG';
+    case 1003:
+      return 'ANY';
+    default:
+      return undefined;
+  }
+}
+
+function getMouseEncodingForSetMode(param: number): PtyMouseTrackingEncoding | undefined {
+  switch (param) {
+    case 1006:
+      return 'SGR';
+    case 1016:
+      return 'SGR_PIXELS';
+    default:
+      return undefined;
+  }
 }
 
 export function updateKeyboardProtocolStateFromOutput(state: TrackedKeyboardProtocolState, data: string): void {
@@ -76,6 +125,33 @@ export function updateKeyboardProtocolStateFromOutput(state: TrackedKeyboardProt
       const params = (match[2] ?? '').split(';').map((value) => Number(value));
       const isSet = match[3] === 'h';
       for (const param of params) {
+        if (param === 1) {
+          state.applicationCursorKeysMode = isSet;
+          continue;
+        }
+
+        if (param === 66) {
+          state.applicationKeypadMode = isSet;
+          continue;
+        }
+
+        const mouseProtocol = getMouseProtocolForSetMode(param);
+        if (mouseProtocol) {
+          state.mouseTracking.protocol = isSet ? mouseProtocol : 'NONE';
+          continue;
+        }
+
+        if (param === 1004) {
+          state.sendFocusMode = isSet;
+          continue;
+        }
+
+        const mouseEncoding = getMouseEncodingForSetMode(param);
+        if (mouseEncoding) {
+          state.mouseTracking.encoding = isSet ? mouseEncoding : 'DEFAULT';
+          continue;
+        }
+
         if (param === 9001) {
           state.win32InputMode = isSet;
           continue;
@@ -98,6 +174,12 @@ export function updateKeyboardProtocolStateFromOutput(state: TrackedKeyboardProt
           }
         }
       }
+      continue;
+    }
+
+    const applicationKeypadMode = match[8];
+    if (applicationKeypadMode !== undefined) {
+      state.applicationKeypadMode = applicationKeypadMode === '=';
       continue;
     }
 

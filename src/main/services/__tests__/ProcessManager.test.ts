@@ -24,8 +24,15 @@ function makeMockPtyProcess(pid = 4321) {
 }
 
 const defaultKeyboardProtocolState = {
+  applicationCursorKeysMode: false,
+  applicationKeypadMode: false,
   bracketedPasteMode: false,
+  sendFocusMode: false,
   win32InputMode: false,
+  mouseTracking: {
+    protocol: 'NONE',
+    encoding: 'DEFAULT',
+  },
   kittyKeyboard: {
     flags: 0,
     mainFlags: 0,
@@ -621,6 +628,7 @@ describe('ProcessManager', () => {
           ],
           lastSeq: 6,
           keyboardState: {
+            ...defaultKeyboardProtocolState,
             bracketedPasteMode: true,
             win32InputMode: true,
             kittyKeyboard: {
@@ -649,6 +657,7 @@ describe('ProcessManager', () => {
           ],
           lastSeq: 7,
           keyboardState: {
+            ...defaultKeyboardProtocolState,
             bracketedPasteMode: true,
             win32InputMode: true,
             kittyKeyboard: {

@@ -4,7 +4,7 @@ import { __resetTerminalPaneReplaySessionCacheForTests, TerminalPane } from '../
 import { WindowStatus } from '../../types/window';
 import { subscribeToPanePtyData } from '../../api/ptyDataBus';
 import { useWindowStore } from '../../stores/windowStore';
-import type { PtyDataPayload } from '../../../shared/types/electron-api';
+import type { PtyDataPayload, PtyKeyboardProtocolState } from '../../../shared/types/electron-api';
 
 const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimationFrameMock, cancelAnimationFrameMock } = vi.hoisted(() => ({
   terminalInstances: [] as Array<{
@@ -28,7 +28,10 @@ const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimation
     _core: {
       coreService: {
         decPrivateModes: {
+          applicationCursorKeys: boolean;
+          applicationKeypad: boolean;
           bracketedPasteMode: boolean;
+          sendFocus: boolean;
           win32InputMode: boolean;
         };
         kittyKeyboard: {
@@ -38,6 +41,10 @@ const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimation
           mainStack: number[];
           altStack: number[];
         };
+      };
+      coreMouseService: {
+        activeProtocol: string;
+        activeEncoding: string;
       };
     };
     cols: number;
@@ -56,7 +63,10 @@ vi.mock('@xterm/xterm', () => ({
   Terminal: vi.fn(function MockTerminal(this: unknown, options?: Record<string, unknown>) {
     const coreService = {
       decPrivateModes: {
+        applicationCursorKeys: false,
+        applicationKeypad: false,
         bracketedPasteMode: false,
+        sendFocus: false,
         win32InputMode: false,
       },
       kittyKeyboard: {
@@ -67,6 +77,10 @@ vi.mock('@xterm/xterm', () => ({
         altStack: [] as number[],
       },
     };
+    const coreMouseService = {
+      activeProtocol: 'NONE',
+      activeEncoding: 'DEFAULT',
+    };
     const instance = {
       loadAddon: vi.fn(),
       registerLinkProvider: vi.fn(() => ({ dispose: vi.fn() })),
@@ -75,17 +89,53 @@ vi.mock('@xterm/xterm', () => ({
       blur: vi.fn(),
       dispose: vi.fn(),
       write: vi.fn((data: string, callback?: () => void) => {
-        if (data.includes('\u001b[?9001h')) {
-          coreService.decPrivateModes.win32InputMode = true;
+        const privateModePattern = /\u001b\[\?([0-9;]*)([hl])/g;
+        let privateModeMatch: RegExpExecArray | null;
+        while ((privateModeMatch = privateModePattern.exec(data)) !== null) {
+          const isSet = privateModeMatch[2] === 'h';
+          for (const param of privateModeMatch[1].split(';').map((value) => Number(value))) {
+            switch (param) {
+              case 1:
+                coreService.decPrivateModes.applicationCursorKeys = isSet;
+                break;
+              case 9:
+                coreMouseService.activeProtocol = isSet ? 'X10' : 'NONE';
+                break;
+              case 66:
+                coreService.decPrivateModes.applicationKeypad = isSet;
+                break;
+              case 1000:
+                coreMouseService.activeProtocol = isSet ? 'VT200' : 'NONE';
+                break;
+              case 1002:
+                coreMouseService.activeProtocol = isSet ? 'DRAG' : 'NONE';
+                break;
+              case 1003:
+                coreMouseService.activeProtocol = isSet ? 'ANY' : 'NONE';
+                break;
+              case 1004:
+                coreService.decPrivateModes.sendFocus = isSet;
+                break;
+              case 1006:
+                coreMouseService.activeEncoding = isSet ? 'SGR' : 'DEFAULT';
+                break;
+              case 1016:
+                coreMouseService.activeEncoding = isSet ? 'SGR_PIXELS' : 'DEFAULT';
+                break;
+              case 2004:
+                coreService.decPrivateModes.bracketedPasteMode = isSet;
+                break;
+              case 9001:
+                coreService.decPrivateModes.win32InputMode = isSet;
+                break;
+            }
+          }
         }
-        if (data.includes('\u001b[?9001l')) {
-          coreService.decPrivateModes.win32InputMode = false;
+        if (data.includes('\u001b=')) {
+          coreService.decPrivateModes.applicationKeypad = true;
         }
-        if (data.includes('\u001b[?2004h')) {
-          coreService.decPrivateModes.bracketedPasteMode = true;
-        }
-        if (data.includes('\u001b[?2004l')) {
-          coreService.decPrivateModes.bracketedPasteMode = false;
+        if (data.includes('\u001b>')) {
+          coreService.decPrivateModes.applicationKeypad = false;
         }
         const kittySetPattern = /\u001b\[=([0-9]+)(?:;([0-9]+))?u/g;
         let kittySetMatch: RegExpExecArray | null;
@@ -131,6 +181,7 @@ vi.mock('@xterm/xterm', () => ({
       },
       _core: {
         coreService,
+        coreMouseService,
       },
       cols: 120,
       rows: 40,
@@ -156,6 +207,27 @@ vi.mock('../../api/ptyDataBus', () => ({
 }));
 
 vi.mock('../../styles/xterm.css', () => ({}));
+
+function createKeyboardState(overrides: Partial<PtyKeyboardProtocolState> = {}): PtyKeyboardProtocolState {
+  return {
+    applicationCursorKeysMode: overrides.applicationCursorKeysMode ?? false,
+    applicationKeypadMode: overrides.applicationKeypadMode ?? false,
+    bracketedPasteMode: overrides.bracketedPasteMode ?? false,
+    sendFocusMode: overrides.sendFocusMode ?? false,
+    win32InputMode: overrides.win32InputMode ?? false,
+    mouseTracking: {
+      protocol: overrides.mouseTracking?.protocol ?? 'NONE',
+      encoding: overrides.mouseTracking?.encoding ?? 'DEFAULT',
+    },
+    kittyKeyboard: {
+      flags: overrides.kittyKeyboard?.flags ?? 0,
+      mainFlags: overrides.kittyKeyboard?.mainFlags ?? 0,
+      altFlags: overrides.kittyKeyboard?.altFlags ?? 0,
+      mainStack: overrides.kittyKeyboard?.mainStack ?? [],
+      altStack: overrides.kittyKeyboard?.altStack ?? [],
+    },
+  };
+}
 
 describe('TerminalPane history replay', () => {
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
@@ -1003,19 +1075,9 @@ describe('TerminalPane history replay', () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
       success: true,
       data: {
-        chunks: ['before\u001b[?2004h\u001b[?9001h\u001b[=5uafter'],
+        chunks: ['before\u001b[?1;1004;1002;1006;2004;9001h\u001b=\u001b[=5uafter'],
         lastSeq: 1,
-        keyboardState: {
-          bracketedPasteMode: false,
-          win32InputMode: false,
-          kittyKeyboard: {
-            flags: 0,
-            mainFlags: 0,
-            altFlags: 0,
-            mainStack: [],
-            altStack: [],
-          },
-        },
+        keyboardState: createKeyboardState(),
       },
     });
 
@@ -1037,7 +1099,7 @@ describe('TerminalPane history replay', () => {
 
     await waitFor(() => {
       expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
-        'before\u001b[?2004h\u001b[?9001h\u001b[=5uafter',
+        'before\u001b[?1;1004;1002;1006;2004;9001h\u001b=\u001b[=5uafter',
         expect.any(Function),
       );
     });
@@ -1045,7 +1107,14 @@ describe('TerminalPane history replay', () => {
     await waitFor(() => {
       expect(terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode).toBe(false);
     });
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.applicationCursorKeys).toBe(false);
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.applicationKeypad).toBe(false);
     expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(false);
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.sendFocus).toBe(false);
+    expect(terminalInstances[0]._core.coreMouseService).toEqual({
+      activeProtocol: 'NONE',
+      activeEncoding: 'DEFAULT',
+    });
     expect(terminalInstances[0]._core.coreService.kittyKeyboard).toEqual({
       flags: 0,
       mainFlags: 0,
@@ -1062,11 +1131,18 @@ describe('TerminalPane history replay', () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
       success: true,
       data: {
-        chunks: ['prompt\u001b[?2004l\u001b[?9001l\u001b[=0u'],
+        chunks: ['prompt\u001b[?1;1004;1002;1006;2004;9001l\u001b>\u001b[=0u'],
         lastSeq: 1,
-        keyboardState: {
+        keyboardState: createKeyboardState({
+          applicationCursorKeysMode: true,
+          applicationKeypadMode: true,
           bracketedPasteMode: true,
+          sendFocusMode: true,
           win32InputMode: true,
+          mouseTracking: {
+            protocol: 'DRAG',
+            encoding: 'SGR',
+          },
           kittyKeyboard: {
             flags: 5,
             mainFlags: 5,
@@ -1074,7 +1150,7 @@ describe('TerminalPane history replay', () => {
             mainStack: [1],
             altStack: [2],
           },
-        },
+        }),
       },
     });
 
@@ -1096,7 +1172,7 @@ describe('TerminalPane history replay', () => {
 
     await waitFor(() => {
       expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
-        'prompt\u001b[?2004l\u001b[?9001l\u001b[=0u',
+        'prompt\u001b[?1;1004;1002;1006;2004;9001l\u001b>\u001b[=0u',
         expect.any(Function),
       );
     });
@@ -1104,7 +1180,14 @@ describe('TerminalPane history replay', () => {
     await waitFor(() => {
       expect(terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode).toBe(true);
     });
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.applicationCursorKeys).toBe(true);
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.applicationKeypad).toBe(true);
     expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(true);
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.sendFocus).toBe(true);
+    expect(terminalInstances[0]._core.coreMouseService).toEqual({
+      activeProtocol: 'DRAG',
+      activeEncoding: 'SGR',
+    });
     expect(terminalInstances[0]._core.coreService.kittyKeyboard).toEqual({
       flags: 5,
       mainFlags: 5,
@@ -1140,8 +1223,13 @@ describe('TerminalPane history replay', () => {
       expect(terminalInstances).toHaveLength(1);
     });
 
+    terminalInstances[0]._core.coreService.decPrivateModes.applicationCursorKeys = true;
+    terminalInstances[0]._core.coreService.decPrivateModes.applicationKeypad = true;
     terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode = true;
+    terminalInstances[0]._core.coreService.decPrivateModes.sendFocus = true;
     terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode = true;
+    terminalInstances[0]._core.coreMouseService.activeProtocol = 'ANY';
+    terminalInstances[0]._core.coreMouseService.activeEncoding = 'SGR_PIXELS';
     terminalInstances[0]._core.coreService.kittyKeyboard.flags = 7;
     terminalInstances[0]._core.coreService.kittyKeyboard.mainFlags = 7;
     terminalInstances[0]._core.coreService.kittyKeyboard.altFlags = 3;
@@ -1168,8 +1256,15 @@ describe('TerminalPane history replay', () => {
       expect(terminalInstances[0].reset).toHaveBeenCalled();
     });
 
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.applicationCursorKeys).toBe(false);
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.applicationKeypad).toBe(false);
     expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(false);
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.sendFocus).toBe(false);
     expect(terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode).toBe(false);
+    expect(terminalInstances[0]._core.coreMouseService).toEqual({
+      activeProtocol: 'NONE',
+      activeEncoding: 'DEFAULT',
+    });
     expect(terminalInstances[0]._core.coreService.kittyKeyboard).toEqual({
       flags: 0,
       mainFlags: 0,
@@ -1250,17 +1345,9 @@ describe('TerminalPane history replay', () => {
       data: {
         chunks: ['codex prompt'],
         lastSeq: 1,
-        keyboardState: {
+        keyboardState: createKeyboardState({
           bracketedPasteMode: true,
-          win32InputMode: false,
-          kittyKeyboard: {
-            flags: 0,
-            mainFlags: 0,
-            altFlags: 0,
-            mainStack: [],
-            altStack: [],
-          },
-        },
+        }),
       },
     });
     vi.mocked(window.electronAPI.readClipboardText).mockResolvedValue({
@@ -1316,17 +1403,9 @@ describe('TerminalPane history replay', () => {
       data: {
         chunks: ['remote codex prompt'],
         lastSeq: 1,
-        keyboardState: {
+        keyboardState: createKeyboardState({
           bracketedPasteMode: true,
-          win32InputMode: false,
-          kittyKeyboard: {
-            flags: 0,
-            mainFlags: 0,
-            altFlags: 0,
-            mainStack: [],
-            altStack: [],
-          },
-        },
+        }),
       },
     });
     vi.mocked(window.electronAPI.readClipboardText).mockResolvedValue({
