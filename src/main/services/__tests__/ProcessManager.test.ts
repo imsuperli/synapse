@@ -24,6 +24,7 @@ function makeMockPtyProcess(pid = 4321) {
 }
 
 const defaultKeyboardProtocolState = {
+  bracketedPasteMode: false,
   win32InputMode: false,
   kittyKeyboard: {
     flags: 0,
@@ -604,7 +605,7 @@ describe('ProcessManager', () => {
 
         dataListeners.forEach((listener) => {
           listener('\u001b[?900');
-          listener('1h\u001b[=');
+          listener('1h\u001b[?2004h\u001b[=');
           listener('5');
           listener('u');
         });
@@ -614,12 +615,13 @@ describe('ProcessManager', () => {
             '\u001b[?9001h\u001b[=5u\u001b[>3u',
             '\u001b[<1u\u001b[?9001l\u001b[=0u',
             '\u001b[?900',
-            '1h\u001b[=',
+            '1h\u001b[?2004h\u001b[=',
             '5',
             'u',
           ],
           lastSeq: 6,
           keyboardState: {
+            bracketedPasteMode: true,
             win32InputMode: true,
             kittyKeyboard: {
               flags: 5,
@@ -640,13 +642,14 @@ describe('ProcessManager', () => {
             '\u001b[?9001h\u001b[=5u\u001b[>3u',
             '\u001b[<1u\u001b[?9001l\u001b[=0u',
             '\u001b[?900',
-            '1h\u001b[=',
+            '1h\u001b[?2004h\u001b[=',
             '5',
             'u',
             '\u001b[=7u\u001b[?1049h\u001b[=3u\u001b[?1049l',
           ],
           lastSeq: 7,
           keyboardState: {
+            bracketedPasteMode: true,
             win32InputMode: true,
             kittyKeyboard: {
               flags: 7,

@@ -218,7 +218,7 @@ function extractKeyboardProtocolState(data: unknown): PtyKeyboardProtocolState |
     return undefined;
   }
 
-  const state = keyboardState as { win32InputMode?: unknown };
+  const state = keyboardState as { bracketedPasteMode?: unknown; win32InputMode?: unknown };
   const kitty = kittyKeyboard as {
     flags?: unknown;
     mainFlags?: unknown;
@@ -239,6 +239,9 @@ function extractKeyboardProtocolState(data: unknown): PtyKeyboardProtocolState |
   }
 
   return {
+    bracketedPasteMode: typeof state.bracketedPasteMode === 'boolean'
+      ? state.bracketedPasteMode
+      : false,
     win32InputMode: state.win32InputMode,
     kittyKeyboard: {
       flags: kitty.flags,
@@ -260,6 +263,7 @@ function stripReplayProtocolQueries(data: string): string {
 
 type TerminalCoreKeyboardState = {
   decPrivateModes?: {
+    bracketedPasteMode?: boolean;
     win32InputMode?: boolean;
   };
   kittyKeyboard?: {
@@ -279,6 +283,7 @@ type TerminalWithKeyboardState = Terminal & {
 
 function resetTerminalKeyboardProtocolState(terminal: Terminal): void {
   applyTerminalKeyboardProtocolState(terminal, {
+    bracketedPasteMode: false,
     win32InputMode: false,
     kittyKeyboard: {
       flags: 0,
@@ -301,6 +306,7 @@ function applyTerminalKeyboardProtocolState(terminal: Terminal, state: PtyKeyboa
   }
 
   if (coreState.decPrivateModes) {
+    coreState.decPrivateModes.bracketedPasteMode = state.bracketedPasteMode;
     coreState.decPrivateModes.win32InputMode = state.win32InputMode;
   }
 

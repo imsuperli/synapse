@@ -12,6 +12,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[?9001h\u001b[=5u\u001b[>3u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
+      bracketedPasteMode: false,
       win32InputMode: true,
       kittyKeyboard: {
         flags: 3,
@@ -25,6 +26,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[<1u\u001b[?9001l\u001b[=0u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
+      bracketedPasteMode: false,
       win32InputMode: false,
       kittyKeyboard: {
         flags: 0,
@@ -45,6 +47,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, 'u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
+      bracketedPasteMode: false,
       win32InputMode: true,
       kittyKeyboard: {
         flags: 5,
@@ -62,6 +65,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[=7u\u001b[?1049h\u001b[=3u\u001b[?1049l');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
+      bracketedPasteMode: false,
       win32InputMode: false,
       kittyKeyboard: {
         flags: 7,
@@ -79,6 +83,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[=1u\u001b[>2u\u001b[?1049h\u001b[=3u\u001b[>4u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
+      bracketedPasteMode: false,
       win32InputMode: false,
       kittyKeyboard: {
         flags: 4,
@@ -92,6 +97,7 @@ describe('ptyKeyboardProtocolState', () => {
     updateKeyboardProtocolStateFromOutput(state, '\u001b[?1049l\u001b[<1u');
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
+      bracketedPasteMode: false,
       win32InputMode: false,
       kittyKeyboard: {
         flags: 0,
@@ -124,6 +130,19 @@ describe('ptyKeyboardProtocolState', () => {
     });
   });
 
+  it('tracks bracketed paste mode across output chunks', () => {
+    const state = createDefaultKeyboardProtocolState();
+
+    updateKeyboardProtocolStateFromOutput(state, '\u001b[?200');
+    updateKeyboardProtocolStateFromOutput(state, '4h');
+
+    expect(cloneKeyboardProtocolState(state).bracketedPasteMode).toBe(true);
+
+    updateKeyboardProtocolStateFromOutput(state, '\u001b[?2004l');
+
+    expect(cloneKeyboardProtocolState(state).bracketedPasteMode).toBe(false);
+  });
+
   it('returns clone snapshots that cannot mutate tracked state', () => {
     const state = createDefaultKeyboardProtocolState();
     updateKeyboardProtocolStateFromOutput(state, '\u001b[=5u\u001b[>3u');
@@ -133,6 +152,7 @@ describe('ptyKeyboardProtocolState', () => {
     snapshot.kittyKeyboard.mainStack.push(99);
 
     expect(cloneKeyboardProtocolState(state)).toEqual({
+      bracketedPasteMode: false,
       win32InputMode: false,
       kittyKeyboard: {
         flags: 3,

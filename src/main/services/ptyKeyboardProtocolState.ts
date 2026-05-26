@@ -11,6 +11,7 @@ const KEYBOARD_PROTOCOL_SEQUENCE_PATTERN = /\x1b\[(?:(\?)([0-9;]*)?([hl])|=([0-9
 export function createDefaultKeyboardProtocolState(): TrackedKeyboardProtocolState {
   return {
     activeAltBuffer: false,
+    bracketedPasteMode: false,
     pendingEscapeSequence: '',
     win32InputMode: false,
     kittyKeyboard: {
@@ -25,6 +26,7 @@ export function createDefaultKeyboardProtocolState(): TrackedKeyboardProtocolSta
 
 export function cloneKeyboardProtocolState(state: TrackedKeyboardProtocolState): PtyKeyboardProtocolState {
   return {
+    bracketedPasteMode: state.bracketedPasteMode,
     win32InputMode: state.win32InputMode,
     kittyKeyboard: {
       flags: state.kittyKeyboard.flags,
@@ -76,6 +78,11 @@ export function updateKeyboardProtocolStateFromOutput(state: TrackedKeyboardProt
       for (const param of params) {
         if (param === 9001) {
           state.win32InputMode = isSet;
+          continue;
+        }
+
+        if (param === 2004) {
+          state.bracketedPasteMode = isSet;
           continue;
         }
 

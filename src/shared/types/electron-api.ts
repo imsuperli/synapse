@@ -1613,6 +1613,7 @@ export interface PtyDataPayload {
 }
 
 export interface PtyKeyboardProtocolState {
+  bracketedPasteMode: boolean;
   win32InputMode: boolean;
   kittyKeyboard: {
     flags: number;

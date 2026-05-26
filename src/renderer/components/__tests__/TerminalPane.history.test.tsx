@@ -28,6 +28,7 @@ const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimation
     _core: {
       coreService: {
         decPrivateModes: {
+          bracketedPasteMode: boolean;
           win32InputMode: boolean;
         };
         kittyKeyboard: {
@@ -55,6 +56,7 @@ vi.mock('@xterm/xterm', () => ({
   Terminal: vi.fn(function MockTerminal(this: unknown, options?: Record<string, unknown>) {
     const coreService = {
       decPrivateModes: {
+        bracketedPasteMode: false,
         win32InputMode: false,
       },
       kittyKeyboard: {
@@ -78,6 +80,12 @@ vi.mock('@xterm/xterm', () => ({
         }
         if (data.includes('\u001b[?9001l')) {
           coreService.decPrivateModes.win32InputMode = false;
+        }
+        if (data.includes('\u001b[?2004h')) {
+          coreService.decPrivateModes.bracketedPasteMode = true;
+        }
+        if (data.includes('\u001b[?2004l')) {
+          coreService.decPrivateModes.bracketedPasteMode = false;
         }
         const kittySetPattern = /\u001b\[=([0-9]+)(?:;([0-9]+))?u/g;
         let kittySetMatch: RegExpExecArray | null;
@@ -114,7 +122,12 @@ vi.mock('@xterm/xterm', () => ({
       attachCustomKeyEventHandler: vi.fn(),
       options: { ...(options ?? {}) },
       modes: {
-        bracketedPasteMode: false,
+        get bracketedPasteMode() {
+          return coreService.decPrivateModes.bracketedPasteMode;
+        },
+        set bracketedPasteMode(value: boolean) {
+          coreService.decPrivateModes.bracketedPasteMode = value;
+        },
       },
       _core: {
         coreService,
@@ -990,9 +1003,10 @@ describe('TerminalPane history replay', () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
       success: true,
       data: {
-        chunks: ['before\u001b[?9001h\u001b[=5uafter'],
+        chunks: ['before\u001b[?2004h\u001b[?9001h\u001b[=5uafter'],
         lastSeq: 1,
         keyboardState: {
+          bracketedPasteMode: false,
           win32InputMode: false,
           kittyKeyboard: {
             flags: 0,
@@ -1023,7 +1037,7 @@ describe('TerminalPane history replay', () => {
 
     await waitFor(() => {
       expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
-        'before\u001b[?9001h\u001b[=5uafter',
+        'before\u001b[?2004h\u001b[?9001h\u001b[=5uafter',
         expect.any(Function),
       );
     });
@@ -1031,6 +1045,7 @@ describe('TerminalPane history replay', () => {
     await waitFor(() => {
       expect(terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode).toBe(false);
     });
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(false);
     expect(terminalInstances[0]._core.coreService.kittyKeyboard).toEqual({
       flags: 0,
       mainFlags: 0,
@@ -1047,9 +1062,10 @@ describe('TerminalPane history replay', () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
       success: true,
       data: {
-        chunks: ['prompt\u001b[?9001l\u001b[=0u'],
+        chunks: ['prompt\u001b[?2004l\u001b[?9001l\u001b[=0u'],
         lastSeq: 1,
         keyboardState: {
+          bracketedPasteMode: true,
           win32InputMode: true,
           kittyKeyboard: {
             flags: 5,
@@ -1080,7 +1096,7 @@ describe('TerminalPane history replay', () => {
 
     await waitFor(() => {
       expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
-        'prompt\u001b[?9001l\u001b[=0u',
+        'prompt\u001b[?2004l\u001b[?9001l\u001b[=0u',
         expect.any(Function),
       );
     });
@@ -1088,6 +1104,7 @@ describe('TerminalPane history replay', () => {
     await waitFor(() => {
       expect(terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode).toBe(true);
     });
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(true);
     expect(terminalInstances[0]._core.coreService.kittyKeyboard).toEqual({
       flags: 5,
       mainFlags: 5,
@@ -1123,6 +1140,7 @@ describe('TerminalPane history replay', () => {
       expect(terminalInstances).toHaveLength(1);
     });
 
+    terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode = true;
     terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode = true;
     terminalInstances[0]._core.coreService.kittyKeyboard.flags = 7;
     terminalInstances[0]._core.coreService.kittyKeyboard.mainFlags = 7;
@@ -1150,6 +1168,7 @@ describe('TerminalPane history replay', () => {
       expect(terminalInstances[0].reset).toHaveBeenCalled();
     });
 
+    expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(false);
     expect(terminalInstances[0]._core.coreService.decPrivateModes.win32InputMode).toBe(false);
     expect(terminalInstances[0]._core.coreService.kittyKeyboard).toEqual({
       flags: 0,
@@ -1219,6 +1238,144 @@ describe('TerminalPane history replay', () => {
         'win-ssh',
         'pane-ssh',
         'hello from clipboard',
+        { source: 'clipboard-shortcut' },
+      );
+    });
+    expect(window.electronAPI.tryPasteSshClipboardImage).not.toHaveBeenCalled();
+  });
+
+  it('uses restored local bracketed paste state for CRLF clipboard text', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: {
+        chunks: ['codex prompt'],
+        lastSeq: 1,
+        keyboardState: {
+          bracketedPasteMode: true,
+          win32InputMode: false,
+          kittyKeyboard: {
+            flags: 0,
+            mainFlags: 0,
+            altFlags: 0,
+            mainStack: [],
+            altStack: [],
+          },
+        },
+      },
+    });
+    vi.mocked(window.electronAPI.readClipboardText).mockResolvedValue({
+      success: true,
+      data: 'alpha\r\nbeta\r\ngamma',
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-local-codex"
+        pane={{
+          id: 'pane-local-codex',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.WaitingForInput,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(true);
+    });
+
+    const keyHandler = terminalInstances[0].attachCustomKeyEventHandler.mock.calls[0]?.[0] as (event: KeyboardEvent) => boolean;
+    keyHandler({
+      type: 'keydown',
+      key: 'v',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as KeyboardEvent);
+
+    await waitFor(() => {
+      expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
+        'win-local-codex',
+        'pane-local-codex',
+        '\u001b[200~alpha\rbeta\rgamma\u001b[201~',
+        { source: 'clipboard-shortcut' },
+      );
+    });
+  });
+
+  it('uses restored SSH bracketed paste state for CRLF clipboard text', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: {
+        chunks: ['remote codex prompt'],
+        lastSeq: 1,
+        keyboardState: {
+          bracketedPasteMode: true,
+          win32InputMode: false,
+          kittyKeyboard: {
+            flags: 0,
+            mainFlags: 0,
+            altFlags: 0,
+            mainStack: [],
+            altStack: [],
+          },
+        },
+      },
+    });
+    vi.mocked(window.electronAPI.readClipboardText).mockResolvedValue({
+      success: true,
+      data: 'alpha\r\nbeta\r\ngamma',
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-ssh-codex"
+        pane={{
+          id: 'pane-ssh-codex',
+          cwd: '/srv/app',
+          command: 'codex',
+          status: WindowStatus.WaitingForInput,
+          pid: 1234,
+          backend: 'ssh',
+          ssh: {
+            profileId: 'profile-1',
+            remoteCwd: '/srv/app',
+          },
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]._core.coreService.decPrivateModes.bracketedPasteMode).toBe(true);
+    });
+
+    const keyHandler = terminalInstances[0].attachCustomKeyEventHandler.mock.calls[0]?.[0] as (event: KeyboardEvent) => boolean;
+    keyHandler({
+      type: 'keydown',
+      key: 'v',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as KeyboardEvent);
+
+    await waitFor(() => {
+      expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
+        'win-ssh-codex',
+        'pane-ssh-codex',
+        '\u001b[200~alpha\rbeta\rgamma\u001b[201~',
         { source: 'clipboard-shortcut' },
       );
     });
