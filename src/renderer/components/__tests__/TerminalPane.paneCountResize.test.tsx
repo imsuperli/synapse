@@ -10,6 +10,7 @@ const { fitAddonInstances, terminalInstances } = vi.hoisted(() => ({
   }>,
   terminalInstances: [] as Array<{
     focus: ReturnType<typeof vi.fn>;
+    refresh: ReturnType<typeof vi.fn>;
   }>,
 }));
 
@@ -22,6 +23,7 @@ vi.mock('@xterm/xterm', () => ({
       focus: vi.fn(),
       blur: vi.fn(),
       dispose: vi.fn(),
+      refresh: vi.fn(),
       write: vi.fn(),
       paste: vi.fn(),
       getSelection: vi.fn().mockReturnValue(''),
@@ -242,6 +244,72 @@ describe('TerminalPane resize on resume', () => {
     });
 
     outsideButton.remove();
+  });
+
+  it('refreshes the visible terminal viewport when the app regains focus', async () => {
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(window.electronAPI.ptyResize).toHaveBeenCalled();
+    });
+
+    const terminal = terminalInstances[0];
+    expect(terminal).toBeDefined();
+    terminal?.refresh.mockClear();
+
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      expect(terminal?.refresh).toHaveBeenCalledWith(0, 39);
+    });
+  });
+
+  it('does not refresh a hidden terminal viewport when the app regains focus', async () => {
+    const { container } = render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(window.electronAPI.ptyResize).toHaveBeenCalled();
+    });
+
+    const terminalRegion = container.querySelector('[data-terminal-input-region="true"]') as HTMLElement | null;
+    expect(terminalRegion).not.toBeNull();
+    terminalRegion!.style.display = 'none';
+
+    const terminal = terminalInstances[0];
+    expect(terminal).toBeDefined();
+    terminal?.refresh.mockClear();
+
+    window.dispatchEvent(new Event('focus'));
+
+    expect(terminal?.refresh).not.toHaveBeenCalled();
   });
 
   it('shows the tmux close button only on hover', () => {

@@ -36,6 +36,7 @@ import {
 const completedReplaySessions = new Set<string>();
 const DIRECT_LIVE_OUTPUT_MAX_CHARS = 256;
 const DIRECT_LIVE_OUTPUT_IDLE_MS = 12;
+const VISIBLE_TERMINAL_REPAINT_DELAY_MS = 120;
 const REPLAY_PROTOCOL_QUERY_PATTERN = new RegExp(
   [
     '\\x1b\\[(?:[>=])?c',
@@ -77,6 +78,21 @@ function nowMs(): number {
   }
 
   return Date.now();
+}
+
+function isVisibleTerminalContainer(container: HTMLElement): boolean {
+  if (container.clientWidth <= 0 || container.clientHeight <= 0) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(container);
+  return style.display !== 'none' && style.visibility !== 'hidden';
+}
+
+function refreshTerminalViewport(terminal: Terminal): void {
+  if (terminal.rows > 0 && typeof terminal.refresh === 'function') {
+    terminal.refresh(0, terminal.rows - 1);
+  }
 }
 
 function getReplaySessionKey(windowId: string, paneId: string, pid: number | null | undefined): string | null {
@@ -524,6 +540,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const outputFlushFrameRef = useRef<number | null>(null);
   const lastLiveOutputQueuedAtRef = useRef(Number.NEGATIVE_INFINITY);
   const resizeFrameRef = useRef<number | null>(null);
+  const repaintFrameRef = useRef<number | null>(null);
+  const repaintTimerRef = useRef<number | null>(null);
   const lastContainerSizeRef = useRef({ width: 0, height: 0 });
   const lastSyncedTerminalSizeRef = useRef({ cols: 0, rows: 0 });
   const isActiveRef = useRef(isActive); // 使用 ref 跟踪 isActive 状态
@@ -616,6 +634,44 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     lastSyncedTerminalSizeRef.current = { cols, rows };
     window.electronAPI.ptyResize(windowId, pane.id, cols, rows);
   }, [pane.id, windowId]);
+
+  const refreshVisibleTerminalViewport = useCallback(() => {
+    const terminal = terminalRef.current;
+    const container = terminalContainerRef.current;
+    if (!terminal || !container || !isVisibleTerminalContainer(container)) {
+      return;
+    }
+
+    refreshTerminalViewport(terminal);
+  }, []);
+
+  const scheduleVisibleTerminalRepaint = useCallback((options?: { delayed?: boolean }) => {
+    const scheduleFrame = () => {
+      if (repaintFrameRef.current !== null) {
+        return;
+      }
+
+      repaintFrameRef.current = requestAnimationFrame(() => {
+        repaintFrameRef.current = null;
+        refreshVisibleTerminalViewport();
+      });
+    };
+
+    scheduleFrame();
+
+    if (!options?.delayed) {
+      return;
+    }
+
+    if (repaintTimerRef.current !== null) {
+      window.clearTimeout(repaintTimerRef.current);
+    }
+
+    repaintTimerRef.current = window.setTimeout(() => {
+      repaintTimerRef.current = null;
+      scheduleFrame();
+    }, VISIBLE_TERMINAL_REPAINT_DELAY_MS);
+  }, [refreshVisibleTerminalViewport]);
 
   useEffect(() => {
     sshCwdTrackerRef.current = createSSHCwdTrackerState(pane.cwd);
@@ -865,10 +921,37 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (width > 0 && height > 0) {
         lastContainerSizeRef.current = { width, height };
         fitAddon.fit();
+        refreshTerminalViewport(terminal);
         syncPtySize(terminal, { force: true });
       }
     });
   }, [syncPtySize]);
+
+  useEffect(() => {
+    const handleVisibleSurfaceRecovery = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+
+      scheduleVisibleTerminalRepaint({ delayed: true });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') {
+        handleVisibleSurfaceRecovery();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibleSurfaceRecovery);
+    window.addEventListener('pageshow', handleVisibleSurfaceRecovery);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleVisibleSurfaceRecovery);
+      window.removeEventListener('pageshow', handleVisibleSurfaceRecovery);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [scheduleVisibleTerminalRepaint]);
 
   // 监听窗格状态变化：从无活动会话状态恢复时重置尺寸缓存，强制下次 resize
   useEffect(() => {
@@ -1035,9 +1118,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (fitAddon) {
         requestAnimationFrame(() => {
           fitAddon.fit();
-          if (terminal.rows > 0 && typeof terminal.refresh === 'function') {
-            terminal.refresh(0, terminal.rows - 1);
-          }
+          refreshTerminalViewport(terminal);
         });
       }
     });
@@ -1059,9 +1140,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       if (patch?.appearance && 'options' in terminal && terminal.options) {
         terminal.options.theme = getWindowsTerminalTheme();
-        if (terminal.rows > 0 && typeof terminal.refresh === 'function') {
-          terminal.refresh(0, terminal.rows - 1);
-        }
+        refreshTerminalViewport(terminal);
       }
     };
 
@@ -1162,9 +1241,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         terminal.options.fontFamily = TERMINAL_FONT_FAMILY;
       }
       fitAddon.fit();
-      if (terminal.rows > 0 && typeof terminal.refresh === 'function') {
-        terminal.refresh(0, terminal.rows - 1);
-      }
+      refreshTerminalViewport(terminal);
     });
 
     // 批量刷新 PTY 输出：每帧最多写一次，降低高频输出时的重绘抖动
@@ -1369,6 +1446,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       lastContainerSizeRef.current = { width, height };
       currentFitAddon.fit();
+      refreshTerminalViewport(currentTerminal);
       syncPtySize(currentTerminal);
     };
 
@@ -1559,6 +1637,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
+      }
+
+      if (repaintFrameRef.current !== null) {
+        cancelAnimationFrame(repaintFrameRef.current);
+        repaintFrameRef.current = null;
+      }
+
+      if (repaintTimerRef.current !== null) {
+        window.clearTimeout(repaintTimerRef.current);
+        repaintTimerRef.current = null;
       }
 
       clearQueuedOutput();
