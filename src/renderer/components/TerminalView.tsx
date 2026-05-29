@@ -263,6 +263,7 @@ export interface TerminalViewProps {
   sshEnabled?: boolean;
   sshProfiles?: SSHProfile[];
   onSSHProfileSaved?: (profile: SSHProfile, credentialState: SSHCredentialState) => void;
+  onSelectSSHProfile?: (profile: SSHProfile) => void | Promise<void>;
 }
 
 /**
@@ -286,6 +287,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   sshEnabled = false,
   sshProfiles = [],
   onSSHProfileSaved,
+  onSelectSSHProfile,
 }) => {
   const { t } = useI18n();
   const { enabledIDEs } = useIDESettings();
@@ -1782,10 +1784,12 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           <LazyQuickSwitcher
             isOpen={quickSwitcherOpen}
             currentWindowId={terminalWindow.id}
+            sshEnabled={sshEnabled}
             sshProfiles={sshProfiles}
             onSelect={handleQuickSwitcherSelect}
             onSelectGroup={handleQuickSwitcherSelectGroup}
             onSelectCanvas={handleQuickSwitcherSelectCanvas}
+            onSelectSSHProfile={onSelectSSHProfile}
             onClose={handleQuickSwitcherClose}
           />
         </Suspense>

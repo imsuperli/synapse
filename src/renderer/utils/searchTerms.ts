@@ -5,6 +5,23 @@ import { getAllPanes } from './layoutHelpers';
 
 export type SearchTermValue = string | number | null | undefined;
 
+export function normalizeSearchTerms(values: SearchTermValue[]): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+
+  for (const value of values) {
+    const term = String(value ?? '').trim();
+    if (!term || seen.has(term)) {
+      continue;
+    }
+
+    seen.add(term);
+    terms.push(term);
+  }
+
+  return terms;
+}
+
 export function getSSHTargetLabel(profile: SSHProfile): string {
   return `${profile.user}@${profile.host}:${profile.port}`;
 }

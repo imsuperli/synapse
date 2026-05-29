@@ -26,10 +26,10 @@ import {
 } from './ui/ide-popup';
 import {
   getCanvasWorkspaceSearchTerms,
+  normalizeSearchTerms,
   getSSHProfileSearchTerms,
   getSSHTargetLabel,
   getWindowSearchTerms,
-  SearchTermValue,
 } from '../utils/searchTerms';
 
 const QUICK_SWITCHER_KEYCAP_CLASS_NAME = `rounded border px-1.5 py-0.5 ${idePopupBadgeClassName('zinc')}`;
@@ -126,23 +126,6 @@ function getSwitcherItemRank(type: SwitcherItemType): number {
     case 'sshProfile':
       return 3;
   }
-}
-
-function normalizeSearchTerms(values: SearchTermValue[]): string[] {
-  const seen = new Set<string>();
-  const terms: string[] = [];
-
-  for (const value of values) {
-    const term = String(value ?? '').trim();
-    if (!term || seen.has(term)) {
-      continue;
-    }
-
-    seen.add(term);
-    terms.push(term);
-  }
-
-  return terms;
 }
 
 /**

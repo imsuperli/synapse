@@ -220,6 +220,7 @@ const MountedTerminalSurface = React.memo(({
   onGroupSwitch,
   onReturn,
   onSSHProfileSaved,
+  onSelectSSHProfile,
   onWindowSwitch,
   sshEnabled,
   sshProfiles,
@@ -232,6 +233,7 @@ const MountedTerminalSurface = React.memo(({
   onGroupSwitch: (groupId: string) => void | Promise<void>;
   onReturn: () => void;
   onSSHProfileSaved: (profile: SSHProfile, credentialState: SSHCredentialState) => void;
+  onSelectSSHProfile: (profile: SSHProfile) => void | Promise<void>;
   onWindowSwitch: WindowSwitchHandler;
   sshEnabled: boolean;
   sshProfiles: SSHProfile[];
@@ -302,6 +304,7 @@ const MountedTerminalSurface = React.memo(({
         sshEnabled={sshEnabled}
         sshProfiles={sshProfiles}
         onSSHProfileSaved={onSSHProfileSaved}
+        onSelectSSHProfile={onSelectSSHProfile}
       />
     </div>
   );
@@ -314,14 +317,18 @@ const ActiveGroupSurface = React.memo(({
   onCanvasSwitch,
   onGroupSwitch,
   onReturn,
+  onSelectSSHProfile,
   onWindowSwitch,
+  sshEnabled,
   sshProfiles,
 }: {
   activeGroupId: string;
   onCanvasSwitch: (canvasWorkspaceId: string) => void | Promise<void>;
   onGroupSwitch: (groupId: string) => void | Promise<void>;
   onReturn: () => void;
+  onSelectSSHProfile: (profile: SSHProfile) => void | Promise<void>;
   onWindowSwitch: WindowSwitchHandler;
+  sshEnabled: boolean;
   sshProfiles: SSHProfile[];
 }) => {
   const activeGroup = useWindowStore((state) => (
@@ -349,7 +356,9 @@ const ActiveGroupSurface = React.memo(({
         onWindowSwitch={onWindowSwitch}
         onGroupSwitch={onGroupSwitch}
         onCanvasSwitch={onCanvasSwitch}
+        onSelectSSHProfile={onSelectSSHProfile}
         isActive={true}
+        sshEnabled={sshEnabled}
         sshProfiles={sshProfiles}
       />
     </div>
@@ -366,6 +375,7 @@ const ActiveCanvasSurface = React.memo(({
   onStopWorkspace,
   onWindowSwitch,
   onSSHProfileSaved,
+  onSelectSSHProfile,
   sshEnabled,
   sshProfiles,
 }: {
@@ -376,6 +386,7 @@ const ActiveCanvasSurface = React.memo(({
   onStopWorkspace: (canvasWorkspaceId: string) => void | Promise<void>;
   onWindowSwitch: WindowSwitchHandler;
   onSSHProfileSaved: (profile: SSHProfile, credentialState: SSHCredentialState) => void;
+  onSelectSSHProfile: (profile: SSHProfile) => void | Promise<void>;
   sshEnabled: boolean;
   sshProfiles: SSHProfile[];
 }) => {
@@ -427,6 +438,7 @@ const ActiveCanvasSurface = React.memo(({
             onOpenWindow={onWindowSwitch}
             onOpenCanvasWorkspace={onCanvasSwitch}
             onOpenGroup={onGroupSwitch}
+            onSelectSSHProfile={onSelectSSHProfile}
             onStopWorkspace={onStopWorkspace}
             renderLiveWindow={(windowId, options) => {
               return (
@@ -1955,6 +1967,7 @@ function AppContent() {
           sshEnabled={sshEnabled}
           sshProfiles={sshProfiles}
           onSSHProfileSaved={handleSSHProfileSaved}
+          onSelectSSHProfile={handleConnectSSHProfile}
         />
       ))}
 
@@ -1969,6 +1982,7 @@ function AppContent() {
           sshEnabled={sshEnabled}
           sshProfiles={sshProfiles}
           onSSHProfileSaved={handleSSHProfileSaved}
+          onSelectSSHProfile={handleConnectSSHProfile}
         />
       )}
 
@@ -1983,7 +1997,9 @@ function AppContent() {
           onWindowSwitch={handleWindowSwitchInCurrentContext}
           onCanvasSwitch={handleCanvasSwitchFromTerminalContext}
           onGroupSwitch={handleGroupSwitchInCurrentContext}
+          sshEnabled={sshEnabled}
           sshProfiles={sshProfiles}
+          onSelectSSHProfile={handleConnectSSHProfile}
         />
       )}
 

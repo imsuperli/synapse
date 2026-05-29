@@ -91,6 +91,7 @@ interface CanvasWorkspaceViewProps {
   onOpenWindow?: (windowId: string) => void;
   onOpenCanvasWorkspace?: (canvasWorkspaceId: string) => void;
   onOpenGroup?: (groupId: string) => void;
+  onSelectSSHProfile?: (profile: SSHProfile) => void | Promise<void>;
   renderLiveWindow?: (windowId: string, options: { blockId: string; isActive: boolean }) => React.ReactNode;
   onStopWorkspace?: (canvasWorkspaceId: string) => void | Promise<void>;
 }
@@ -248,6 +249,7 @@ export const CanvasWorkspaceView: React.FC<CanvasWorkspaceViewProps> = ({
   onOpenWindow,
   onOpenCanvasWorkspace,
   onOpenGroup,
+  onSelectSSHProfile,
   renderLiveWindow,
   onStopWorkspace,
 }) => {
@@ -2422,6 +2424,7 @@ export const CanvasWorkspaceView: React.FC<CanvasWorkspaceViewProps> = ({
             onSelect={(windowId) => onOpenWindow?.(windowId)}
             onSelectGroup={onOpenGroup}
             onSelectCanvas={onOpenCanvasWorkspace}
+            onSelectSSHProfile={onSelectSSHProfile}
             onClose={() => setQuickSwitcherOpen(false)}
           />
         </React.Suspense>

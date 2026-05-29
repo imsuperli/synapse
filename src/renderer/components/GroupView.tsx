@@ -46,7 +46,9 @@ export interface GroupViewProps {
   onWindowSwitch: WindowSwitchHandler;
   onGroupSwitch?: (groupId: string) => void;
   onCanvasSwitch?: (canvasWorkspaceId: string) => void;
+  onSelectSSHProfile?: (profile: SSHProfile) => void | Promise<void>;
   isActive: boolean;
+  sshEnabled?: boolean;
   sshProfiles?: SSHProfile[];
 }
 
@@ -60,7 +62,9 @@ export const GroupView: React.FC<GroupViewProps> = ({
   onWindowSwitch,
   onGroupSwitch,
   onCanvasSwitch,
+  onSelectSSHProfile,
   isActive,
+  sshEnabled = false,
   sshProfiles = [],
 }) => {
   const keyboardShortcuts = useKeyboardShortcutSettings();
@@ -551,10 +555,12 @@ export const GroupView: React.FC<GroupViewProps> = ({
             isOpen={quickSwitcherOpen}
             currentWindowId={group.activeWindowId}
             currentGroupId={group.id}
+            sshEnabled={sshEnabled}
             sshProfiles={sshProfiles}
             onSelect={handleQuickSwitcherSelect}
             onSelectGroup={handleQuickSwitcherSelectGroup}
             onSelectCanvas={handleQuickSwitcherSelectCanvas}
+            onSelectSSHProfile={onSelectSSHProfile}
             onClose={handleQuickSwitcherClose}
           />
         </Suspense>

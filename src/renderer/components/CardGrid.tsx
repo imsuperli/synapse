@@ -45,6 +45,14 @@ import {
 } from '../utils/windowDestruction';
 import { createCanvasWindowBlock } from '../utils/canvasWorkspace';
 import { getRecentTerminalItems } from '../utils/recentTerminals';
+import { matchSearchTermsLiteral } from '../utils/fuzzySearch';
+import {
+  getCanvasWorkspaceSearchTerms,
+  getSSHProfileSearchTerms,
+  getSSHTargetLabel,
+  getWindowSearchTerms,
+  normalizeSearchTerms,
+} from '../utils/searchTerms';
 
 // 统一的卡片项类型
 type CardItem =
@@ -211,34 +219,34 @@ export const CardGrid = React.memo<CardGridProps>(({
     persistableWindowById,
     statusSetByWindowId,
     windowKindById,
-    windowSearchTextById,
+    windowSearchTermsById,
   } = useMemo(() => {
     const nextPersistableWindowById = new Map<string, Window>();
     const nextStatusSetByWindowId = new Map<string, Set<WindowStatus>>();
     const nextWindowKindById = new Map<string, NonNullable<Window['kind']>>();
-    const nextWindowSearchTextById = new Map<string, string>();
+    const nextWindowSearchTermsById = new Map<string, string[]>();
 
     persistableWindows.forEach((window) => {
       const panes = getAllPanes(window.layout);
       const statusSet = new Set<WindowStatus>();
-      const cwdParts: string[] = [];
 
       panes.forEach((pane) => {
         statusSet.add(pane.status);
-        cwdParts.push(pane.cwd);
       });
 
       nextPersistableWindowById.set(window.id, window);
       nextStatusSetByWindowId.set(window.id, statusSet);
       nextWindowKindById.set(window.id, getWindowKindFromPanes(window, panes));
-      nextWindowSearchTextById.set(window.id, `${window.name}\n${cwdParts.join('\n')}`.toLowerCase());
+      nextWindowSearchTermsById.set(window.id, normalizeSearchTerms(getWindowSearchTerms(window, {
+        workingDirectory: getCurrentWindowWorkingDirectory(window),
+      })));
     });
 
     return {
       persistableWindowById: nextPersistableWindowById,
       statusSetByWindowId: nextStatusSetByWindowId,
       windowKindById: nextWindowKindById,
-      windowSearchTextById: nextWindowSearchTextById,
+      windowSearchTermsById: nextWindowSearchTermsById,
     };
   }, [persistableWindows]);
   const getGroupWindows = useCallback(
@@ -526,47 +534,42 @@ export const CardGrid = React.memo<CardGridProps>(({
       return cardItems;
     }
 
-    const query = searchQuery.toLowerCase().trim();
     // 使用全局卡片列表进行搜索，而不是当前标签的卡片列表
     return allCardItems.filter((item) => {
       if (item.type === 'window') {
         const win = item.data;
-        return windowSearchTextById.get(win.id)?.includes(query) ?? false;
+        return matchSearchTermsLiteral(searchQuery, windowSearchTermsById.get(win.id) ?? []);
       }
 
       if (item.type === 'group') {
-        // 搜索组名称
         const group = item.data;
-        if (group.name.toLowerCase().includes(query)) {
+        const windowsInGroup = getGroupWindows(group);
+        const groupSearchTerms = normalizeSearchTerms([
+          group.name,
+          ...windowsInGroup.flatMap((win) => windowSearchTermsById.get(win.id) ?? []),
+        ]);
+
+        if (matchSearchTermsLiteral(searchQuery, groupSearchTerms)) {
           return true;
         }
 
-        // 搜索组内窗口的名称和路径
-        const windowsInGroup = getGroupWindows(group);
-        return windowsInGroup.some(win => {
-          return windowSearchTextById.get(win.id)?.includes(query) ?? false;
-        });
+        return false;
       }
 
       if (item.type === 'canvasWorkspace') {
-        return (
-          item.data.name.toLowerCase().includes(query)
-          || (item.data.workingDirectory?.toLowerCase().includes(query) ?? false)
-          || item.data.blocks.some((block) => (block.label ?? '').toLowerCase().includes(query))
-          || item.data.blocks.some((block) => block.type === 'note' && block.content.toLowerCase().includes(query))
+        return matchSearchTermsLiteral(
+          searchQuery,
+          normalizeSearchTerms(getCanvasWorkspaceSearchTerms(item.data)),
         );
       }
 
       const profile = item.data;
-      return (
-        profile.name.toLowerCase().includes(query)
-        || profile.host.toLowerCase().includes(query)
-        || profile.user.toLowerCase().includes(query)
-        || profile.tags.some((tag) => tag.toLowerCase().includes(query))
-        || (profile.notes?.toLowerCase().includes(query) ?? false)
+      return matchSearchTermsLiteral(
+        searchQuery,
+        normalizeSearchTerms(getSSHProfileSearchTerms(profile, getSSHTargetLabel(profile))),
       );
     });
-  }, [allCardItems, cardItems, getGroupWindows, searchQuery, windowSearchTextById]);
+  }, [allCardItems, cardItems, getGroupWindows, searchQuery, windowSearchTermsById]);
 
   const handleConnectSSHProfile = useCallback(async (profile: SSHProfile) => {
     await onConnectSSHProfile?.(profile);
