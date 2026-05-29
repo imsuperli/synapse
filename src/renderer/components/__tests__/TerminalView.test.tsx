@@ -1720,6 +1720,76 @@ describe('TerminalView', () => {
     expect(useWindowStore.getState().windows.find((window) => window.id === currentWindow.id)).toBeDefined();
   });
 
+  it('keeps the current window active when a pane exit is reported during restart', async () => {
+    let resolveDeleteWindow: ((value: { success: true }) => void) | null = null;
+    vi.mocked(window.electronAPI.deleteWindow).mockReturnValueOnce(new Promise((resolve) => {
+      resolveDeleteWindow = resolve;
+    }));
+    vi.mocked(window.electronAPI.startWindow).mockResolvedValueOnce({
+      success: true,
+      data: {
+        pid: 404,
+        sessionId: 'session-404',
+        status: WindowStatus.WaitingForInput,
+      },
+    });
+
+    const currentWindow = createLocalWindow(WindowStatus.Running);
+    const runningWindow: Window = {
+      ...createLocalWindow(WindowStatus.WaitingForInput),
+      id: 'win-local-2',
+      name: 'Other Running Window',
+      activePaneId: 'pane-local-2',
+      layout: {
+        type: 'pane',
+        id: 'pane-local-2',
+        pane: {
+          id: 'pane-local-2',
+          cwd: '/workspace/other',
+          command: 'bash',
+          status: WindowStatus.WaitingForInput,
+          pid: 202,
+        },
+      },
+    };
+    const onWindowSwitch = vi.fn();
+
+    useWindowStore.setState({
+      windows: [currentWindow, runningWindow],
+      activeWindowId: currentWindow.id,
+      mruList: [currentWindow.id, runningWindow.id],
+      sidebarExpanded: false,
+      sidebarWidth: 200,
+    });
+
+    render(
+      <TerminalView
+        window={currentWindow}
+        onReturn={vi.fn()}
+        onWindowSwitch={onWindowSwitch}
+        isActive
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'terminalView.restart' }));
+
+    await waitFor(() => {
+      expect(window.electronAPI.closeWindow).toHaveBeenCalledWith(currentWindow.id);
+      expect(window.electronAPI.deleteWindow).toHaveBeenCalledWith(currentWindow.id);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'exit-active-pane' }));
+
+    expect(onWindowSwitch).not.toHaveBeenCalled();
+
+    resolveDeleteWindow?.({ success: true });
+
+    await waitFor(() => {
+      expect(window.electronAPI.startWindow).toHaveBeenCalled();
+    });
+    expect(useWindowStore.getState().activeWindowId).toBe(currentWindow.id);
+  });
+
   it('does not remove the window record when destroy IPC fails', async () => {
     const currentWindow = createLocalWindow(WindowStatus.Running);
 
