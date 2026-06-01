@@ -32,6 +32,7 @@ import {
   ACTIVE_TERMINAL_FOCUS_REQUEST_EVENT,
   matchesActiveTerminalFocusRequest,
 } from '../utils/terminalFocus';
+import { createTerminalOsc8Guard, OSC8_HYPERLINK_CLOSE } from '../utils/terminalOsc8Guard';
 
 const completedReplaySessions = new Set<string>();
 const DIRECT_LIVE_OUTPUT_MAX_CHARS = 256;
@@ -557,6 +558,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const historyReplayTokenRef = useRef(0);
   const lastAppliedSeqRef = useRef(0);
   const suppressPtyWriteRef = useRef(false);
+  const liveOsc8GuardRef = useRef(createTerminalOsc8Guard());
+  const replayOsc8GuardRef = useRef(createTerminalOsc8Guard());
   // 区分“当前会话首次回放”和“同一会话后的补回放”：
   // 首次回放可能包含 PowerShell 启动阶段仍在等待响应的 ESC[c，
   // 这时必须允许 xterm 生成的 DA 响应回写到 PTY。
@@ -1262,7 +1265,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         : outputChunksRef.current.join('');
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
-      terminalRef.current.write(pending);
+      terminalRef.current.write(liveOsc8GuardRef.current.sanitize(pending));
     };
 
     const clearQueuedOutput = () => {
@@ -1291,7 +1294,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         && data.length <= DIRECT_LIVE_OUTPUT_MAX_CHARS
         && wasIdle
       ) {
-        currentTerminal.write(data);
+        currentTerminal.write(liveOsc8GuardRef.current.sanitize(data));
         return;
       }
 
@@ -1316,12 +1319,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     };
 
     const writeReplayOutput = (data: string) => new Promise<void>((resolve) => {
-      if (!data || !terminalRef.current) {
+      const currentTerminal = terminalRef.current;
+      if (!currentTerminal) {
         resolve();
         return;
       }
 
-      terminalRef.current.write(data, () => resolve());
+      replayOsc8GuardRef.current.reset();
+      const guardedData = replayOsc8GuardRef.current.sanitize(data, { closeAtEnd: true });
+
+      currentTerminal.write(OSC8_HYPERLINK_CLOSE, () => {
+        if (!guardedData) {
+          resolve();
+          return;
+        }
+
+        currentTerminal.write(guardedData, () => resolve());
+      });
     });
 
     const queueLiveOutput = (payload: PtyDataPayload) => {
@@ -1354,6 +1368,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       isHistoryLoadedRef.current = false;
       bufferedLiveDataRef.current = [];
       lastAppliedSeqRef.current = 0;
+      liveOsc8GuardRef.current.reset();
+      replayOsc8GuardRef.current.reset();
       const sessionKey = replaySessionKeyRef.current;
       // 只有同一会话的后续补回放才屏蔽协议响应，避免把旧历史里的 CSI 查询
       // 再次变成 synthetic reply 注入 live PTY。
@@ -1366,6 +1382,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       if (resetTerminal && terminalRef.current) {
         clearQueuedOutput();
+        liveOsc8GuardRef.current.reset();
+        replayOsc8GuardRef.current.reset();
         terminalRef.current.reset();
         resetTerminalKeyboardProtocolState(terminalRef.current);
       }
@@ -1382,7 +1400,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         const replayData = shouldSuppressReplayProtocolReplies
           ? stripReplayProtocolQueries(historySnapshot.chunks.join(''))
           : historySnapshot.chunks.join('');
-        if (replayData && isReplayStillCurrent()) {
+        if (isReplayStillCurrent()) {
           if (shouldSuppressReplayProtocolReplies) {
             suppressPtyWriteRef.current = true;
             shouldResumePtyWrites = true;
@@ -1650,6 +1668,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
 
       clearQueuedOutput();
+      liveOsc8GuardRef.current.reset();
+      replayOsc8GuardRef.current.reset();
       suppressNativePasteUntilRef.current = 0;
       helperTextarea?.removeEventListener('paste', suppressNativePaste, true);
       terminalContainer?.removeEventListener('paste', suppressNativePaste as EventListener, true);

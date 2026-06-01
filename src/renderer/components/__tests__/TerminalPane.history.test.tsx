@@ -6,6 +6,8 @@ import { subscribeToPanePtyData } from '../../api/ptyDataBus';
 import { useWindowStore } from '../../stores/windowStore';
 import type { PtyDataPayload, PtyKeyboardProtocolState } from '../../../shared/types/electron-api';
 
+const OSC8_CLOSE = '\u001b]8;;\u0007';
+
 const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimationFrameMock, cancelAnimationFrameMock } = vi.hoisted(() => ({
   terminalInstances: [] as Array<{
     loadAddon: ReturnType<typeof vi.fn>;
@@ -473,7 +475,7 @@ describe('TerminalPane history replay', () => {
     );
 
     await waitFor(() => {
-      expect(terminalInstances[0]?.write.mock.calls[0]?.[0]).toBe('history-1history-2');
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith('history-1history-2', expect.any(Function));
     });
   });
 
@@ -621,10 +623,10 @@ describe('TerminalPane history replay', () => {
     });
 
     await waitFor(() => {
-      expect(terminalInstances[0]?.write.mock.calls[0]?.[0]).toBe('history-1history-2');
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith('history-1history-2', expect.any(Function));
     });
 
-    expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(1);
+    expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(2);
   });
 
   it('writes startup protocol replies from the initial history replay back into the live PTY', async () => {
@@ -1066,6 +1068,95 @@ describe('TerminalPane history replay', () => {
       '\u001b[?5u',
       { source: 'xterm.onData' },
     );
+  });
+
+  it('closes stale OSC 8 state before replaying history', async () => {
+    render(
+      <TerminalPane
+        windowId="win-osc8-reset"
+        pane={{
+          id: 'pane-osc8-reset',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write.mock.calls[0]?.[0]).toBe(OSC8_CLOSE);
+    });
+    expect(terminalInstances[0]?.write.mock.calls[1]?.[0]).toBe('history-1history-2');
+  });
+
+  it('closes unterminated OSC 8 links during history replay before plain following lines', async () => {
+    const osc8Open = '\u001b]8;;https://example.com/docs\u0007';
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [`${osc8Open}docs`, '\nplain text'], lastSeq: 2 },
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-osc8-history"
+        pane={{
+          id: 'pane-osc8-history',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith(
+        `${osc8Open}docs${OSC8_CLOSE}\nplain text`,
+        expect.any(Function),
+      );
+    });
+  });
+
+  it('closes split live OSC 8 links before writing following live lines', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-osc8-live"
+        pane={{
+          id: 'pane-osc8-live',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(ptyCallbacks).toHaveLength(1);
+    });
+
+    terminalInstances[0].write.mockClear();
+    const osc8Open = '\u001b]8;;https://example.com/docs\u0007';
+    ptyCallbacks[0]?.({ windowId: 'win-osc8-live', paneId: 'pane-osc8-live', data: `${osc8Open}docs`, seq: 1 });
+    ptyCallbacks[0]?.({ windowId: 'win-osc8-live', paneId: 'pane-osc8-live', data: '\nplain text', seq: 2 });
+
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`);
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\nplain text`);
   });
 
   it('applies the pane keyboard state snapshot after replaying stale protocol sequences', async () => {
