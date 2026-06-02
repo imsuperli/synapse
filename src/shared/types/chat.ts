@@ -253,6 +253,26 @@ export interface ChatExecuteToolRequest {
   sshContext?: ChatSshContext;
 }
 
+export type ChatCompletionPurpose =
+  | 'terminal-selection-translate'
+  | 'terminal-selection-explain'
+  | 'mini-ask';
+
+export interface ChatCompleteTextRequest {
+  purpose: ChatCompletionPurpose;
+  prompt: string;
+  messages?: ChatMessage[];
+  systemPrompt?: string;
+  providerId?: string;
+  model?: string;
+}
+
+export interface ChatCompleteTextResult {
+  content: string;
+  providerId: string;
+  model: string;
+}
+
 export interface RestoreAggregatedSessionRequest {
   entryId: string;
 }

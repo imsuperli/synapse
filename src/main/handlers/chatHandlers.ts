@@ -20,6 +20,7 @@ import {
 import { resolveLLMProviderWireApi } from '../../shared/utils/chatProvider';
 import type {
   ChatMessage,
+  ChatCompleteTextRequest,
   ChatSendRequest,
   ChatExecuteToolRequest,
   ChatToolApprovalResponse,
@@ -81,6 +82,80 @@ async function resolveProvider(ctx: HandlerContext, providerId: string): Promise
 /** 获取当前 BrowserWindow */
 function getWindow(ctx: HandlerContext): BrowserWindow | null {
   return ctx.getMainWindow?.() ?? ctx.mainWindow ?? null;
+}
+
+function resolveDefaultProviderId(ctx: HandlerContext): string | null {
+  const providers = ctx.getCurrentWorkspace?.()?.settings?.chat?.providers ?? [];
+  const activeProviderId = ctx.getCurrentWorkspace?.()?.settings?.chat?.activeProviderId;
+  const activeProvider = providers.find((provider) => provider.id === activeProviderId);
+  return activeProvider?.id ?? providers[0]?.id ?? null;
+}
+
+function createCompleteTextSystemPrompt(request: ChatCompleteTextRequest): string {
+  const customPrompt = request.systemPrompt?.trim();
+  if (customPrompt) {
+    return customPrompt;
+  }
+
+  switch (request.purpose) {
+    case 'terminal-selection-translate':
+      return [
+        '你是一个准确、简洁的划词翻译助手。',
+        '如果输入不是中文，输出中文，包含音标或读音、词性/短语类型、中文释义和必要例句。',
+        '如果输入是中文，输出中文，包含拼音、英文翻译和必要说明。',
+        '不要输出 Markdown 表格，不要加入与输入无关的内容。',
+      ].join('\n');
+    case 'terminal-selection-explain':
+      return [
+        '你是一个中文解释助手。',
+        '用中文解释用户划选内容的含义，说明它在终端、命令、代码或普通语境下可能代表什么。',
+        '回答要直接、准确、简洁；不确定时明确说明可能性。',
+      ].join('\n');
+    case 'mini-ask':
+      return [
+        '你是 Synapse 的迷你问答助手。',
+        '用中文优先回答。保持简洁、可执行，必要时给出步骤或命令。',
+        '不要声称你能看到用户未提供的屏幕内容。',
+      ].join('\n');
+    default:
+      return '你是一个中文助手，回答要准确、简洁。';
+  }
+}
+
+function normalizeCompleteTextRequest(request: unknown): ChatCompleteTextRequest {
+  const candidate = request && typeof request === 'object'
+    ? request as Partial<ChatCompleteTextRequest>
+    : {};
+  const prompt = typeof candidate.prompt === 'string' ? candidate.prompt.trim() : '';
+  const systemPrompt = typeof candidate.systemPrompt === 'string' ? candidate.systemPrompt : undefined;
+  const providerId = typeof candidate.providerId === 'string' ? candidate.providerId.trim() : undefined;
+  const model = typeof candidate.model === 'string' ? candidate.model.trim() : undefined;
+  const purpose = candidate.purpose === 'terminal-selection-translate'
+    || candidate.purpose === 'terminal-selection-explain'
+    || candidate.purpose === 'mini-ask'
+    ? candidate.purpose
+    : 'mini-ask';
+
+  return {
+    ...candidate,
+    purpose,
+    prompt,
+    systemPrompt,
+    providerId: providerId || undefined,
+    model: model || undefined,
+    messages: Array.isArray(candidate.messages)
+      ? candidate.messages.filter((message): message is ChatMessage => (
+          Boolean(message)
+          && typeof message === 'object'
+          && (
+            (message as { role?: unknown }).role === 'user'
+            || (message as { role?: unknown }).role === 'assistant'
+            || (message as { role?: unknown }).role === 'system'
+          )
+          && typeof (message as { content?: unknown }).content === 'string'
+        ))
+      : undefined,
+  };
 }
 
 function getApprovalKey(paneId: string, toolCallId: string): string {
@@ -185,6 +260,88 @@ async function collectEnvironmentDetails(
 }
 
 export function registerChatHandlers(ctx: HandlerContext) {
+
+  ipcMain.handle('chat-complete-text', async (_event, rawRequest: unknown) => {
+    const request = normalizeCompleteTextRequest(rawRequest);
+    try {
+      if (!request.prompt) {
+        return errorResponse(new Error(formatChatErrorForRenderer('消息不能为空')));
+      }
+
+      const providerId = request.providerId || resolveDefaultProviderId(ctx);
+      if (!providerId) {
+        return errorResponse(new Error(formatChatErrorForRenderer('尚未配置 Chat Provider')));
+      }
+
+      const provider = await resolveProvider(ctx, providerId);
+      if (!provider) {
+        return errorResponse(new Error(formatChatErrorForRenderer(`Provider not found: ${providerId}`)));
+      }
+
+      const model = request.model || provider.defaultModel || provider.models[0];
+      if (!model) {
+        return errorResponse(new Error(formatChatErrorForRenderer(`Provider ${provider.name} 未配置可用模型`)));
+      }
+
+      const now = new Date().toISOString();
+      const messages: ChatMessage[] = [
+        ...(request.messages ?? []),
+        {
+          id: `complete-text-user-${uuidv4()}`,
+          role: 'user',
+          content: request.prompt,
+          timestamp: now,
+        },
+      ];
+      const serviceRequest: ChatSendRequest & { _provider: LLMProviderConfig } = {
+        paneId: `complete-text-${request.purpose}`,
+        windowId: 'global',
+        messages,
+        providerId: provider.id,
+        model,
+        systemPrompt: createCompleteTextSystemPrompt(request),
+        enableTools: false,
+        _provider: provider,
+      };
+
+      let fullContent = '';
+      let streamError: string | null = null;
+      const abortController = new AbortController();
+
+      await getChatService().streamChat(
+        serviceRequest,
+        {
+          onChunk: (chunk) => {
+            fullContent += chunk;
+          },
+          onDone: (content) => {
+            fullContent = content;
+          },
+          onError: (error) => {
+            streamError = error;
+          },
+        },
+        abortController.signal,
+      );
+
+      if (streamError) {
+        return errorResponse(new Error(formatChatErrorForRenderer(streamError)));
+      }
+
+      return successResponse({
+        content: fullContent.trim(),
+        providerId: provider.id,
+        model,
+      });
+    } catch (error) {
+      chatDebugError('chat-complete-text', 'chat-complete-text handler failed', {
+        purpose: request.purpose,
+        promptPreview: previewText(request.prompt, 240),
+        error,
+      });
+      return errorResponse(new Error(formatChatErrorForRenderer(error instanceof Error ? error.message : String(error))));
+    }
+  });
 
   /**
    * chat-send: 启动 LLM 流式调用

@@ -29,6 +29,10 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions) {
       if (!enabled || e.defaultPrevented) return;
 
       const target = e.target as HTMLElement;
+      if (target?.closest?.('[data-mini-ask-overlay="true"]')) {
+        return;
+      }
+
       const isXtermTextarea = target?.classList?.contains('xterm-helper-textarea');
 
       if (isXtermTextarea) {

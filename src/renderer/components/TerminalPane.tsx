@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '../utils/xtermAddonFit';
-import { GripVertical, X } from 'lucide-react';
+import { GripVertical, Languages, Loader2, MessageCircle, X } from 'lucide-react';
 import { Pane, WindowStatus } from '../types/window';
 import { useI18n } from '../i18n';
 import { subscribeToPanePtyData } from '../api/ptyDataBus';
@@ -441,6 +441,18 @@ interface TerminalLinkDragOverlayState {
   top: number;
 }
 
+type TerminalSelectionAiAction = 'translate' | 'explain';
+
+interface TerminalSelectionAiOverlayState {
+  text: string;
+  left: number;
+  top: number;
+  status: 'idle' | 'loading' | 'done' | 'error';
+  action?: TerminalSelectionAiAction;
+  result?: string;
+  error?: string;
+}
+
 interface TerminalLinkDragOverlayProps {
   url: string;
   label: string;
@@ -503,6 +515,81 @@ const TerminalLinkDragOverlay: React.FC<TerminalLinkDragOverlayProps> = ({
     </button>
   </div>
 );
+
+interface TerminalSelectionAiOverlayProps {
+  state: TerminalSelectionAiOverlayState;
+  onTranslate: () => void;
+  onExplain: () => void;
+  onClose: () => void;
+}
+
+const TerminalSelectionAiOverlay: React.FC<TerminalSelectionAiOverlayProps> = ({
+  state,
+  onTranslate,
+  onExplain,
+  onClose,
+}) => {
+  const isLoading = state.status === 'loading';
+  const activeActionLabel = state.action === 'explain' ? '解释' : '翻译';
+
+  return (
+    <div
+      className="absolute z-40 max-w-[min(380px,calc(100%-16px))] rounded-lg border border-[rgb(var(--border))]/80 bg-[color-mix(in_srgb,rgb(var(--card))_92%,transparent)] text-[rgb(var(--foreground))] shadow-[0_16px_48px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+      style={{ left: state.left, top: state.top }}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="flex items-center gap-1.5 px-2 py-1.5">
+        <button
+          type="button"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[rgb(var(--foreground))] transition-colors hover:bg-[rgb(var(--accent))]"
+          disabled={isLoading}
+          onClick={onTranslate}
+        >
+          <Languages size={14} />
+          翻译
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[rgb(var(--foreground))] transition-colors hover:bg-[rgb(var(--accent))]"
+          disabled={isLoading}
+          onClick={onExplain}
+        >
+          <MessageCircle size={14} />
+          解释
+        </button>
+        <button
+          type="button"
+          className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-[rgb(var(--muted-foreground))] transition-colors hover:bg-[rgb(var(--accent))] hover:text-[rgb(var(--foreground))]"
+          aria-label="关闭"
+          onClick={onClose}
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      {(state.status !== 'idle' || state.result || state.error) && (
+        <div className="border-t border-[rgb(var(--border))]/70 px-3 py-2">
+          {isLoading ? (
+            <div className="flex items-center gap-2 text-xs text-[rgb(var(--muted-foreground))]">
+              <Loader2 size={14} className="animate-spin" />
+              正在生成{activeActionLabel}...
+            </div>
+          ) : state.status === 'error' ? (
+            <div className="text-xs leading-5 text-[rgb(var(--error))]">{state.error || '生成失败'}</div>
+          ) : (
+            <div className="max-h-64 overflow-auto whitespace-pre-wrap text-sm leading-6 text-[rgb(var(--foreground))]">
+              {state.result}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export interface TerminalPaneProps {
   windowId: string;
@@ -571,9 +658,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const linkDragOverlayHideTimerRef = useRef<number | null>(null);
   const isLinkDragOverlayHoveredRef = useRef(false);
   const isLinkDragActiveRef = useRef(false);
+  const lastTerminalPointerRef = useRef({ clientX: 0, clientY: 0 });
+  const isTerminalPointerDownRef = useRef(false);
+  const pendingSelectionAiTextRef = useRef<string | null>(null);
+  const selectionAiRequestSeqRef = useRef(0);
   const [isHovered, setIsHovered] = useState(false);
   const [linkDragOverlay, setLinkDragOverlay] = useState<TerminalLinkDragOverlayState | null>(null);
   const [isLinkDragActive, setIsLinkDragActive] = useState(false);
+  const [selectionAiOverlay, setSelectionAiOverlay] = useState<TerminalSelectionAiOverlayState | null>(null);
   const sshClipboardImageShortcutRef = useRef<SSHClipboardImageShortcut>(getDefaultSSHClipboardImageShortcut(window.electronAPI?.platform));
   const updatePaneRuntime = useWindowStore((state) => state.updatePaneRuntime);
 
@@ -857,6 +949,115 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
   }, [clearLinkDragOverlayHideTimer]);
 
+  const positionSelectionAiOverlay = useCallback((clientX: number, clientY: number) => {
+    const root = paneRootRef.current;
+    if (!root) {
+      return { left: 8, top: 8 };
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    const overlayWidth = Math.min(380, Math.max(240, rootRect.width - 16));
+    const overlayHeight = 48;
+    const left = Math.min(
+      Math.max(clientX - rootRect.left + 10, 8),
+      Math.max(rootRect.width - overlayWidth - 8, 8),
+    );
+    const top = Math.min(
+      Math.max(clientY - rootRect.top - overlayHeight - 10, 8),
+      Math.max(rootRect.height - overlayHeight - 8, 8),
+    );
+
+    return { left, top };
+  }, []);
+
+  const showSelectionAiOverlay = useCallback((text: string) => {
+    const normalizedText = text.trim();
+    if (!normalizedText) {
+      setSelectionAiOverlay(null);
+      return;
+    }
+
+    const { clientX, clientY } = lastTerminalPointerRef.current;
+    const position = positionSelectionAiOverlay(clientX, clientY);
+    selectionAiRequestSeqRef.current += 1;
+    setSelectionAiOverlay({
+      text: normalizedText,
+      left: position.left,
+      top: position.top,
+      status: 'idle',
+    });
+  }, [positionSelectionAiOverlay]);
+
+  const hideSelectionAiOverlay = useCallback(() => {
+    selectionAiRequestSeqRef.current += 1;
+    setSelectionAiOverlay(null);
+  }, []);
+
+  const runSelectionAiAction = useCallback((action: TerminalSelectionAiAction) => {
+    const currentOverlay = selectionAiOverlay;
+    if (!currentOverlay?.text || !window.electronAPI?.chatCompleteText) {
+      return;
+    }
+
+    const requestSeq = ++selectionAiRequestSeqRef.current;
+    const selectedText = currentOverlay.text;
+    setSelectionAiOverlay((current) => current && current.text === selectedText
+      ? {
+          ...current,
+          status: 'loading',
+          action,
+          result: undefined,
+          error: undefined,
+        }
+      : current);
+
+    void (async () => {
+      try {
+        const prompt = action === 'translate'
+          ? `请翻译以下划选内容：\n\n${selectedText}`
+          : `请解释以下划选内容的含义：\n\n${selectedText}`;
+        const response = await window.electronAPI.chatCompleteText({
+          purpose: action === 'translate'
+            ? 'terminal-selection-translate'
+            : 'terminal-selection-explain',
+          prompt,
+        });
+
+        if (selectionAiRequestSeqRef.current !== requestSeq) {
+          return;
+        }
+
+        if (!response.success || !response.data) {
+          throw new Error(response.error || '生成失败');
+        }
+
+        const result = response.data.content;
+        setSelectionAiOverlay((current) => current && current.text === selectedText
+          ? {
+              ...current,
+              status: 'done',
+              action,
+              result,
+              error: undefined,
+            }
+          : current);
+      } catch (error) {
+        if (selectionAiRequestSeqRef.current !== requestSeq) {
+          return;
+        }
+
+        setSelectionAiOverlay((current) => current && current.text === selectedText
+          ? {
+              ...current,
+              status: 'error',
+              action,
+              error: error instanceof Error ? error.message : String(error),
+            }
+          : current);
+      }
+    })();
+  }, [selectionAiOverlay]);
+
   // 更新 isActive ref
   useEffect(() => {
     isActiveRef.current = isActive;
@@ -878,6 +1079,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
   useEffect(() => {
     setLinkDragOverlay(null);
+    setSelectionAiOverlay(null);
+    pendingSelectionAiTextRef.current = null;
+    isTerminalPointerDownRef.current = false;
     setIsLinkDragActive(false);
     isLinkDragOverlayHoveredRef.current = false;
     isLinkDragActiveRef.current = false;
@@ -890,6 +1094,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     setLinkDragOverlay(null);
+    setSelectionAiOverlay(null);
+    pendingSelectionAiTextRef.current = null;
+    isTerminalPointerDownRef.current = false;
     setIsLinkDragActive(false);
     isLinkDragOverlayHoveredRef.current = false;
     isLinkDragActiveRef.current = false;
@@ -1605,10 +1812,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     // 划选复制：选中文本自动写入剪贴板
     const selectionDisposable = terminal.onSelectionChange(() => {
       const selection = terminal.getSelection();
-      if (!selection) return;
+      if (!selection) {
+        hideSelectionAiOverlay();
+        return;
+      }
       // 去掉每行尾部空格填充（xterm.js 复制时会包含终端宽度的空格）
       const trimmed = selection.split('\n').map(line => line.trimEnd()).join('\n');
+      if (!trimmed.trim()) {
+        pendingSelectionAiTextRef.current = null;
+        hideSelectionAiOverlay();
+        return;
+      }
       void writeClipboardText(trimmed);
+      if (isTerminalPointerDownRef.current) {
+        pendingSelectionAiTextRef.current = trimmed;
+        return;
+      }
+      showSelectionAiOverlay(trimmed);
     });
 
     const unsubscribePtyData = subscribeToPanePtyData(windowId, pane.id, queueLiveOutput, {
@@ -1679,7 +1899,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [windowId, pane.id, openExternalUrl, handleTerminalLinkHover, handleTerminalLinkLeave, syncPtySize]); // 依赖均已 useCallback 包裹，保持终端实例生命周期稳定
+  }, [
+    windowId,
+    pane.id,
+    openExternalUrl,
+    handleTerminalLinkHover,
+    handleTerminalLinkLeave,
+    hideSelectionAiOverlay,
+    showSelectionAiOverlay,
+    syncPtySize,
+  ]); // 依赖均已 useCallback 包裹，保持终端实例生命周期稳定
 
   useEffect(() => {
     const previousSession = lastSessionRef.current;
@@ -1734,7 +1963,18 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     focusTerminalInput();
   }, [focusTerminalInput, isActive, onActivate]);
 
-  const handleTerminalMouseDownCapture = useCallback(() => {
+  const handleTerminalPointerCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    lastTerminalPointerRef.current = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+  }, []);
+
+  const handleTerminalMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    isTerminalPointerDownRef.current = true;
+    pendingSelectionAiTextRef.current = null;
+    handleTerminalPointerCapture(event);
+
     if (!isActive) {
       onActivate();
       focusTerminalInput({ defer: true });
@@ -1742,7 +1982,38 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     focusTerminalInput();
-  }, [focusTerminalInput, isActive, onActivate]);
+  }, [focusTerminalInput, handleTerminalPointerCapture, isActive, onActivate]);
+
+  const handleTerminalMouseUpCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    handleTerminalPointerCapture(event);
+    isTerminalPointerDownRef.current = false;
+
+    const pendingSelectionText = pendingSelectionAiTextRef.current;
+    pendingSelectionAiTextRef.current = null;
+    if (pendingSelectionText?.trim()) {
+      showSelectionAiOverlay(pendingSelectionText);
+    }
+  }, [handleTerminalPointerCapture, showSelectionAiOverlay]);
+
+  useEffect(() => {
+    const handleWindowMouseUp = () => {
+      if (!isTerminalPointerDownRef.current) {
+        return;
+      }
+
+      isTerminalPointerDownRef.current = false;
+      const pendingSelectionText = pendingSelectionAiTextRef.current;
+      pendingSelectionAiTextRef.current = null;
+      if (pendingSelectionText?.trim()) {
+        showSelectionAiOverlay(pendingSelectionText);
+      }
+    };
+
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+    };
+  }, [showSelectionAiOverlay]);
 
   return (
     <div
@@ -1829,12 +2100,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         />
       )}
 
+      {selectionAiOverlay && (
+        <TerminalSelectionAiOverlay
+          state={selectionAiOverlay}
+          onTranslate={() => runSelectionAiAction('translate')}
+          onExplain={() => runSelectionAiAction('explain')}
+          onClose={hideSelectionAiOverlay}
+        />
+      )}
+
       {/* 终端容器 */}
       <div
         ref={terminalContainerRef}
         data-terminal-input-region="true"
         className="min-h-0 min-w-0 flex-1 overflow-hidden pl-1 pr-0"
         onMouseDownCapture={handleTerminalMouseDownCapture}
+        onMouseMoveCapture={handleTerminalPointerCapture}
+        onMouseUpCapture={handleTerminalMouseUpCapture}
       />
     </div>
   );

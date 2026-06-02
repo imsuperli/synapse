@@ -431,6 +431,7 @@ Object.defineProperty(window, 'electronAPI', {
     offAgentTaskError: vi.fn(),
     chatSend: vi.fn().mockResolvedValue({ success: true, data: { messageId: 'chat-message-1' } }),
     chatCancel: vi.fn().mockResolvedValue({ success: true }),
+    chatCompleteText: vi.fn().mockResolvedValue({ success: true, data: { content: 'ok', providerId: 'provider-1', model: 'model-1' } }),
     chatExecuteTool: vi.fn().mockResolvedValue({ success: true, data: { toolCallId: 'tool-1', content: '' } }),
     chatRespondToolApproval: vi.fn().mockResolvedValue({ success: true }),
     onChatStreamChunk: vi.fn(),

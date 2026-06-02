@@ -22,6 +22,9 @@ function TestHarness(props: TestHarnessProps) {
     <div>
       <textarea data-testid="xterm-helper" className="xterm-helper-textarea" />
       <button type="button" data-testid="outside-target">outside</button>
+      <div data-mini-ask-overlay="true">
+        <textarea data-testid="mini-ask-input" />
+      </div>
     </div>
   );
 }
@@ -111,5 +114,18 @@ describe('useKeyboardShortcuts', () => {
 
     expect(onCtrlTab).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('does not intercept shortcuts from the mini ask overlay', () => {
+    const onCtrlTab = vi.fn();
+    render(<TestHarness onCtrlTab={onCtrlTab} />);
+
+    const event = dispatchKeyDown(screen.getByTestId('mini-ask-input'), {
+      key: 'Tab',
+      ctrlKey: true,
+    });
+
+    expect(onCtrlTab).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 });

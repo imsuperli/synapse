@@ -13,6 +13,7 @@ import { GroupView } from './components/GroupView';
 import { AppNotice } from './components/AppNotice';
 import { CleanupOverlay } from './components/CleanupOverlay';
 import { AppearanceBackdrop } from './components/AppearanceBackdrop';
+import { MiniAskOverlay } from './components/MiniAskOverlay';
 import { SSHHostKeyPromptDialog } from './components/SSHHostKeyPromptDialog';
 import { SSHPasswordPromptDialog } from './components/SSHPasswordPromptDialog';
 import { CustomTitleBar } from './components/CustomTitleBar';
@@ -534,6 +535,7 @@ function AppContent() {
   const [searchQuery, setSearchQuery] = useState(''); // 搜索状态
   const [isQuickNavOpen, setIsQuickNavOpen] = useState(false); // 快捷导航面板状态
   const [isUnifiedQuickSwitcherOpen, setIsUnifiedQuickSwitcherOpen] = useState(false);
+  const [isMiniAskOpen, setIsMiniAskOpen] = useState(false);
   const [sshHostKeyPromptQueue, setSSHHostKeyPromptQueue] = useState<SSHHostKeyPromptPayload[]>([]);
   const [sshPasswordPromptRequest, setSSHPasswordPromptRequest] = useState<SSHPasswordPromptRequest | null>(null);
   const [appNotice, setAppNotice] = useState<{ message: string; tone: 'error' | 'success' } | null>(null);
@@ -844,6 +846,11 @@ function AppContent() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('[data-mini-ask-overlay="true"]')) {
+        return;
+      }
+
       if (matchesKeyboardShortcut(e, keyboardShortcuts.quickNav)) {
         // 忽略长按产生的重复事件
         if (e.repeat) return;
@@ -852,6 +859,11 @@ function AppContent() {
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('[data-mini-ask-overlay="true"]')) {
+        return;
+      }
+
       if (matchesKeyboardShortcut(e, keyboardShortcuts.quickNav) && quickNavKeyPressedDown.current) {
         quickNavKeyPressedDown.current = false;
         const now = Date.now();
@@ -874,6 +886,30 @@ function AppContent() {
       window.removeEventListener('keyup', handleKeyUp, true);
     };
   }, [keyboardShortcuts.quickNav]);
+
+  useEffect(() => {
+    const handleMiniAskShortcut = (event: KeyboardEvent) => {
+      const isToggle = event.type === 'keydown'
+        && event.code === 'Space'
+        && event.ctrlKey
+        && event.shiftKey
+        && !event.altKey
+        && !event.metaKey;
+
+      if (!isToggle) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      setIsMiniAskOpen((current) => !current);
+    };
+
+    window.addEventListener('keydown', handleMiniAskShortcut, true);
+    return () => {
+      window.removeEventListener('keydown', handleMiniAskShortcut, true);
+    };
+  }, []);
 
   const {
     currentView,
@@ -1895,6 +1931,11 @@ function AppContent() {
         appName={appVersion.name}
         onReturn={currentView !== 'unified' ? handleReturnHome : undefined}
         onClose={currentView === 'canvas' ? handleReturnFromCanvas : undefined}
+      />
+
+      <MiniAskOverlay
+        open={isMiniAskOpen}
+        onClose={() => setIsMiniAskOpen(false)}
       />
 
       {/* 内容区域 */}

@@ -638,6 +638,8 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('chat-send', request),
   chatCancel: (config: { paneId: string }) =>
     ipcRenderer.invoke('chat-cancel', config),
+  chatCompleteText: (request: unknown) =>
+    ipcRenderer.invoke('chat-complete-text', request),
   chatExecuteTool: (request: unknown) =>
     ipcRenderer.invoke('chat-execute-tool', request),
   chatRespondToolApproval: (response: unknown) =>

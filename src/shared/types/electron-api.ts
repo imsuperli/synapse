@@ -23,6 +23,8 @@ import type {
   ChatToolApprovalRequestPayload,
   ChatToolApprovalResponse,
   ChatExecuteToolRequest,
+  ChatCompleteTextRequest,
+  ChatCompleteTextResult,
   RestoreAggregatedSessionRequest,
   RestoreAggregatedSessionResult,
   ToolResult,
@@ -2012,6 +2014,7 @@ export interface ElectronAPI {
   offAgentTaskError: (callback: ElectronEventHandler<AgentTaskErrorPayload>) => void;
   chatSend: (request: ChatSendRequest) => Promise<IpcResponse<{ messageId: string }>>;
   chatCancel: (config: { paneId: string }) => Promise<IpcResponse<void>>;
+  chatCompleteText: (request: ChatCompleteTextRequest) => Promise<IpcResponse<ChatCompleteTextResult>>;
   chatExecuteTool: (request: ChatExecuteToolRequest) => Promise<IpcResponse<ToolResult>>;
   chatRespondToolApproval: (response: ChatToolApprovalResponse) => void;
   onChatStreamChunk: (callback: ElectronEventHandler<ChatStreamChunkPayload>) => void;
