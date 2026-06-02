@@ -219,7 +219,7 @@ export const MiniAskOverlay: React.FC<MiniAskOverlayProps> = ({ open, onClose })
                 value={value}
                 rows={1}
                 className="block max-h-24 min-h-[24px] w-full resize-none bg-transparent text-sm leading-6 text-[rgb(var(--foreground))] outline-none placeholder:text-[rgb(var(--muted-foreground))]"
-                placeholder="和元宝说点什么"
+                placeholder="和synapse说点什么"
                 onChange={(event) => setValue(event.target.value)}
                 onKeyDown={handleKeyDown}
               />
@@ -228,7 +228,7 @@ export const MiniAskOverlay: React.FC<MiniAskOverlayProps> = ({ open, onClose })
                   type="button"
                   className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[rgb(var(--foreground))] transition-colors hover:bg-[rgb(var(--accent))]"
                 >
-                  元宝
+                  synapse
                   <span className="text-[10px] text-[rgb(var(--muted-foreground))]">⌄</span>
                 </button>
                 <button
