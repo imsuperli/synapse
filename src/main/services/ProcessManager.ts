@@ -852,6 +852,9 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
           if (processInfo?.backend === 'ssh') {
             pty.kill('SIGTERM');
             console.log(`[ProcessManager] Closed SSH session for PID ${pid}`);
+          } else if (platform() === 'win32') {
+            // node-pty's Windows kill path may surface taskkill output through the
+            // attached console. Keep local PTYs for the silent batch taskkill phase.
           } else {
             // 鍏堜娇鐢?SIGTERM 浼橀泤缁堟
             pty.kill('SIGTERM');

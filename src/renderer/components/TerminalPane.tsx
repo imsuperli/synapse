@@ -1599,7 +1599,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       const hasCompletedReplayForCurrentSession = Boolean(
         sessionKey && completedReplaySessions.has(sessionKey),
       ) || hasCompletedReplayForCurrentSessionRef.current;
-      const shouldSuppressReplayProtocolReplies = hasCompletedReplayForCurrentSession && !resetTerminal;
+      const shouldStripReplayProtocolQueries = hasCompletedReplayForCurrentSession && !resetTerminal;
       let shouldResumePtyWrites = false;
       let replayKeyboardState: PtyKeyboardProtocolState | undefined;
 
@@ -1620,14 +1620,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         const historySnapshot = extractPtyHistorySnapshot(response);
         replayKeyboardState = historySnapshot.keyboardState;
         lastAppliedSeqRef.current = historySnapshot.lastSeq;
-        const replayData = shouldSuppressReplayProtocolReplies
+        const replayData = shouldStripReplayProtocolQueries
           ? stripReplayProtocolQueries(historySnapshot.chunks.join(''))
           : historySnapshot.chunks.join('');
         if (isReplayStillCurrent()) {
-          if (shouldSuppressReplayProtocolReplies) {
-            suppressPtyWriteRef.current = true;
-            shouldResumePtyWrites = true;
-          }
+          suppressPtyWriteRef.current = true;
+          shouldResumePtyWrites = true;
           await writeReplayOutput(replayData);
         }
       } catch {

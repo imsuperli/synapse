@@ -629,7 +629,7 @@ describe('TerminalPane history replay', () => {
     expect(terminalInstances[0]?.write).toHaveBeenCalledTimes(2);
   });
 
-  it('writes startup protocol replies from the initial history replay back into the live PTY', async () => {
+  it('suppresses startup protocol replies from the initial history replay', async () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
       success: true,
       data: { chunks: ['\u001b[c'], lastSeq: 1 },
@@ -655,10 +655,19 @@ describe('TerminalPane history replay', () => {
       expect(terminalInstances[0]?.write).toHaveBeenCalled();
     });
 
-    expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
+    expect(window.electronAPI.ptyWrite).not.toHaveBeenCalledWith(
       'win-1',
       'pane-1',
       '\u001b[?1;2c',
+      { source: 'xterm.onData' },
+    );
+
+    terminalDataCallbacks.forEach((terminalDataCallback) => terminalDataCallback('user input'));
+
+    expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
+      'win-1',
+      'pane-1',
+      'user input',
       { source: 'xterm.onData' },
     );
   });
@@ -963,14 +972,12 @@ describe('TerminalPane history replay', () => {
       expect(terminalInstances[0]?.write).toHaveBeenCalled();
     });
 
-    await waitFor(() => {
-      expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
-        windowId,
-        paneId,
-        '\u001b[?1;2c',
-        { source: 'xterm.onData' },
-      );
-    });
+    expect(window.electronAPI.ptyWrite).not.toHaveBeenCalledWith(
+      windowId,
+      paneId,
+      '\u001b[?1;2c',
+      { source: 'xterm.onData' },
+    );
 
     vi.mocked(window.electronAPI.ptyWrite).mockClear();
     unmount();
