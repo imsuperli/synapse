@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '../utils/xtermAddonFit';
 import { GripVertical, Languages, Loader2, MessageCircle, X } from 'lucide-react';
@@ -39,6 +39,14 @@ const completedReplaySessions = new Set<string>();
 const DIRECT_LIVE_OUTPUT_MAX_CHARS = 256;
 const DIRECT_LIVE_OUTPUT_IDLE_MS = 12;
 const VISIBLE_TERMINAL_REPAINT_DELAY_MS = 120;
+const SELECTION_AI_OVERLAY_MARGIN = 6;
+const SELECTION_AI_OVERLAY_POINTER_GAP = 10;
+const SELECTION_AI_OVERLAY_MIN_WIDTH = 180;
+const SELECTION_AI_OVERLAY_MAX_WIDTH = 380;
+const SELECTION_AI_OVERLAY_DEFAULT_HEIGHT = 42;
+const SELECTION_AI_OVERLAY_HEADER_CHROME_HEIGHT = 58;
+const SELECTION_AI_OVERLAY_MIN_CONTENT_HEIGHT = 40;
+const SELECTION_AI_OVERLAY_MAX_CONTENT_HEIGHT = 256;
 const REPLAY_PROTOCOL_QUERY_PATTERN = new RegExp(
   [
     '\\x1b\\[(?:[>=])?c',
@@ -155,6 +163,14 @@ function getActivePaneStyle(color?: string): React.CSSProperties | undefined {
   return {
     boxShadow: `0 0 0 1px ${color}`,
   };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (max <= min) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
 }
 
 /**
@@ -444,10 +460,23 @@ interface TerminalLinkDragOverlayState {
 
 type TerminalSelectionAiAction = 'translate' | 'explain';
 
-interface TerminalSelectionAiOverlayState {
-  text: string;
+interface TerminalSelectionAiOverlayPosition {
   left: number;
   top: number;
+  maxWidth: number;
+  maxHeight: number;
+  maxContentHeight: number;
+}
+
+interface TerminalSelectionAiOverlayState {
+  text: string;
+  anchorClientX: number;
+  anchorClientY: number;
+  left: number;
+  top: number;
+  maxWidth: number;
+  maxHeight: number;
+  maxContentHeight: number;
   status: 'idle' | 'loading' | 'done' | 'error';
   action?: TerminalSelectionAiAction;
   result?: string;
@@ -519,6 +548,7 @@ const TerminalLinkDragOverlay: React.FC<TerminalLinkDragOverlayProps> = ({
 
 interface TerminalSelectionAiOverlayProps {
   state: TerminalSelectionAiOverlayState;
+  overlayRef: React.RefObject<HTMLDivElement | null>;
   onTranslate: () => void;
   onExplain: () => void;
   onClose: () => void;
@@ -526,6 +556,7 @@ interface TerminalSelectionAiOverlayProps {
 
 const TerminalSelectionAiOverlay: React.FC<TerminalSelectionAiOverlayProps> = ({
   state,
+  overlayRef,
   onTranslate,
   onExplain,
   onClose,
@@ -535,8 +566,15 @@ const TerminalSelectionAiOverlay: React.FC<TerminalSelectionAiOverlayProps> = ({
 
   return (
     <div
-      className="absolute z-40 max-w-[min(380px,calc(100%-8px))] rounded-lg border border-[rgb(var(--border))]/80 bg-[color-mix(in_srgb,rgb(var(--card))_92%,transparent)] text-[rgb(var(--foreground))] shadow-[0_16px_48px_rgba(0,0,0,0.45)] backdrop-blur-xl"
-      style={{ left: state.left, top: state.top }}
+      ref={overlayRef}
+      className="absolute z-40 overflow-hidden rounded-lg border border-[rgb(var(--border))]/80 bg-[color-mix(in_srgb,rgb(var(--card))_92%,transparent)] text-[rgb(var(--foreground))] shadow-[0_16px_48px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+      style={{
+        left: state.left,
+        top: state.top,
+        maxWidth: state.maxWidth,
+        maxHeight: state.maxHeight,
+        minWidth: Math.min(SELECTION_AI_OVERLAY_MIN_WIDTH, state.maxWidth),
+      }}
       onMouseDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
@@ -583,9 +621,17 @@ const TerminalSelectionAiOverlay: React.FC<TerminalSelectionAiOverlayProps> = ({
               正在生成{activeActionLabel}...
             </div>
           ) : state.status === 'error' ? (
-            <div className="select-text pr-2 text-xs leading-5 text-[rgb(var(--error))]">{state.error || '生成失败'}</div>
+            <div
+              className="select-text overflow-auto pr-2 text-xs leading-5 text-[rgb(var(--error))]"
+              style={{ maxHeight: state.maxContentHeight }}
+            >
+              {state.error || '生成失败'}
+            </div>
           ) : (
-            <div className="max-h-64 select-text overflow-auto pr-3 text-sm leading-6 text-[rgb(var(--foreground))]">
+            <div
+              className="select-text overflow-auto pr-3 text-sm leading-6 text-[rgb(var(--foreground))]"
+              style={{ maxHeight: state.maxContentHeight }}
+            >
               {renderMarkdownLike(state.result ?? '')}
             </div>
           )}
@@ -624,6 +670,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 }) => {
   const { t } = useI18n();
   const paneRootRef = useRef<HTMLDivElement>(null);
+  const selectionAiOverlayRef = useRef<HTMLDivElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -953,26 +1000,114 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
   }, [clearLinkDragOverlayHideTimer]);
 
-  const positionSelectionAiOverlay = useCallback((clientX: number, clientY: number) => {
+  const positionSelectionAiOverlay = useCallback((
+    clientX: number,
+    clientY: number,
+    measuredSize?: { width?: number; height?: number },
+  ): TerminalSelectionAiOverlayPosition => {
     const root = paneRootRef.current;
     if (!root) {
-      return { left: 8, top: 8 };
+      return {
+        left: 8,
+        top: 8,
+        maxWidth: SELECTION_AI_OVERLAY_MAX_WIDTH,
+        maxHeight: SELECTION_AI_OVERLAY_DEFAULT_HEIGHT + SELECTION_AI_OVERLAY_MAX_CONTENT_HEIGHT,
+        maxContentHeight: SELECTION_AI_OVERLAY_MAX_CONTENT_HEIGHT,
+      };
     }
 
     const rootRect = root.getBoundingClientRect();
-    const overlayWidth = Math.min(380, Math.max(240, rootRect.width - 8));
-    const overlayHeight = 48;
-    const left = Math.min(
-      Math.max(clientX - rootRect.left + 10, 4),
-      Math.max(rootRect.width - overlayWidth - 4, 4),
+    const visibleLeft = Math.max(rootRect.left, 0) - rootRect.left + SELECTION_AI_OVERLAY_MARGIN;
+    const visibleTop = Math.max(rootRect.top, 0) - rootRect.top + SELECTION_AI_OVERLAY_MARGIN;
+    const visibleRight = Math.min(rootRect.right, window.innerWidth) - rootRect.left - SELECTION_AI_OVERLAY_MARGIN;
+    const visibleBottom = Math.min(rootRect.bottom, window.innerHeight) - rootRect.top - SELECTION_AI_OVERLAY_MARGIN;
+    const visibleWidth = Math.max(1, visibleRight - visibleLeft);
+    const visibleHeight = Math.max(1, visibleBottom - visibleTop);
+    const maxWidth = Math.max(1, Math.min(SELECTION_AI_OVERLAY_MAX_WIDTH, visibleWidth));
+    const minWidth = Math.min(SELECTION_AI_OVERLAY_MIN_WIDTH, maxWidth);
+    const fallbackWidth = Math.min(
+      maxWidth,
+      Math.max(minWidth, Math.min(SELECTION_AI_OVERLAY_MAX_WIDTH, rootRect.width - (SELECTION_AI_OVERLAY_MARGIN * 2))),
     );
-    const top = Math.min(
-      Math.max(clientY - rootRect.top - overlayHeight - 10, 8),
-      Math.max(rootRect.height - overlayHeight - 8, 8),
+    const measuredWidth = measuredSize?.width && Number.isFinite(measuredSize.width)
+      ? measuredSize.width
+      : fallbackWidth;
+    const overlayWidth = clampNumber(measuredWidth, minWidth, maxWidth);
+    const anchorX = clampNumber(clientX - rootRect.left, visibleLeft, visibleRight);
+    const anchorY = clampNumber(clientY - rootRect.top, visibleTop, visibleBottom);
+    const left = clampNumber(
+      anchorX + SELECTION_AI_OVERLAY_POINTER_GAP,
+      visibleLeft,
+      Math.max(visibleLeft, visibleRight - overlayWidth),
     );
 
-    return { left, top };
+    const measuredHeight = measuredSize?.height && Number.isFinite(measuredSize.height)
+      ? measuredSize.height
+      : SELECTION_AI_OVERLAY_DEFAULT_HEIGHT;
+    const spaceAbove = Math.max(0, anchorY - SELECTION_AI_OVERLAY_POINTER_GAP - visibleTop);
+    const spaceBelow = Math.max(0, visibleBottom - anchorY - SELECTION_AI_OVERLAY_POINTER_GAP);
+    const useAbove = spaceAbove >= measuredHeight || spaceAbove >= spaceBelow;
+    const preferredSpace = Math.max(useAbove ? spaceAbove : spaceBelow, SELECTION_AI_OVERLAY_DEFAULT_HEIGHT);
+    const availableHeight = Math.min(visibleHeight, preferredSpace);
+    const maxHeight = Math.max(1, availableHeight);
+    const overlayHeight = Math.min(Math.max(measuredHeight, SELECTION_AI_OVERLAY_DEFAULT_HEIGHT), maxHeight);
+    const top = useAbove
+      ? clampNumber(
+          anchorY - SELECTION_AI_OVERLAY_POINTER_GAP - overlayHeight,
+          visibleTop,
+          Math.max(visibleTop, visibleBottom - overlayHeight),
+        )
+      : clampNumber(
+          anchorY + SELECTION_AI_OVERLAY_POINTER_GAP,
+          visibleTop,
+          Math.max(visibleTop, visibleBottom - overlayHeight),
+        );
+    const rawMaxContentHeight = maxHeight - SELECTION_AI_OVERLAY_HEADER_CHROME_HEIGHT;
+    const minContentHeight = maxHeight >= SELECTION_AI_OVERLAY_HEADER_CHROME_HEIGHT + SELECTION_AI_OVERLAY_MIN_CONTENT_HEIGHT
+      ? SELECTION_AI_OVERLAY_MIN_CONTENT_HEIGHT
+      : 0;
+    const maxContentHeight = clampNumber(
+      rawMaxContentHeight,
+      minContentHeight,
+      SELECTION_AI_OVERLAY_MAX_CONTENT_HEIGHT,
+    );
+
+    return {
+      left,
+      top,
+      maxWidth,
+      maxHeight,
+      maxContentHeight,
+    };
   }, []);
+
+  const updateSelectionAiOverlayPosition = useCallback(() => {
+    setSelectionAiOverlay((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const overlayRect = selectionAiOverlayRef.current?.getBoundingClientRect();
+      const position = positionSelectionAiOverlay(current.anchorClientX, current.anchorClientY, {
+        width: overlayRect?.width,
+        height: overlayRect?.height,
+      });
+      const hasMeaningfulChange = Math.abs(current.left - position.left) > 0.5
+        || Math.abs(current.top - position.top) > 0.5
+        || Math.abs(current.maxWidth - position.maxWidth) > 0.5
+        || Math.abs(current.maxHeight - position.maxHeight) > 0.5
+        || Math.abs(current.maxContentHeight - position.maxContentHeight) > 0.5;
+
+      if (!hasMeaningfulChange) {
+        return current;
+      }
+
+      return {
+        ...current,
+        ...position,
+      };
+    });
+  }, [positionSelectionAiOverlay]);
 
   const showSelectionAiOverlay = useCallback((text: string) => {
     const normalizedText = text.trim();
@@ -986,8 +1121,13 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     selectionAiRequestSeqRef.current += 1;
     setSelectionAiOverlay({
       text: normalizedText,
+      anchorClientX: clientX,
+      anchorClientY: clientY,
       left: position.left,
       top: position.top,
+      maxWidth: position.maxWidth,
+      maxHeight: position.maxHeight,
+      maxContentHeight: position.maxContentHeight,
       status: 'idle',
     });
   }, [positionSelectionAiOverlay]);
@@ -1061,6 +1201,45 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
     })();
   }, [selectionAiOverlay]);
+
+  useLayoutEffect(() => {
+    if (!selectionAiOverlay) {
+      return;
+    }
+
+    updateSelectionAiOverlayPosition();
+  }, [
+    selectionAiOverlay?.status,
+    selectionAiOverlay?.action,
+    selectionAiOverlay?.result,
+    selectionAiOverlay?.error,
+    updateSelectionAiOverlayPosition,
+  ]);
+
+  useEffect(() => {
+    const overlay = selectionAiOverlayRef.current;
+    const paneRoot = paneRootRef.current;
+    if (!selectionAiOverlay || !overlay) {
+      return undefined;
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateSelectionAiOverlayPosition();
+    });
+    resizeObserver.observe(overlay);
+    if (paneRoot) {
+      resizeObserver.observe(paneRoot);
+    }
+
+    window.addEventListener('resize', updateSelectionAiOverlayPosition, true);
+    window.addEventListener('scroll', updateSelectionAiOverlayPosition, true);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateSelectionAiOverlayPosition, true);
+      window.removeEventListener('scroll', updateSelectionAiOverlayPosition, true);
+    };
+  }, [selectionAiOverlay, updateSelectionAiOverlayPosition]);
 
   // 更新 isActive ref
   useEffect(() => {
@@ -2117,6 +2296,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       {selectionAiOverlay && (
         <TerminalSelectionAiOverlay
           state={selectionAiOverlay}
+          overlayRef={selectionAiOverlayRef}
           onTranslate={() => runSelectionAiAction('translate')}
           onExplain={() => runSelectionAiAction('explain')}
           onClose={hideSelectionAiOverlay}
