@@ -1454,6 +1454,18 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       refreshTerminalViewport(terminal);
     });
 
+    const writeGuardedLiveOutput = (data: string) => {
+      const currentTerminal = terminalRef.current;
+      if (!currentTerminal) {
+        return;
+      }
+
+      const guardedData = liveOsc8GuardRef.current.sanitize(data);
+      if (guardedData) {
+        currentTerminal.write(guardedData);
+      }
+    };
+
     // 批量刷新 PTY 输出：每帧最多写一次，降低高频输出时的重绘抖动
     const flushOutput = () => {
       outputFlushFrameRef.current = null;
@@ -1472,7 +1484,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         : outputChunksRef.current.join('');
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
-      terminalRef.current.write(liveOsc8GuardRef.current.sanitize(pending));
+      writeGuardedLiveOutput(pending);
     };
 
     const clearQueuedOutput = () => {
@@ -1501,7 +1513,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         && data.length <= DIRECT_LIVE_OUTPUT_MAX_CHARS
         && wasIdle
       ) {
-        currentTerminal.write(liveOsc8GuardRef.current.sanitize(data));
+        writeGuardedLiveOutput(data);
         return;
       }
 

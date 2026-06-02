@@ -1,6 +1,6 @@
 export const OSC8_HYPERLINK_CLOSE = '\u001b]8;;\u0007';
 
-type OscParserState = 'ground' | 'escape' | 'osc' | 'oscEscape';
+type OscParserState = 'ground' | 'escape' | 'osc' | 'oscEscape' | 'csi';
 
 export interface TerminalOsc8Guard {
   sanitize(data: string, options?: { closeAtEnd?: boolean }): string;
@@ -11,9 +11,11 @@ const ESC = '\u001b';
 const BEL = '\u0007';
 const OSC_C1 = '\u009d';
 const ST_C1 = '\u009c';
+const CSI_C1 = '\u009b';
 const CAN = '\u0018';
 const SUB = '\u001a';
 const OSC_PAYLOAD_LIMIT = 8192;
+const CSI_PAYLOAD_LIMIT = 1024;
 
 function isLineBreak(char: string): boolean {
   return char === '\n' || char === '\r';
@@ -21,6 +23,44 @@ function isLineBreak(char: string): boolean {
 
 function isPrintableText(char: string): boolean {
   return char >= ' ' && char !== ST_C1;
+}
+
+function isCsiFinal(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 0x40 && code <= 0x7e;
+}
+
+function csiPayloadHasSgrReset(payload: string): boolean {
+  if (!payload) {
+    return true;
+  }
+
+  return payload
+    .split(';')
+    .some((param) => {
+      const normalized = param.trim();
+      return normalized === '' || normalized.split(':')[0] === '0';
+    });
+}
+
+function shouldCloseBeforeCsi(payload: string, final: string, activeTextSeen: boolean): boolean {
+  if (final !== 'm') {
+    return true;
+  }
+
+  return activeTextSeen && csiPayloadHasSgrReset(payload);
+}
+
+function shouldCloseBeforeEscapeFinal(char: string): boolean {
+  return char === 'c'
+    || char === 'D'
+    || char === 'E'
+    || char === 'M'
+    || char === '7'
+    || char === '8'
+    || char === 'H'
+    || char === '='
+    || char === '>';
 }
 
 function parseOsc8Payload(payload: string): 'open' | 'close' | 'ignore' {
@@ -47,6 +87,9 @@ export function createTerminalOsc8Guard(): TerminalOsc8Guard {
   let state: OscParserState = 'ground';
   let oscPayload = '';
   let oscPayloadOverflow = false;
+  let csiPayload = '';
+  let csiPayloadOverflow = false;
+  let bufferedControl = '';
   let hyperlinkActive = false;
   let activeTextSeen = false;
 
@@ -84,9 +127,30 @@ export function createTerminalOsc8Guard(): TerminalOsc8Guard {
     oscPayload += char;
   };
 
+  const resetCsiPayload = () => {
+    csiPayload = '';
+    csiPayloadOverflow = false;
+  };
+
+  const appendCsiPayload = (char: string) => {
+    if (csiPayloadOverflow) {
+      return;
+    }
+
+    if (csiPayload.length >= CSI_PAYLOAD_LIMIT) {
+      csiPayload = '';
+      csiPayloadOverflow = true;
+      return;
+    }
+
+    csiPayload += char;
+  };
+
   const reset = () => {
     state = 'ground';
     resetOscPayload();
+    resetCsiPayload();
+    bufferedControl = '';
     hyperlinkActive = false;
     activeTextSeen = false;
   };
@@ -97,16 +161,35 @@ export function createTerminalOsc8Guard(): TerminalOsc8Guard {
     }
 
     const outputParts: string[] = [];
-    let lastCopiedIndex = 0;
 
-    const insertCloseBefore = (index: number) => {
-      if (lastCopiedIndex < index) {
-        outputParts.push(data.slice(lastCopiedIndex, index));
-      }
+    const insertClose = () => {
       outputParts.push(OSC8_HYPERLINK_CLOSE);
-      lastCopiedIndex = index;
       hyperlinkActive = false;
       activeTextSeen = false;
+    };
+
+    const writeControl = (shouldCloseBefore: boolean) => {
+      if (shouldCloseBefore) {
+        insertClose();
+      }
+      outputParts.push(bufferedControl);
+      bufferedControl = '';
+    };
+
+    const writeChar = (char: string) => {
+      if (bufferedControl) {
+        bufferedControl += char;
+      } else {
+        outputParts.push(char);
+      }
+    };
+
+    const beginBufferedControl = (char: string) => {
+      if (hyperlinkActive && activeTextSeen) {
+        bufferedControl = char;
+      } else {
+        outputParts.push(char);
+      }
     };
 
     for (let index = 0; index < data.length; index += 1) {
@@ -115,36 +198,59 @@ export function createTerminalOsc8Guard(): TerminalOsc8Guard {
       switch (state) {
         case 'ground':
           if (hyperlinkActive && isLineBreak(char)) {
-            insertCloseBefore(index);
+            insertClose();
           }
 
           if (char === ESC) {
+            beginBufferedControl(char);
             state = 'escape';
           } else if (char === OSC_C1) {
+            beginBufferedControl(char);
             state = 'osc';
             resetOscPayload();
+          } else if (char === CSI_C1) {
+            beginBufferedControl(char);
+            state = 'csi';
+            resetCsiPayload();
           } else if (hyperlinkActive && isPrintableText(char)) {
+            outputParts.push(char);
             activeTextSeen = true;
+          } else {
+            outputParts.push(char);
           }
           break;
 
         case 'escape':
+          writeChar(char);
           if (char === ']') {
             state = 'osc';
             resetOscPayload();
+          } else if (char === '[') {
+            state = 'csi';
+            resetCsiPayload();
           } else if (char === ESC) {
             state = 'escape';
           } else if (char === OSC_C1) {
             state = 'osc';
             resetOscPayload();
+          } else if (char === CSI_C1) {
+            state = 'csi';
+            resetCsiPayload();
           } else {
+            if (bufferedControl) {
+              writeControl(hyperlinkActive && shouldCloseBeforeEscapeFinal(char));
+            }
             state = 'ground';
           }
           break;
 
         case 'osc':
+          writeChar(char);
           if (char === BEL || char === ST_C1) {
             finishOsc();
+            if (bufferedControl) {
+              writeControl(false);
+            }
             state = 'ground';
           } else if (char === ESC) {
             state = 'oscEscape';
@@ -157,22 +263,57 @@ export function createTerminalOsc8Guard(): TerminalOsc8Guard {
           break;
 
         case 'oscEscape':
+          writeChar(char);
           if (char === '\\') {
             finishOsc();
+            if (bufferedControl) {
+              writeControl(false);
+            }
           } else {
             resetOscPayload();
+            if (bufferedControl) {
+              writeControl(false);
+            }
           }
           state = 'ground';
+          break;
+
+        case 'csi':
+          writeChar(char);
+          if (char === CAN || char === SUB) {
+            resetCsiPayload();
+            if (bufferedControl) {
+              writeControl(false);
+            }
+            state = 'ground';
+          } else if (char === ESC) {
+            resetCsiPayload();
+            if (bufferedControl) {
+              writeControl(false);
+            }
+            beginBufferedControl(char);
+            state = 'escape';
+          } else if (isCsiFinal(char)) {
+            if (
+              bufferedControl
+            ) {
+              writeControl(
+                hyperlinkActive
+                && !csiPayloadOverflow
+                && shouldCloseBeforeCsi(csiPayload, char, activeTextSeen),
+              );
+            }
+            resetCsiPayload();
+            state = 'ground';
+          } else {
+            appendCsiPayload(char);
+          }
           break;
       }
     }
 
-    if (lastCopiedIndex === 0 && outputParts.length === 0 && !(options.closeAtEnd && hyperlinkActive && state === 'ground')) {
-      return data;
-    }
-
-    if (lastCopiedIndex < data.length) {
-      outputParts.push(data.slice(lastCopiedIndex));
+    if (outputParts.length === 0 && bufferedControl) {
+      return '';
     }
 
     if (options.closeAtEnd && hyperlinkActive && state === 'ground') {
