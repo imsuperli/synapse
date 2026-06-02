@@ -911,6 +911,26 @@ function AppContent() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isMiniAskOpen) {
+      return;
+    }
+
+    const handleMiniAskOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('[data-mini-ask-overlay="true"]')) {
+        return;
+      }
+
+      setIsMiniAskOpen(false);
+    };
+
+    window.addEventListener('pointerdown', handleMiniAskOutsidePointerDown, true);
+    return () => {
+      window.removeEventListener('pointerdown', handleMiniAskOutsidePointerDown, true);
+    };
+  }, [isMiniAskOpen]);
+
   const {
     currentView,
     switchToTerminalView,
