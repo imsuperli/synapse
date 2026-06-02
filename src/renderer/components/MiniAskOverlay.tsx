@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, Loader2, MessageSquarePlus, X } from 'lucide-react';
 import type { ChatMessage } from '../../shared/types/chat';
+import { renderMarkdownLike } from './agent/RichText';
 
 interface MiniAskOverlayProps {
   open: boolean;
@@ -189,7 +190,9 @@ export const MiniAskOverlay: React.FC<MiniAskOverlayProps> = ({ open, onClose })
                         : 'text-[rgb(var(--foreground))]'
                     }`}
                   >
-                    {message.content}
+                    {message.role === 'assistant'
+                      ? renderMarkdownLike(message.content)
+                      : message.content}
                   </div>
                 </div>
               ))}

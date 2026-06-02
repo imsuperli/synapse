@@ -33,6 +33,7 @@ import {
   matchesActiveTerminalFocusRequest,
 } from '../utils/terminalFocus';
 import { createTerminalOsc8Guard, OSC8_HYPERLINK_CLOSE } from '../utils/terminalOsc8Guard';
+import { renderMarkdownLike } from './agent/RichText';
 
 const completedReplaySessions = new Set<string>();
 const DIRECT_LIVE_OUTPUT_MAX_CHARS = 256;
@@ -534,15 +535,18 @@ const TerminalSelectionAiOverlay: React.FC<TerminalSelectionAiOverlayProps> = ({
 
   return (
     <div
-      className="absolute z-40 max-w-[min(380px,calc(100%-16px))] rounded-lg border border-[rgb(var(--border))]/80 bg-[color-mix(in_srgb,rgb(var(--card))_92%,transparent)] text-[rgb(var(--foreground))] shadow-[0_16px_48px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+      className="absolute z-40 max-w-[min(380px,calc(100%-8px))] rounded-lg border border-[rgb(var(--border))]/80 bg-[color-mix(in_srgb,rgb(var(--card))_92%,transparent)] text-[rgb(var(--foreground))] shadow-[0_16px_48px_rgba(0,0,0,0.45)] backdrop-blur-xl"
       style={{ left: state.left, top: state.top }}
-      onMouseDown={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
+      onMouseDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
+      <div
+        className="flex items-center gap-1.5 px-2 py-1.5"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
         <button
           type="button"
           className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[rgb(var(--foreground))] transition-colors hover:bg-[rgb(var(--accent))]"
@@ -572,17 +576,17 @@ const TerminalSelectionAiOverlay: React.FC<TerminalSelectionAiOverlayProps> = ({
       </div>
 
       {(state.status !== 'idle' || state.result || state.error) && (
-        <div className="border-t border-[rgb(var(--border))]/70 px-3 py-2">
+        <div className="border-t border-[rgb(var(--border))]/70 py-2 pl-3 pr-1">
           {isLoading ? (
             <div className="flex items-center gap-2 text-xs text-[rgb(var(--muted-foreground))]">
               <Loader2 size={14} className="animate-spin" />
               正在生成{activeActionLabel}...
             </div>
           ) : state.status === 'error' ? (
-            <div className="text-xs leading-5 text-[rgb(var(--error))]">{state.error || '生成失败'}</div>
+            <div className="select-text pr-2 text-xs leading-5 text-[rgb(var(--error))]">{state.error || '生成失败'}</div>
           ) : (
-            <div className="max-h-64 overflow-auto whitespace-pre-wrap text-sm leading-6 text-[rgb(var(--foreground))]">
-              {state.result}
+            <div className="max-h-64 select-text overflow-auto pr-3 text-sm leading-6 text-[rgb(var(--foreground))]">
+              {renderMarkdownLike(state.result ?? '')}
             </div>
           )}
         </div>
@@ -956,11 +960,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     const rootRect = root.getBoundingClientRect();
-    const overlayWidth = Math.min(380, Math.max(240, rootRect.width - 16));
+    const overlayWidth = Math.min(380, Math.max(240, rootRect.width - 8));
     const overlayHeight = 48;
     const left = Math.min(
-      Math.max(clientX - rootRect.left + 10, 8),
-      Math.max(rootRect.width - overlayWidth - 8, 8),
+      Math.max(clientX - rootRect.left + 10, 4),
+      Math.max(rootRect.width - overlayWidth - 4, 4),
     );
     const top = Math.min(
       Math.max(clientY - rootRect.top - overlayHeight - 10, 8),

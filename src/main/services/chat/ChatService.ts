@@ -407,6 +407,10 @@ function buildToolCallsFromRaw(
 /** 构建系统提示词 */
 function buildSystemPrompt(request: ChatSendRequest): string {
   const { sshContext, systemPrompt, environmentDetails } = request;
+  const customPrompt = systemPrompt?.trim();
+  if (customPrompt && request.systemPromptMode === 'replace') {
+    return customPrompt;
+  }
 
   const contextSection = sshContext
     ? `
@@ -456,7 +460,6 @@ ${executionRules}
 - 禁止执行 rm -rf /、格式化磁盘、重启系统等破坏性命令
 - 不要编造执行过程或执行结果`;
 
-  const customPrompt = systemPrompt?.trim();
   return customPrompt
     ? `${defaultPrompt}\n\n附加用户指令：\n${customPrompt}`
     : defaultPrompt;

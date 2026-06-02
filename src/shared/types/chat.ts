@@ -183,6 +183,8 @@ export interface ChatSendRequest {
   providerId: string;
   model: string;
   systemPrompt?: string;
+  /** 默认追加到内置系统提示词；replace 用于轻量通用问答等无需 Chat Pane 默认角色的入口 */
+  systemPromptMode?: 'append' | 'replace';
   /** 是否允许工具调用 */
   enableTools?: boolean;
   /** SSH 上下文（有关联终端时提供）*/

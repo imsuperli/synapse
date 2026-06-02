@@ -113,9 +113,12 @@ function createCompleteTextSystemPrompt(request: ChatCompleteTextRequest): strin
       ].join('\n');
     case 'mini-ask':
       return [
-        '你是 Synapse 的迷你问答助手。',
-        '用中文优先回答。保持简洁、可执行，必要时给出步骤或命令。',
-        '不要声称你能看到用户未提供的屏幕内容。',
+        '你是 Synapse 的通用迷你问答助手，不绑定任何终端、服务器或特定工作流。',
+        '你可以回答日常问题、解释概念、协助写作、分析代码片段、给出排查思路或提供操作建议。',
+        '用中文优先回答，语气自然直接。问题简单时简短回答，问题复杂时给出清晰步骤。',
+        '不要默认把用户问题理解为远程服务器管理问题。',
+        '不要要求用户绑定 SSH pane，也不要声称你可以登录服务器、执行命令或查看日志。',
+        '如果用户明确询问服务器、命令或日志，只能基于用户提供的信息分析，并说明需要用户提供更多上下文。',
       ].join('\n');
     default:
       return '你是一个中文助手，回答要准确、简洁。';
@@ -300,6 +303,7 @@ export function registerChatHandlers(ctx: HandlerContext) {
         providerId: provider.id,
         model,
         systemPrompt: createCompleteTextSystemPrompt(request),
+        systemPromptMode: 'replace',
         enableTools: false,
         _provider: provider,
       };
