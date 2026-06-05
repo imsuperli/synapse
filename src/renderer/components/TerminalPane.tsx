@@ -353,6 +353,23 @@ type TerminalWithKeyboardState = Terminal & {
   };
 };
 
+type TerminalRenderServiceRecovery = {
+  _isPaused?: boolean;
+  _needsFullRefresh?: boolean;
+  _pausedResizeTask?: {
+    flush?: () => void;
+  };
+  handleDevicePixelRatioChange?: () => void;
+  handleResize?: (cols: number, rows: number) => void;
+  refreshRows?: (start: number, end: number, sync?: boolean) => void;
+};
+
+type TerminalWithRenderService = Terminal & {
+  _core?: {
+    _renderService?: TerminalRenderServiceRecovery;
+  };
+};
+
 function resetTerminalKeyboardProtocolState(terminal: Terminal): void {
   applyTerminalKeyboardProtocolState(terminal, {
     applicationCursorKeysMode: false,
@@ -407,6 +424,33 @@ function applyTerminalKeyboardProtocolState(terminal: Terminal, state: PtyKeyboa
     coreState.kittyKeyboard.altStack.length = 0;
     coreState.kittyKeyboard.altStack.push(...state.kittyKeyboard.altStack);
   }
+}
+
+function recoverTerminalRenderSurface(terminal: Terminal): void {
+  if (terminal.rows <= 0) {
+    return;
+  }
+
+  const renderService = (terminal as TerminalWithRenderService)._core?._renderService;
+  if (!renderService) {
+    refreshTerminalViewport(terminal);
+    return;
+  }
+
+  try {
+    // xterm's public refresh queues a full refresh but returns while its render service is paused.
+    // When IntersectionObserver misses the visible transition, mirror xterm's own resume path.
+    renderService._isPaused = false;
+    renderService._pausedResizeTask?.flush?.();
+    renderService.handleResize?.(terminal.cols, terminal.rows);
+    renderService.handleDevicePixelRatioChange?.();
+    renderService.refreshRows?.(0, terminal.rows - 1, true);
+    renderService._needsFullRefresh = false;
+  } catch {
+    // Fall back to the public API if the vendored xterm internals change.
+  }
+
+  refreshTerminalViewport(terminal);
 }
 
 function readRootCssColor(variableName: string, fallback: string): string {
@@ -781,15 +825,22 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     window.electronAPI.ptyResize(windowId, pane.id, cols, rows);
   }, [pane.id, windowId]);
 
-  const refreshVisibleTerminalViewport = useCallback(() => {
+  const recoverVisibleTerminalSurface = useCallback(() => {
     const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
     const container = terminalContainerRef.current;
     if (!terminal || !container || !isVisibleTerminalContainer(container)) {
       return;
     }
 
-    refreshTerminalViewport(terminal);
-  }, []);
+    lastContainerSizeRef.current = {
+      width: container.clientWidth,
+      height: container.clientHeight,
+    };
+    fitAddon?.fit();
+    syncPtySize(terminal);
+    recoverTerminalRenderSurface(terminal);
+  }, [syncPtySize]);
 
   const scheduleVisibleTerminalRepaint = useCallback((options?: { delayed?: boolean }) => {
     const scheduleFrame = () => {
@@ -799,7 +850,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       repaintFrameRef.current = requestAnimationFrame(() => {
         repaintFrameRef.current = null;
-        refreshVisibleTerminalViewport();
+        recoverVisibleTerminalSurface();
       });
     };
 
@@ -817,7 +868,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       repaintTimerRef.current = null;
       scheduleFrame();
     }, VISIBLE_TERMINAL_REPAINT_DELAY_MS);
-  }, [refreshVisibleTerminalViewport]);
+  }, [recoverVisibleTerminalSurface]);
 
   useEffect(() => {
     sshCwdTrackerRef.current = createSSHCwdTrackerState(pane.cwd);
@@ -1314,7 +1365,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (width > 0 && height > 0) {
         lastContainerSizeRef.current = { width, height };
         fitAddon.fit();
-        refreshTerminalViewport(terminal);
+        recoverTerminalRenderSurface(terminal);
         syncPtySize(terminal, { force: true });
       }
     });
