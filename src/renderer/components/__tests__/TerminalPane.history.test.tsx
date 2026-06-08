@@ -696,6 +696,79 @@ describe('TerminalPane history replay', () => {
     );
   });
 
+  it('does not forward xterm focus reports caused by app focus changes', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+
+    const { rerender } = render(
+      <TerminalPane
+        windowId="win-focus-report"
+        pane={{
+          id: 'pane-focus-report',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive={false}
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalled();
+    });
+
+    vi.mocked(window.electronAPI.ptyWrite).mockClear();
+
+    terminalDataCallbacks.forEach((terminalDataCallback) => terminalDataCallback('\u001b[O'));
+
+    expect(window.electronAPI.ptyWrite).not.toHaveBeenCalledWith(
+      'win-focus-report',
+      'pane-focus-report',
+      '\u001b[O',
+      { source: 'xterm.onData' },
+    );
+
+    rerender(
+      <TerminalPane
+        windowId="win-focus-report"
+        pane={{
+          id: 'pane-focus-report',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    terminalDataCallbacks.forEach((terminalDataCallback) => terminalDataCallback('\u001b[I'));
+    terminalDataCallbacks.forEach((terminalDataCallback) => terminalDataCallback('user input'));
+
+    expect(window.electronAPI.ptyWrite).not.toHaveBeenCalledWith(
+      'win-focus-report',
+      'pane-focus-report',
+      '\u001b[I',
+      { source: 'xterm.onData' },
+    );
+    expect(window.electronAPI.ptyWrite).toHaveBeenCalledWith(
+      'win-focus-report',
+      'pane-focus-report',
+      'user input',
+      { source: 'xterm.onData' },
+    );
+  });
+
   it('registers terminal link handling and routes OSC 8 activation through electron', async () => {
     render(
       <TerminalPane

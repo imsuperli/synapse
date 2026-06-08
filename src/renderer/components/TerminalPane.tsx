@@ -39,6 +39,7 @@ const completedReplaySessions = new Set<string>();
 const DIRECT_LIVE_OUTPUT_MAX_CHARS = 256;
 const DIRECT_LIVE_OUTPUT_IDLE_MS = 12;
 const VISIBLE_TERMINAL_REPAINT_DELAY_MS = 120;
+const PROGRAMMATIC_FOCUS_REPORT_SUPPRESSION_MS = 120;
 const SELECTION_AI_OVERLAY_MARGIN = 6;
 const SELECTION_AI_OVERLAY_POINTER_GAP = 10;
 const SELECTION_AI_OVERLAY_MIN_WIDTH = 180;
@@ -54,6 +55,8 @@ const REPLAY_PROTOCOL_QUERY_PATTERN = new RegExp(
   ].join('|'),
   'g',
 );
+const XTERM_FOCUS_IN_REPORT = '\u001b[I';
+const XTERM_FOCUS_OUT_REPORT = '\u001b[O';
 
 function getDefaultSSHClipboardImageShortcut(platform: string | undefined): SSHClipboardImageShortcut {
   return platform === 'darwin' ? 'ctrl-v' : 'alt-v';
@@ -103,6 +106,10 @@ function refreshTerminalViewport(terminal: Terminal): void {
   if (terminal.rows > 0 && typeof terminal.refresh === 'function') {
     terminal.refresh(0, terminal.rows - 1);
   }
+}
+
+function isXtermFocusReport(data: string): boolean {
+  return data === XTERM_FOCUS_IN_REPORT || data === XTERM_FOCUS_OUT_REPORT;
 }
 
 function getReplaySessionKey(windowId: string, paneId: string, pid: number | null | undefined): string | null {
@@ -750,6 +757,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const lastContainerSizeRef = useRef({ width: 0, height: 0 });
   const lastSyncedTerminalSizeRef = useRef({ cols: 0, rows: 0 });
   const isActiveRef = useRef(isActive); // 使用 ref 跟踪 isActive 状态
+  const isWindowActiveRef = useRef(isWindowActive);
+  const lastFocusStateRef = useRef({ isActive, isWindowActive });
+  const lastWindowActiveForRecoveryRef = useRef(isWindowActive);
   const ptyInputEnabledRef = useRef(ptyInputEnabled);
   const onActivateRef = useRef(onActivate);
   const suppressNativePasteUntilRef = useRef(0); // 短时间屏蔽原生 paste，避免与手动 Ctrl+V 粘贴重复
@@ -762,6 +772,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const historyReplayTokenRef = useRef(0);
   const lastAppliedSeqRef = useRef(0);
   const suppressPtyWriteRef = useRef(false);
+  const suppressProgrammaticFocusReportUntilRef = useRef(0);
   const liveOsc8GuardRef = useRef(createTerminalOsc8Guard());
   const replayOsc8GuardRef = useRef(createTerminalOsc8Guard());
   const lastKnownViewportYRef = useRef<number | null>(null);
@@ -801,7 +812,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const showPaneHeader = !!(pane.title || pane.agentName);
   const showCloseButton = Boolean(onClose && isHovered);
 
-  const focusTerminalInput = useCallback((options?: { defer?: boolean; onlyWhenOutsidePane?: boolean }) => {
+  const suppressFocusReportsForWindowTransition = useCallback(() => {
+    suppressProgrammaticFocusReportUntilRef.current = Math.max(
+      suppressProgrammaticFocusReportUntilRef.current,
+      nowMs() + PROGRAMMATIC_FOCUS_REPORT_SUPPRESSION_MS,
+    );
+  }, []);
+
+  const focusTerminalInput = useCallback((options?: { defer?: boolean; onlyWhenOutsidePane?: boolean; suppressFocusReport?: boolean }) => {
     const runFocus = () => {
       const currentTerminal = terminalRef.current;
       if (!currentTerminal) {
@@ -817,6 +835,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
 
       try {
+        if (options?.suppressFocusReport) {
+          suppressFocusReportsForWindowTransition();
+        }
+
         currentTerminal.focus();
 
         const textarea = terminalContainerRef.current?.querySelector('textarea');
@@ -834,7 +856,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     runFocus();
-  }, [pane.id]);
+  }, [pane.id, suppressFocusReportsForWindowTransition]);
 
   const syncPtySize = useCallback((terminal: Terminal, options?: { force?: boolean }) => {
     if (!window.electronAPI) {
@@ -1377,6 +1399,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   }, [isActive]);
 
   useEffect(() => {
+    isWindowActiveRef.current = isWindowActive;
+  }, [isWindowActive]);
+
+  useEffect(() => {
     ptyInputEnabledRef.current = ptyInputEnabled;
   }, [ptyInputEnabled]);
 
@@ -1458,6 +1484,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         return;
       }
 
+      suppressFocusReportsForWindowTransition();
       isWindowFocusedRef.current = true;
       isVisibleSurfaceRecoveryPendingRef.current = true;
       scheduleVisibleTerminalRepaint({ delayed: true });
@@ -1465,6 +1492,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
+        suppressFocusReportsForWindowTransition();
         captureCurrentTerminalViewportY();
         isWindowFocusedRef.current = false;
         isVisibleSurfaceRecoveryPendingRef.current = false;
@@ -1475,6 +1503,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     };
 
     const handleBlur = () => {
+      suppressFocusReportsForWindowTransition();
       captureCurrentTerminalViewportY();
       isWindowFocusedRef.current = false;
       isVisibleSurfaceRecoveryPendingRef.current = false;
@@ -1491,7 +1520,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       window.removeEventListener('pageshow', handleVisibleSurfaceRecovery);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [captureCurrentTerminalViewportY, scheduleVisibleTerminalRepaint]);
+  }, [captureCurrentTerminalViewportY, scheduleVisibleTerminalRepaint, suppressFocusReportsForWindowTransition]);
 
   // 监听窗格状态变化：从无活动会话状态恢复时重置尺寸缓存，强制下次 resize
   useEffect(() => {
@@ -1549,40 +1578,45 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
   // 当窗格激活且窗口激活时，自动聚焦到终端
   useEffect(() => {
-    const shouldFocus = isActive && isWindowActive;
+    const previousFocusState = lastFocusStateRef.current;
+    lastFocusStateRef.current = { isActive, isWindowActive };
 
     if (!terminalRef.current) return;
 
-    if (shouldFocus) {
-      focusTerminalInput({ defer: true });
-    } else {
-      // 非激活窗格：失焦并隐藏光标
-      try {
-        terminalRef.current.blur();
-        const textarea = terminalContainerRef.current?.querySelector('textarea');
-        if (textarea) {
-          (textarea as HTMLTextAreaElement).blur();
-        }
-      } catch (error) {
-        console.error(`[TerminalPane] Error blurring pane ${pane.id}:`, error);
+    if (isActive) {
+      if (isWindowActive) {
+        focusTerminalInput({
+          defer: true,
+          onlyWhenOutsidePane: true,
+          suppressFocusReport: previousFocusState.isActive && !previousFocusState.isWindowActive,
+        });
       }
+      return;
+    }
+
+    // 非激活窗格：失焦并隐藏光标。窗口整体失焦时不主动 blur 当前活跃窗格，
+    // 避免启用了 focus reporting 的 TUI 把应用切换当成终端输入。
+    try {
+      terminalRef.current.blur();
+      const textarea = terminalContainerRef.current?.querySelector('textarea');
+      if (textarea) {
+        (textarea as HTMLTextAreaElement).blur();
+      }
+    } catch (error) {
+      console.error(`[TerminalPane] Error blurring pane ${pane.id}:`, error);
     }
   }, [focusTerminalInput, isActive, isWindowActive]);
 
   useEffect(() => {
-    if (!isWindowActive) {
+    const wasWindowActive = lastWindowActiveForRecoveryRef.current;
+    lastWindowActiveForRecoveryRef.current = isWindowActive;
+
+    if (wasWindowActive || !isWindowActive) {
       return;
     }
 
-    forceResizeToContainer();
-    const delayedResizeTimer = window.setTimeout(() => {
-      forceResizeToContainer();
-    }, 180);
-
-    return () => {
-      window.clearTimeout(delayedResizeTimer);
-    };
-  }, [forceResizeToContainer, isWindowActive]);
+    scheduleVisibleTerminalRepaint({ delayed: true });
+  }, [isWindowActive, scheduleVisibleTerminalRepaint]);
 
   useEffect(() => {
     if (lastLayoutPaneCountRef.current === layoutPaneCount) {
@@ -2034,6 +2068,13 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     const terminalContainer = terminalContainerRef.current;
     const helperTextarea = terminal.textarea ?? terminalContainer?.querySelector('textarea');
+    const handleHelperTextareaFocusTransition = () => {
+      if (!isWindowFocusedRef.current || !isWindowActiveRef.current || !document.hasFocus()) {
+        suppressFocusReportsForWindowTransition();
+      }
+    };
+    helperTextarea?.addEventListener('focus', handleHelperTextareaFocusTransition, true);
+    helperTextarea?.addEventListener('blur', handleHelperTextareaFocusTransition, true);
     helperTextarea?.addEventListener('paste', suppressNativePaste, true);
     terminalContainer?.addEventListener('paste', suppressNativePaste as EventListener, true);
 
@@ -2128,6 +2169,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     // 监听用户输入
     const dataDisposable = terminal.onData((data) => {
+      if (
+        isXtermFocusReport(data)
+        && (
+          !isWindowActiveRef.current
+          || nowMs() <= suppressProgrammaticFocusReportUntilRef.current
+        )
+      ) {
+        return;
+      }
+
       if (pane.ssh) {
         const { nextState, resolvedCwd } = applyTerminalInputToSSHCwdTracker(sshCwdTrackerRef.current, data);
         sshCwdTrackerRef.current = nextState;
@@ -2237,6 +2288,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       liveOsc8GuardRef.current.reset();
       replayOsc8GuardRef.current.reset();
       suppressNativePasteUntilRef.current = 0;
+      helperTextarea?.removeEventListener('focus', handleHelperTextareaFocusTransition, true);
+      helperTextarea?.removeEventListener('blur', handleHelperTextareaFocusTransition, true);
       helperTextarea?.removeEventListener('paste', suppressNativePaste, true);
       terminalContainer?.removeEventListener('paste', suppressNativePaste as EventListener, true);
       terminalContainer?.removeEventListener('contextmenu', handleNativeContextMenu, true);
@@ -2255,6 +2308,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     rememberTerminalViewportY,
     showSelectionAiOverlay,
     syncPtySize,
+    suppressFocusReportsForWindowTransition,
   ]); // 依赖均已 useCallback 包裹，保持终端实例生命周期稳定
 
   useEffect(() => {

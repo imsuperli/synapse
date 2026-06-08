@@ -255,7 +255,7 @@ describe('TerminalPane resize on resume', () => {
     });
   });
 
-  it('recovers a paused xterm render service when the terminal window becomes active', async () => {
+  it('recovers a paused xterm render service without resizing the PTY when the terminal window becomes active', async () => {
     const { rerender } = render(
       <TerminalPane
         windowId="win-1"
@@ -314,7 +314,7 @@ describe('TerminalPane resize on resume', () => {
       expect(renderService.handleDevicePixelRatioChange).toHaveBeenCalled();
       expect(renderService.refreshRows).toHaveBeenCalledWith(0, 39, true);
       expect(terminal?.refresh).toHaveBeenCalledWith(0, 39);
-      expect(window.electronAPI.ptyResize).toHaveBeenCalledWith('win-1', 'pane-1', 120, 40);
+      expect(window.electronAPI.ptyResize).not.toHaveBeenCalled();
     });
   });
 
@@ -397,12 +397,14 @@ describe('TerminalPane resize on resume', () => {
     const terminal = terminalInstances[0];
     expect(terminal).toBeDefined();
     terminal?.refresh.mockClear();
+    vi.mocked(window.electronAPI.ptyResize).mockClear();
 
     window.dispatchEvent(new Event('focus'));
 
     await waitFor(() => {
       expect(terminal?.refresh).toHaveBeenCalledWith(0, 39);
     });
+    expect(window.electronAPI.ptyResize).not.toHaveBeenCalled();
   });
 
   it('recovers a paused xterm render service when the app regains focus', async () => {
@@ -437,6 +439,7 @@ describe('TerminalPane resize on resume', () => {
     renderService.handleDevicePixelRatioChange.mockClear();
     renderService.refreshRows.mockClear();
     terminal?.refresh.mockClear();
+    vi.mocked(window.electronAPI.ptyResize).mockClear();
 
     window.dispatchEvent(new Event('focus'));
 
@@ -449,6 +452,7 @@ describe('TerminalPane resize on resume', () => {
       expect(renderService.refreshRows).toHaveBeenCalledWith(0, 39, true);
       expect(terminal?.refresh).toHaveBeenCalledWith(0, 39);
     });
+    expect(window.electronAPI.ptyResize).not.toHaveBeenCalled();
   });
 
   it('preserves the terminal viewport when focus recovery briefly jumps to the first line', async () => {
