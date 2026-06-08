@@ -8,7 +8,7 @@ import type { PtyDataPayload, PtyKeyboardProtocolState } from '../../../shared/t
 
 const OSC8_CLOSE = '\u001b]8;;\u0007';
 
-const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimationFrameMock, cancelAnimationFrameMock } = vi.hoisted(() => ({
+const { terminalInstances, ptyCallbacks, terminalDataCallbacks, terminalScrollCallbacks, requestAnimationFrameMock, cancelAnimationFrameMock } = vi.hoisted(() => ({
   terminalInstances: [] as Array<{
     loadAddon: ReturnType<typeof vi.fn>;
     registerLinkProvider: ReturnType<typeof vi.fn>;
@@ -22,10 +22,18 @@ const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimation
     getSelection: ReturnType<typeof vi.fn>;
     onData: ReturnType<typeof vi.fn>;
     onSelectionChange: ReturnType<typeof vi.fn>;
+    onScroll: ReturnType<typeof vi.fn>;
+    scrollToLine: ReturnType<typeof vi.fn>;
     attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
     options: Record<string, unknown>;
     modes: {
       bracketedPasteMode: boolean;
+    };
+    buffer: {
+      active: {
+        viewportY: number;
+        baseY: number;
+      };
     };
     _core: {
       coreService: {
@@ -54,6 +62,7 @@ const { terminalInstances, ptyCallbacks, terminalDataCallbacks, requestAnimation
   }>,
   ptyCallbacks: [] as Array<(payload: PtyDataPayload) => void>,
   terminalDataCallbacks: [] as Array<(data: string) => void>,
+  terminalScrollCallbacks: [] as Array<(viewportY: number) => void>,
   requestAnimationFrameMock: vi.fn((callback: FrameRequestCallback) => {
     callback(0);
     return 1;
@@ -171,6 +180,14 @@ vi.mock('@xterm/xterm', () => ({
         return { dispose: vi.fn() };
       }),
       onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
+      onScroll: vi.fn((callback: (viewportY: number) => void) => {
+        terminalScrollCallbacks.push(callback);
+        return { dispose: vi.fn() };
+      }),
+      scrollToLine: vi.fn((line: number) => {
+        instance.buffer.active.viewportY = line;
+        terminalScrollCallbacks.forEach((callback) => callback(line));
+      }),
       attachCustomKeyEventHandler: vi.fn(),
       options: { ...(options ?? {}) },
       modes: {
@@ -184,6 +201,12 @@ vi.mock('@xterm/xterm', () => ({
       _core: {
         coreService,
         coreMouseService,
+      },
+      buffer: {
+        active: {
+          viewportY: 0,
+          baseY: 0,
+        },
       },
       cols: 120,
       rows: 40,
@@ -241,6 +264,7 @@ describe('TerminalPane history replay', () => {
     terminalInstances.length = 0;
     ptyCallbacks.length = 0;
     terminalDataCallbacks.length = 0;
+    terminalScrollCallbacks.length = 0;
     useWindowStore.setState({
       windows: [],
       activeWindowId: null,

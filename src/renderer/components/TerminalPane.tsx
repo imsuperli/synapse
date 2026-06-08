@@ -173,6 +173,28 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+function readTerminalViewportY(terminal: Terminal): number | null {
+  const viewportY = terminal.buffer?.active?.viewportY;
+  return typeof viewportY === 'number' && Number.isFinite(viewportY) ? viewportY : null;
+}
+
+function restoreTerminalViewportY(terminal: Terminal, viewportY: number | null): void {
+  if (viewportY === null || !Number.isFinite(viewportY)) {
+    return;
+  }
+
+  const baseY = terminal.buffer?.active?.baseY;
+  const maxViewportY = typeof baseY === 'number' && Number.isFinite(baseY)
+    ? baseY
+    : viewportY;
+  const targetViewportY = Math.round(clampNumber(viewportY, 0, Math.max(0, maxViewportY)));
+  if (readTerminalViewportY(terminal) === targetViewportY) {
+    return;
+  }
+
+  terminal.scrollToLine(targetViewportY);
+}
+
 /**
  * 根据窗格状态获取选中时的边框颜色
  */
@@ -742,6 +764,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const suppressPtyWriteRef = useRef(false);
   const liveOsc8GuardRef = useRef(createTerminalOsc8Guard());
   const replayOsc8GuardRef = useRef(createTerminalOsc8Guard());
+  const lastKnownViewportYRef = useRef<number | null>(null);
+  const isWindowFocusedRef = useRef(typeof document === 'undefined' ? true : document.hasFocus());
+  const isRestoringViewportRef = useRef(false);
+  const isVisibleSurfaceRecoveryPendingRef = useRef(false);
   // 区分“当前会话首次回放”和“同一会话后的补回放”：
   // 首次回放可能包含 PowerShell 启动阶段仍在等待响应的 ESC[c，
   // 这时必须允许 xterm 生成的 DA 响应回写到 PTY。
@@ -825,6 +851,54 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     window.electronAPI.ptyResize(windowId, pane.id, cols, rows);
   }, [pane.id, windowId]);
 
+  const rememberTerminalViewportY = useCallback((viewportY: number | null) => {
+    if (viewportY === null || !Number.isFinite(viewportY) || isRestoringViewportRef.current) {
+      return;
+    }
+
+    const lastKnownViewportY = lastKnownViewportYRef.current;
+    if (
+      (!isWindowFocusedRef.current || isVisibleSurfaceRecoveryPendingRef.current)
+      && viewportY === 0
+      && (lastKnownViewportY ?? 0) > 0
+    ) {
+      const terminal = terminalRef.current;
+      if (terminal && isVisibleSurfaceRecoveryPendingRef.current) {
+        isRestoringViewportRef.current = true;
+        try {
+          restoreTerminalViewportY(terminal, lastKnownViewportY);
+        } finally {
+          isRestoringViewportRef.current = false;
+        }
+      }
+      return;
+    }
+
+    lastKnownViewportYRef.current = viewportY;
+  }, []);
+
+  const captureCurrentTerminalViewportY = useCallback(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
+      return;
+    }
+
+    rememberTerminalViewportY(readTerminalViewportY(terminal));
+  }, [rememberTerminalViewportY]);
+
+  const preserveTerminalViewportY = useCallback((terminal: Terminal, run: () => void) => {
+    const viewportYToPreserve = lastKnownViewportYRef.current ?? readTerminalViewportY(terminal);
+
+    isRestoringViewportRef.current = true;
+    try {
+      run();
+      restoreTerminalViewportY(terminal, viewportYToPreserve);
+    } finally {
+      isRestoringViewportRef.current = false;
+      rememberTerminalViewportY(readTerminalViewportY(terminal));
+    }
+  }, [rememberTerminalViewportY]);
+
   const recoverVisibleTerminalSurface = useCallback(() => {
     const terminal = terminalRef.current;
     const fitAddon = fitAddonRef.current;
@@ -837,13 +911,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       width: container.clientWidth,
       height: container.clientHeight,
     };
-    fitAddon?.fit();
-    syncPtySize(terminal);
-    recoverTerminalRenderSurface(terminal);
-  }, [syncPtySize]);
+    preserveTerminalViewportY(terminal, () => {
+      fitAddon?.fit();
+      syncPtySize(terminal);
+      recoverTerminalRenderSurface(terminal);
+    });
+  }, [preserveTerminalViewportY, syncPtySize]);
 
   const scheduleVisibleTerminalRepaint = useCallback((options?: { delayed?: boolean }) => {
-    const scheduleFrame = () => {
+    const scheduleFrame = (clearRecoveryPending: boolean) => {
       if (repaintFrameRef.current !== null) {
         return;
       }
@@ -851,10 +927,13 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       repaintFrameRef.current = requestAnimationFrame(() => {
         repaintFrameRef.current = null;
         recoverVisibleTerminalSurface();
+        if (clearRecoveryPending) {
+          isVisibleSurfaceRecoveryPendingRef.current = false;
+        }
       });
     };
 
-    scheduleFrame();
+    scheduleFrame(!options?.delayed);
 
     if (!options?.delayed) {
       return;
@@ -866,7 +945,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     repaintTimerRef.current = window.setTimeout(() => {
       repaintTimerRef.current = null;
-      scheduleFrame();
+      scheduleFrame(true);
     }, VISIBLE_TERMINAL_REPAINT_DELAY_MS);
   }, [recoverVisibleTerminalSurface]);
 
@@ -1364,12 +1443,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       if (width > 0 && height > 0) {
         lastContainerSizeRef.current = { width, height };
-        fitAddon.fit();
-        recoverTerminalRenderSurface(terminal);
-        syncPtySize(terminal, { force: true });
+        preserveTerminalViewportY(terminal, () => {
+          fitAddon.fit();
+          recoverTerminalRenderSurface(terminal);
+          syncPtySize(terminal, { force: true });
+        });
       }
     });
-  }, [syncPtySize]);
+  }, [preserveTerminalViewportY, syncPtySize]);
 
   useEffect(() => {
     const handleVisibleSurfaceRecovery = () => {
@@ -1377,25 +1458,40 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         return;
       }
 
+      isWindowFocusedRef.current = true;
+      isVisibleSurfaceRecoveryPendingRef.current = true;
       scheduleVisibleTerminalRepaint({ delayed: true });
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState !== 'hidden') {
-        handleVisibleSurfaceRecovery();
+      if (document.visibilityState === 'hidden') {
+        captureCurrentTerminalViewportY();
+        isWindowFocusedRef.current = false;
+        isVisibleSurfaceRecoveryPendingRef.current = false;
+        return;
       }
+
+      handleVisibleSurfaceRecovery();
+    };
+
+    const handleBlur = () => {
+      captureCurrentTerminalViewportY();
+      isWindowFocusedRef.current = false;
+      isVisibleSurfaceRecoveryPendingRef.current = false;
     };
 
     window.addEventListener('focus', handleVisibleSurfaceRecovery);
+    window.addEventListener('blur', handleBlur);
     window.addEventListener('pageshow', handleVisibleSurfaceRecovery);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.removeEventListener('focus', handleVisibleSurfaceRecovery);
+      window.removeEventListener('blur', handleBlur);
       window.removeEventListener('pageshow', handleVisibleSurfaceRecovery);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [scheduleVisibleTerminalRepaint]);
+  }, [captureCurrentTerminalViewportY, scheduleVisibleTerminalRepaint]);
 
   // 监听窗格状态变化：从无活动会话状态恢复时重置尺寸缓存，强制下次 resize
   useEffect(() => {
@@ -1424,6 +1520,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
+      lastKnownViewportYRef.current = null;
       terminalRef.current?.reset();
     }
 
@@ -2074,6 +2171,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
       showSelectionAiOverlay(trimmed);
     });
+    const scrollDisposable = terminal.onScroll((viewportY) => {
+      rememberTerminalViewportY(viewportY);
+    });
 
     const unsubscribePtyData = subscribeToPanePtyData(windowId, pane.id, queueLiveOutput, {
       replayBuffered: false,
@@ -2111,6 +2211,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       dataDisposable.dispose();
       binaryDisposable?.dispose();
       selectionDisposable.dispose();
+      scrollDisposable.dispose();
       unsubscribePtyData();
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
@@ -2130,6 +2231,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         window.clearTimeout(repaintTimerRef.current);
         repaintTimerRef.current = null;
       }
+      isVisibleSurfaceRecoveryPendingRef.current = false;
 
       clearQueuedOutput();
       liveOsc8GuardRef.current.reset();
@@ -2150,6 +2252,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     handleTerminalLinkHover,
     handleTerminalLinkLeave,
     hideSelectionAiOverlay,
+    rememberTerminalViewportY,
     showSelectionAiOverlay,
     syncPtySize,
   ]); // 依赖均已 useCallback 包裹，保持终端实例生命周期稳定

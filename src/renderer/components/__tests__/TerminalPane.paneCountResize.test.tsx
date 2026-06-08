@@ -18,18 +18,27 @@ type MockRenderService = {
 type MockTerminalInstance = {
   focus: ReturnType<typeof vi.fn>;
   refresh: ReturnType<typeof vi.fn>;
+  scrollToLine: ReturnType<typeof vi.fn>;
+  onScroll: ReturnType<typeof vi.fn>;
   cols: number;
   rows: number;
+  buffer: {
+    active: {
+      viewportY: number;
+      baseY: number;
+    };
+  };
   _core: {
     _renderService: MockRenderService;
   };
 };
 
-const { fitAddonInstances, terminalInstances } = vi.hoisted(() => ({
+const { fitAddonInstances, terminalInstances, terminalScrollCallbacks } = vi.hoisted(() => ({
   fitAddonInstances: [] as Array<{
     fit: ReturnType<typeof vi.fn>;
   }>,
   terminalInstances: [] as MockTerminalInstance[],
+  terminalScrollCallbacks: [] as Array<(viewportY: number) => void>,
 }));
 
 vi.mock('@xterm/xterm', () => ({
@@ -57,10 +66,24 @@ vi.mock('@xterm/xterm', () => ({
       getSelection: vi.fn().mockReturnValue(''),
       onData: vi.fn(() => ({ dispose: vi.fn() })),
       onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
+      onScroll: vi.fn((callback: (viewportY: number) => void) => {
+        terminalScrollCallbacks.push(callback);
+        return { dispose: vi.fn() };
+      }),
+      scrollToLine: vi.fn((line: number) => {
+        instance.buffer.active.viewportY = line;
+        terminalScrollCallbacks.forEach((callback) => callback(line));
+      }),
       attachCustomKeyEventHandler: vi.fn(),
       options: {},
       cols: 120,
       rows: 40,
+      buffer: {
+        active: {
+          viewportY: 0,
+          baseY: 0,
+        },
+      },
       _core: {
         _renderService: renderService,
       },
@@ -104,6 +127,7 @@ describe('TerminalPane resize on resume', () => {
     vi.clearAllMocks();
     fitAddonInstances.length = 0;
     terminalInstances.length = 0;
+    terminalScrollCallbacks.length = 0;
 
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
       configurable: true,
@@ -425,6 +449,46 @@ describe('TerminalPane resize on resume', () => {
       expect(renderService.refreshRows).toHaveBeenCalledWith(0, 39, true);
       expect(terminal?.refresh).toHaveBeenCalledWith(0, 39);
     });
+  });
+
+  it('preserves the terminal viewport when focus recovery briefly jumps to the first line', async () => {
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]).toBeDefined();
+    });
+    await waitForTerminalMountResizeSettle();
+
+    const terminal = terminalInstances[0]!;
+    terminal.buffer.active.baseY = 240;
+    terminal.buffer.active.viewportY = 120;
+    terminalScrollCallbacks.forEach((callback) => callback(120));
+    terminal.scrollToLine.mockClear();
+
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
+
+    terminal.buffer.active.viewportY = 0;
+    terminalScrollCallbacks.forEach((callback) => callback(0));
+
+    await waitFor(() => {
+      expect(terminal.scrollToLine).toHaveBeenCalledWith(120);
+    });
+    expect(terminal.buffer.active.viewportY).toBe(120);
   });
 
   it('does not recover a hidden terminal viewport when the app regains focus', async () => {
