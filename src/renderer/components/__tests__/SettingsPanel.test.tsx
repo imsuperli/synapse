@@ -214,7 +214,7 @@ describe('SettingsPanel', () => {
 
     await user.click(screen.getByRole('tab', { name: '外观' }));
 
-    expect(await screen.findByText('IDEA 白昼')).toBeInTheDocument();
+    expect(await screen.findByText('白昼')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: '可读性模式' })).toHaveTextContent('高可读');
     expect(screen.getByRole('combobox', { name: '终端透明度' })).toHaveTextContent('94%');
     expect(screen.getByRole('combobox', { name: '背景遮罩' })).toHaveTextContent('62%');
@@ -222,7 +222,7 @@ describe('SettingsPanel', () => {
     expect(screen.getByRole('combobox', { name: '皮肤动效' })).toHaveTextContent('静态');
     expect(screen.getByRole('switch', { name: '减少动态效果' })).toHaveAttribute('data-state', 'unchecked');
 
-    await user.click(screen.getByRole('button', { name: /曜石/ }));
+    await user.click(screen.getByRole('button', { name: /曜黑/ }));
 
     expect(window.electronAPI.updateSettings).toHaveBeenCalledWith({
       appearance: expect.objectContaining({
@@ -236,14 +236,14 @@ describe('SettingsPanel', () => {
       }),
     });
 
-    await user.click(screen.getByRole('button', { name: /冷雾极光/ }));
+    await user.click(screen.getByRole('button', { name: /白昼/ }));
 
     expect(window.electronAPI.updateSettings).toHaveBeenLastCalledWith({
       appearance: expect.objectContaining({
         skin: expect.objectContaining({
-          presetId: 'aurora',
+          presetId: 'paper',
           kind: 'none',
-          gradient: expect.stringContaining('#041417'),
+          gradient: expect.stringContaining('#ffffff'),
         }),
       }),
     });
@@ -300,10 +300,10 @@ describe('SettingsPanel', () => {
         quickNav: { items: [] },
         appearance: {
           skin: {
-            presetId: 'aurora',
+            presetId: 'paper',
             kind: 'gradient',
-            gradient: 'radial-gradient(circle at 22% 18%, rgba(78, 244, 207, 0.22), transparent 28%), radial-gradient(circle at 78% 16%, rgba(103, 164, 255, 0.16), transparent 30%), linear-gradient(140deg, #041417 0%, #0b2c31 54%, #07191d 100%)',
-            dim: 0.28,
+            gradient: 'radial-gradient(circle at 14% 16%, rgba(255, 255, 255, 0.96), transparent 24%), radial-gradient(circle at 82% 18%, rgba(83, 149, 255, 0.10), transparent 30%), linear-gradient(135deg, #ffffff 0%, #f7faff 48%, #ffffff 100%)',
+            dim: 0.04,
             blur: 0,
             motion: 'ambient',
           },
@@ -328,7 +328,7 @@ describe('SettingsPanel', () => {
     expect(window.electronAPI.updateSettings).toHaveBeenLastCalledWith({
       appearance: expect.objectContaining({
         skin: expect.objectContaining({
-          presetId: 'aurora',
+          presetId: 'paper',
           kind: 'image',
           imagePath: 'C:\\Wallpapers\\nebula.png',
         }),
@@ -346,10 +346,10 @@ describe('SettingsPanel', () => {
         quickNav: { items: [] },
         appearance: {
           skin: {
-            presetId: 'midnight',
+            presetId: 'obsidian',
             kind: 'image',
             imagePath: 'C:\\Wallpapers\\nebula.png',
-            gradient: 'radial-gradient(circle at 16% 14%, rgba(182, 106, 255, 0.32), transparent 30%), radial-gradient(circle at 82% 20%, rgba(104, 110, 255, 0.20), transparent 28%), linear-gradient(140deg, #090611 0%, #171126 50%, #0c0716 100%)',
+            gradient: 'linear-gradient(135deg, #0b0d11 0%, #1b1f27 58%, #090b0e 100%)',
             dim: 0.16,
             blur: 0,
             motion: 'none',
@@ -365,15 +365,15 @@ describe('SettingsPanel', () => {
     );
 
     await user.click(screen.getByRole('tab', { name: '外观' }));
-    await user.click(await screen.findByRole('button', { name: /冷雾极光/ }));
+    await user.click(await screen.findByRole('button', { name: /白昼/ }));
 
     expect(window.electronAPI.updateSettings).toHaveBeenLastCalledWith({
       appearance: expect.objectContaining({
         skin: expect.objectContaining({
-          presetId: 'aurora',
+          presetId: 'paper',
           kind: 'image',
           imagePath: 'C:\\Wallpapers\\nebula.png',
-          gradient: expect.stringContaining('#041417'),
+          gradient: expect.stringContaining('#ffffff'),
         }),
       }),
     });
