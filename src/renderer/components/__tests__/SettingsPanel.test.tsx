@@ -736,6 +736,8 @@ describe('SettingsPanel', () => {
       refreshCatalog: true,
     });
 
+    await user.click(screen.getAllByRole('button', { name: '展开配置和运行时要求' })[1]);
+
     await user.selectOptions(
       screen.getByLabelText('Java Language Support 工作区启用模式'),
       'disabled',
@@ -753,7 +755,6 @@ describe('SettingsPanel', () => {
       enableByDefault: true,
     });
 
-    await user.click(screen.getByText('展开配置和运行时要求'));
     await user.click(screen.getByRole('button', { name: '浏览 Java 21+ Runtime Home' }));
 
     await waitFor(() => {
