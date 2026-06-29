@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "A modern terminal window manager built with Electron",
   "main": "dist/main/index.js",
   "scripts": {

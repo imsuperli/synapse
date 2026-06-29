@@ -100,7 +100,7 @@ Object.defineProperty(window, 'electronAPI', {
   value: {
     platform: 'win32',
     ping: vi.fn().mockResolvedValue('pong'),
-    getAppVersion: vi.fn().mockResolvedValue({ success: true, data: { name: 'Synapse', version: '1.1.1' } }),
+    getAppVersion: vi.fn().mockResolvedValue({ success: true, data: { name: 'Synapse', version: '3.1.1' } }),
     createWindow: vi.fn().mockResolvedValue({}),
     createSSHWindow: vi.fn().mockResolvedValue({ success: true, data: {} }),
     killTerminal: vi.fn().mockResolvedValue(undefined),
