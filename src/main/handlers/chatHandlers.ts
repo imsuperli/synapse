@@ -1,39 +1,27 @@
 /**
- * Chat IPC Handlers
- * 负责 LLM 流式调用、工具执行和安全审批流程
+ * Lightweight Chat IPC handlers.
+ *
+ * Full chat-pane conversations use the structured agent runtime
+ * (`agent-send`). This file only keeps standalone text completion for
+ * terminal selection helpers and Mini Ask.
  */
 
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import { HandlerContext } from './HandlerContext';
 import { successResponse, errorResponse } from './HandlerResponse';
 import { ChatService } from '../services/chat/ChatService';
-import { ToolExecutor } from '../services/chat/ToolExecutor';
-import { resolveToolApprovalDecision } from '../services/chat/ToolApprovalPolicy';
 import {
   chatDebugError,
-  chatDebugInfo,
-  chatDebugWarn,
   getChatDebugLogFilePath,
   previewText,
 } from '../utils/chatDebugLog';
-import { resolveLLMProviderWireApi } from '../../shared/utils/chatProvider';
 import type {
-  ChatMessage,
   ChatCompleteTextRequest,
+  ChatMessage,
   ChatSendRequest,
-  ChatExecuteToolRequest,
-  ChatToolApprovalResponse,
-  ToolCall,
-  ToolResult,
   LLMProviderConfig,
 } from '../../shared/types/chat';
-
-/** 每个 paneId 的流取消控制器 */
-const activeStreams = new Map<string, AbortController>();
-
-/** 等待工具审批的 resolver，key = paneId:toolCallId */
-const pendingApprovals = new Map<string, (approved: boolean) => void>();
 
 let chatService: ChatService | null = null;
 
@@ -44,29 +32,10 @@ function getChatService(): ChatService {
   return chatService;
 }
 
-function getToolExecutor(ctx: HandlerContext): ToolExecutor | null {
-  if (!ctx.processManager) {
-    return null;
-  }
-  return new ToolExecutor(ctx.processManager);
-}
-
-const MAX_TOOL_LOOP_ROUNDS = 4;
-const CHAT_ENVIRONMENT_DETAILS_MAX_CHARS = 4000;
-const CHAT_ENVIRONMENT_PROBE_COMMAND = [
-  'printf "[host]\\n"; hostname 2>/dev/null || true',
-  'printf "\\n[user]\\n"; id -un 2>/dev/null || whoami 2>/dev/null || true',
-  'printf "\\n[cwd]\\n"; pwd 2>/dev/null || true',
-  'printf "\\n[shell]\\n"; printf "%s\\n" "${SHELL:-unknown}"',
-  'printf "\\n[kernel]\\n"; uname -a 2>/dev/null || true',
-  'printf "\\n[os-release]\\n"; if [ -r /etc/os-release ]; then cat /etc/os-release; else echo "unavailable"; fi',
-].join('; ');
-
-/** 从 workspace settings 中查找 provider 配置 */
 async function resolveProvider(ctx: HandlerContext, providerId: string): Promise<LLMProviderConfig | null> {
   const workspace = ctx.getCurrentWorkspace?.();
   const providers = workspace?.settings?.chat?.providers ?? [];
-  const provider = providers.find((p) => p.id === providerId) ?? null;
+  const provider = providers.find((item) => item.id === providerId) ?? null;
 
   if (!provider) {
     return null;
@@ -77,11 +46,6 @@ async function resolveProvider(ctx: HandlerContext, providerId: string): Promise
     ...provider,
     apiKey: vaultApiKey ?? provider.apiKey,
   };
-}
-
-/** 获取当前 BrowserWindow */
-function getWindow(ctx: HandlerContext): BrowserWindow | null {
-  return ctx.getMainWindow?.() ?? ctx.mainWindow ?? null;
 }
 
 function resolveDefaultProviderId(ctx: HandlerContext): string | null {
@@ -161,65 +125,6 @@ function normalizeCompleteTextRequest(request: unknown): ChatCompleteTextRequest
   };
 }
 
-function getApprovalKey(paneId: string, toolCallId: string): string {
-  return `${paneId}:${toolCallId}`;
-}
-
-function isCommandSecurityEnabled(ctx: HandlerContext): boolean {
-  return ctx.getCurrentWorkspace?.()?.settings?.chat?.enableCommandSecurity ?? true;
-}
-
-function summarizeProvider(provider: LLMProviderConfig): Record<string, unknown> {
-  return {
-    id: provider.id,
-    type: provider.type,
-    name: provider.name,
-    baseUrl: provider.baseUrl ?? null,
-    wireApi: resolveLLMProviderWireApi(provider),
-    hasApiKey: provider.apiKey.trim().length > 0,
-    defaultModel: provider.defaultModel,
-  };
-}
-
-function summarizeRequest(request: Pick<ChatSendRequest, 'paneId' | 'windowId' | 'providerId' | 'model' | 'messages' | 'enableTools' | 'sshContext'>): Record<string, unknown> {
-  const lastMessage = request.messages.at(-1);
-
-  return {
-    paneId: request.paneId,
-    windowId: request.windowId,
-    providerId: request.providerId,
-    model: request.model,
-    enableTools: request.enableTools === true,
-    messageCount: request.messages.length,
-    lastMessage: lastMessage
-      ? {
-          role: lastMessage.role,
-          hasToolCalls: Boolean(lastMessage.toolCalls?.length),
-          hasToolResult: Boolean(lastMessage.toolResult),
-          contentPreview: previewText(lastMessage.content, 240),
-        }
-      : null,
-    sshContext: request.sshContext
-      ? {
-          host: request.sshContext.host,
-          user: request.sshContext.user,
-          cwd: request.sshContext.cwd ?? null,
-          windowId: request.sshContext.windowId,
-          paneId: request.sshContext.paneId,
-        }
-      : null,
-  };
-}
-
-function summarizeToolCall(toolCall: ToolCall): Record<string, unknown> {
-  return {
-    id: toolCall.id,
-    name: toolCall.name,
-    status: toolCall.status,
-    params: toolCall.params,
-  };
-}
-
 function formatChatErrorForRenderer(error: string): string {
   const logFilePath = getChatDebugLogFilePath();
   return error.includes(logFilePath)
@@ -227,43 +132,7 @@ function formatChatErrorForRenderer(error: string): string {
     : `${error} 调试日志：${logFilePath}`;
 }
 
-function truncateEnvironmentDetails(content: string): string {
-  const trimmed = content.trim();
-  if (trimmed.length <= CHAT_ENVIRONMENT_DETAILS_MAX_CHARS) {
-    return trimmed;
-  }
-
-  return `${trimmed.slice(0, CHAT_ENVIRONMENT_DETAILS_MAX_CHARS)}\n\n[environment details truncated]`;
-}
-
-async function collectEnvironmentDetails(
-  request: ChatSendRequest,
-  toolExecutor: ToolExecutor | null,
-): Promise<string | undefined> {
-  if (!request.sshContext || !toolExecutor) {
-    return undefined;
-  }
-
-  const probeToolCall: ToolCall = {
-    id: `chat-env-probe-${uuidv4()}`,
-    name: 'execute_command',
-    params: {
-      command: CHAT_ENVIRONMENT_PROBE_COMMAND,
-      requires_approval: false,
-    },
-    status: 'pending',
-  };
-
-  const result = await toolExecutor.execute(probeToolCall, request.sshContext);
-  if (result.isError) {
-    return `环境探测失败：${result.content}`;
-  }
-
-  return truncateEnvironmentDetails(result.content);
-}
-
 export function registerChatHandlers(ctx: HandlerContext) {
-
   ipcMain.handle('chat-complete-text', async (_event, rawRequest: unknown) => {
     const request = normalizeCompleteTextRequest(rawRequest);
     try {
@@ -344,477 +213,6 @@ export function registerChatHandlers(ctx: HandlerContext) {
         error,
       });
       return errorResponse(new Error(formatChatErrorForRenderer(error instanceof Error ? error.message : String(error))));
-    }
-  });
-
-  /**
-   * chat-send: 启动 LLM 流式调用
-   * 返回 { messageId } 用于后续 chunk/done/error 事件的关联
-   */
-  ipcMain.handle('chat-send', async (_event, request: ChatSendRequest) => {
-    try {
-      const { paneId } = request;
-      const messageId = uuidv4();
-
-      chatDebugInfo('chat-send', 'Received chat send request', summarizeRequest(request));
-
-      // 取消已有流
-      const existing = activeStreams.get(paneId);
-      if (existing) {
-        existing.abort();
-        activeStreams.delete(paneId);
-        chatDebugInfo('chat-send', 'Cancelled existing stream before starting a new one', {
-          paneId,
-        });
-      }
-
-      const provider = await resolveProvider(ctx, request.providerId);
-      if (!provider) {
-        chatDebugWarn('chat-send', 'Provider not found', {
-          paneId,
-          providerId: request.providerId,
-        });
-        return errorResponse(new Error(formatChatErrorForRenderer(`Provider not found: ${request.providerId}`)));
-      }
-
-      chatDebugInfo('chat-send', 'Resolved provider for chat request', {
-        paneId,
-        provider: summarizeProvider(provider),
-      });
-
-      // 注入 provider 到 request（ChatService 通过 _provider 读取）
-      const enrichedRequest = { ...request, _provider: provider };
-
-      const abortController = new AbortController();
-      activeStreams.set(paneId, abortController);
-
-      const win = getWindow(ctx);
-      const toolExecutor = getToolExecutor(ctx);
-      const environmentDetails = await collectEnvironmentDetails(request, toolExecutor);
-
-      // 异步执行流，立即返回 messageId
-      runChatStream({ ...enrichedRequest, environmentDetails }, messageId, abortController, win, toolExecutor, ctx);
-
-      return successResponse({ messageId });
-    } catch (error) {
-      chatDebugError('chat-send', 'chat-send handler failed', {
-        request: summarizeRequest(request),
-        error,
-      });
-      return errorResponse(new Error(formatChatErrorForRenderer(error instanceof Error ? error.message : String(error))));
-    }
-  });
-
-  /**
-   * chat-cancel: 取消正在进行的流
-   */
-  ipcMain.handle('chat-cancel', async (_event, { paneId }: { paneId: string }) => {
-    try {
-      const controller = activeStreams.get(paneId);
-      if (controller) {
-        controller.abort();
-        activeStreams.delete(paneId);
-        chatDebugInfo('chat-cancel', 'Cancelled active chat stream', { paneId });
-      }
-      return successResponse(undefined);
-    } catch (error) {
-      chatDebugError('chat-cancel', 'chat-cancel handler failed', {
-        paneId,
-        error,
-      });
-      return errorResponse(new Error(formatChatErrorForRenderer(error instanceof Error ? error.message : String(error))));
-    }
-  });
-
-  /**
-   * chat-execute-tool: 直接执行工具（用于 renderer 主动触发）
-   */
-  ipcMain.handle('chat-execute-tool', async (_event, request: ChatExecuteToolRequest) => {
-    try {
-      chatDebugInfo('chat-execute-tool', 'Received direct tool execution request', {
-        paneId: request.paneId,
-        windowId: request.windowId,
-        toolCall: summarizeToolCall(request.toolCall),
-        sshContext: request.sshContext
-          ? {
-              host: request.sshContext.host,
-              user: request.sshContext.user,
-              cwd: request.sshContext.cwd ?? null,
-              windowId: request.sshContext.windowId,
-              paneId: request.sshContext.paneId,
-            }
-          : null,
-      });
-
-      const toolExecutor = getToolExecutor(ctx);
-      if (!toolExecutor) {
-        return errorResponse(new Error(formatChatErrorForRenderer('ProcessManager unavailable')));
-      }
-
-      if (!request.sshContext) {
-        return errorResponse(new Error(formatChatErrorForRenderer('SSH context required for tool execution')));
-      }
-
-      const result = await toolExecutor.execute(request.toolCall, request.sshContext);
-      return successResponse(result);
-    } catch (error) {
-      chatDebugError('chat-execute-tool', 'chat-execute-tool handler failed', {
-        paneId: request.paneId,
-        toolCall: summarizeToolCall(request.toolCall),
-        error,
-      });
-      return errorResponse(new Error(formatChatErrorForRenderer(error instanceof Error ? error.message : String(error))));
-    }
-  });
-
-  /**
-   * chat-respond-tool-approval: 用户审批危险命令的响应
-   */
-  ipcMain.on('chat-respond-tool-approval', (_event, response: ChatToolApprovalResponse) => {
-    chatDebugInfo('chat-respond-tool-approval', 'Received tool approval response', response);
-    const approvalKey = getApprovalKey(response.paneId, response.toolCallId);
-    const resolver = pendingApprovals.get(approvalKey);
-    if (resolver) {
-      pendingApprovals.delete(approvalKey);
-      resolver(response.approved);
-    }
-  });
-}
-
-/**
- * 异步运行 LLM 流，处理工具调用循环
- */
-async function runChatStream(
-  request: ChatSendRequest & { _provider: LLMProviderConfig },
-  messageId: string,
-  abortController: AbortController,
-  win: BrowserWindow | null,
-  toolExecutor: ToolExecutor | null,
-  ctx: HandlerContext,
-): Promise<void> {
-  const { paneId } = request;
-  const service = getChatService();
-  const commandSecurityEnabled = isCommandSecurityEnabled(ctx);
-
-  let roundMessageId = messageId;
-  const conversationMessages = [...request.messages];
-
-  for (let round = 0; round < MAX_TOOL_LOOP_ROUNDS && !abortController.signal.aborted; round += 1) {
-    chatDebugInfo('runChatStream', 'Starting stream round', {
-      paneId,
-      messageId: roundMessageId,
-      round: round + 1,
-      provider: summarizeProvider(request._provider),
-      model: request.model,
-      messageCount: conversationMessages.length,
-    });
-
-    let toolCalls: ToolCall[] | undefined;
-    let fullContent = '';
-    let streamFailed = false;
-
-    await service.streamChat(
-      {
-        ...request,
-        messages: conversationMessages,
-      },
-      {
-        onChunk: (chunk) => {
-          win?.webContents.send('chat-stream-chunk', { paneId, chunk, messageId: roundMessageId });
-        },
-        onDone: (nextFullContent, calls) => {
-          fullContent = nextFullContent;
-          toolCalls = calls;
-          chatDebugInfo('runChatStream', 'Stream round completed', {
-            paneId,
-            messageId: roundMessageId,
-            round: round + 1,
-            fullContentLength: nextFullContent.length,
-            fullContentPreview: previewText(nextFullContent, 240),
-            toolCalls: calls?.map((toolCall) => summarizeToolCall(toolCall)) ?? [],
-          });
-          win?.webContents.send('chat-stream-done', {
-            paneId,
-            messageId: roundMessageId,
-            fullContent: nextFullContent,
-            toolCalls: calls,
-            isFinal: !calls?.length,
-          });
-        },
-        onError: (error) => {
-          streamFailed = true;
-          const frontendError = formatChatErrorForRenderer(error);
-          chatDebugError('runChatStream', 'Stream round failed', {
-            paneId,
-            messageId: roundMessageId,
-            round: round + 1,
-            error,
-            frontendError,
-          });
-          win?.webContents.send('chat-stream-error', { paneId, error: frontendError });
-          activeStreams.delete(paneId);
-        },
-      },
-      abortController.signal,
-    );
-
-    if (streamFailed || abortController.signal.aborted) {
-      activeStreams.delete(paneId);
-      return;
-    }
-
-    conversationMessages.push({
-      id: roundMessageId,
-      role: 'assistant',
-      content: fullContent,
-      timestamp: new Date().toISOString(),
-      toolCalls,
-    });
-
-    if (!toolCalls?.length) {
-      chatDebugInfo('runChatStream', 'Conversation completed without further tool calls', {
-        paneId,
-        messageId: roundMessageId,
-        round: round + 1,
-      });
-      activeStreams.delete(paneId);
-      return;
-    }
-
-    const toolResultMessages = await executeToolCalls(
-      {
-        paneId,
-        toolCalls,
-        request,
-        win,
-        toolExecutor,
-        commandSecurityEnabled,
-        abortSignal: abortController.signal,
-      },
-    );
-
-    conversationMessages.push(...toolResultMessages);
-    roundMessageId = uuidv4();
-  }
-
-  if (!abortController.signal.aborted) {
-    chatDebugWarn('runChatStream', 'Exceeded maximum tool loop rounds', {
-      paneId,
-      maxRounds: MAX_TOOL_LOOP_ROUNDS,
-    });
-    win?.webContents.send('chat-stream-error', {
-      paneId,
-      error: formatChatErrorForRenderer('工具调用轮数超过限制，已停止继续执行'),
-    });
-  }
-
-  activeStreams.delete(paneId);
-}
-
-async function executeToolCalls({
-  paneId,
-  toolCalls,
-  request,
-  win,
-  toolExecutor,
-  commandSecurityEnabled,
-  abortSignal,
-}: {
-  paneId: string;
-  toolCalls: ToolCall[];
-  request: ChatSendRequest & { _provider: LLMProviderConfig };
-  win: BrowserWindow | null;
-  toolExecutor: ToolExecutor | null;
-  commandSecurityEnabled: boolean;
-  abortSignal: AbortSignal;
-}): Promise<ChatMessage[]> {
-  const toolResultMessages: ChatMessage[] = [];
-
-  for (const toolCall of toolCalls) {
-    if (abortSignal.aborted) {
-      break;
-    }
-
-    const result = await executeToolCall({
-      paneId,
-      toolCall,
-      request,
-      win,
-      toolExecutor,
-      commandSecurityEnabled,
-      abortSignal,
-    });
-
-    toolResultMessages.push({
-      id: `tool-result-${toolCall.id}`,
-      role: 'user',
-      content: '',
-      timestamp: new Date().toISOString(),
-      toolResult: {
-        toolCallId: result.toolCallId,
-        content: result.content,
-        isError: result.isError,
-      },
-    });
-  }
-
-  return toolResultMessages;
-}
-
-async function executeToolCall({
-  paneId,
-  toolCall,
-  request,
-  win,
-  toolExecutor,
-  commandSecurityEnabled,
-  abortSignal,
-}: {
-  paneId: string;
-  toolCall: ToolCall;
-  request: ChatSendRequest;
-  win: BrowserWindow | null;
-  toolExecutor: ToolExecutor | null;
-  commandSecurityEnabled: boolean;
-  abortSignal: AbortSignal;
-}): Promise<ToolResult> {
-  chatDebugInfo('executeToolCall', 'Preparing tool call execution', {
-    paneId,
-    toolCall: summarizeToolCall(toolCall),
-    hasSshContext: Boolean(request.sshContext),
-  });
-
-  if (toolCall.name === 'execute_command') {
-    const approvalDecision = resolveToolApprovalDecision(toolCall, {
-      commandSecurityEnabled,
-    });
-
-    chatDebugInfo('executeToolCall', 'Resolved command approval policy', {
-      paneId,
-      toolCallId: toolCall.id,
-      action: approvalDecision.action,
-      reason: approvalDecision.reason ?? null,
-    });
-
-    if (approvalDecision.action === 'block') {
-      const result: ToolResult = {
-        toolCallId: toolCall.id,
-        content: `命令被安全策略阻止：${approvalDecision.reason ?? '匹配高危规则'}`,
-        isError: true,
-      };
-      chatDebugWarn('executeToolCall', 'Blocked tool call by security policy', {
-        paneId,
-        result,
-      });
-      win?.webContents.send('chat-tool-result', { paneId, ...result });
-      return result;
-    }
-
-    if (approvalDecision.action === 'ask') {
-      const approved = await requestToolApproval(
-        win,
-        paneId,
-        approvalDecision.reason
-          ? {
-            ...toolCall,
-            reason: approvalDecision.reason,
-          }
-          : toolCall,
-        abortSignal,
-      );
-      if (!approved) {
-        const result: ToolResult = {
-          toolCallId: toolCall.id,
-          content: '用户拒绝了该命令的执行',
-          isError: true,
-        };
-        chatDebugWarn('executeToolCall', 'User rejected tool call execution', {
-          paneId,
-          result,
-        });
-        win?.webContents.send('chat-tool-result', { paneId, ...result });
-        return result;
-      }
-    }
-  }
-
-  if (!request.sshContext || !toolExecutor) {
-    const result: ToolResult = {
-      toolCallId: toolCall.id,
-      content: '无 SSH 上下文，工具执行需要 SSH 连接',
-      isError: true,
-    };
-    chatDebugWarn('executeToolCall', 'Tool execution failed before dispatch because SSH context is missing', {
-      paneId,
-      toolCall: summarizeToolCall(toolCall),
-      hasToolExecutor: Boolean(toolExecutor),
-    });
-    win?.webContents.send('chat-tool-result', { paneId, ...result });
-    return result;
-  }
-
-  const result = await toolExecutor.execute(toolCall, request.sshContext);
-  chatDebugInfo('executeToolCall', 'Tool call execution completed', {
-    paneId,
-    toolCallId: toolCall.id,
-    isError: result.isError ?? false,
-    contentPreview: previewText(result.content, 240),
-  });
-  win?.webContents.send('chat-tool-result', { paneId, ...result });
-  return result;
-}
-
-/**
- * 发送审批请求给 renderer，等待用户响应
- */
-function requestToolApproval(
-  win: BrowserWindow | null,
-  paneId: string,
-  toolCall: ToolCall,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const approvalKey = getApprovalKey(paneId, toolCall.id);
-    let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-
-    const cleanup = () => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      pendingApprovals.delete(approvalKey);
-      signal?.removeEventListener('abort', handleAbort);
-    };
-
-    const finish = (approved: boolean) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanup();
-      resolve(approved);
-    };
-
-    const handleAbort = () => {
-      finish(false);
-    };
-
-    pendingApprovals.set(approvalKey, finish);
-    chatDebugInfo('requestToolApproval', 'Waiting for renderer approval', {
-      paneId,
-      toolCall: summarizeToolCall(toolCall),
-    });
-    win?.webContents.send('chat-tool-approval-request', { paneId, toolCall });
-
-    // 超时 5 分钟自动拒绝
-    timeout = setTimeout(() => {
-      finish(false);
-    }, 5 * 60 * 1000);
-
-    signal?.addEventListener('abort', handleAbort, { once: true });
-    if (signal?.aborted) {
-      handleAbort();
     }
   });
 }

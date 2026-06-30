@@ -633,47 +633,9 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.removeListener('agent-task-error', callback);
   },
 
-  // Chat AI
-  chatSend: (request: unknown) =>
-    ipcRenderer.invoke('chat-send', request),
-  chatCancel: (config: { paneId: string }) =>
-    ipcRenderer.invoke('chat-cancel', config),
+  // Lightweight Chat completion helpers
   chatCompleteText: (request: unknown) =>
     ipcRenderer.invoke('chat-complete-text', request),
-  chatExecuteTool: (request: unknown) =>
-    ipcRenderer.invoke('chat-execute-tool', request),
-  chatRespondToolApproval: (response: unknown) =>
-    ipcRenderer.send('chat-respond-tool-approval', response),
-  onChatStreamChunk: (callback) => {
-    ipcRenderer.on('chat-stream-chunk', callback);
-  },
-  offChatStreamChunk: (callback) => {
-    ipcRenderer.removeListener('chat-stream-chunk', callback);
-  },
-  onChatStreamDone: (callback) => {
-    ipcRenderer.on('chat-stream-done', callback);
-  },
-  offChatStreamDone: (callback) => {
-    ipcRenderer.removeListener('chat-stream-done', callback);
-  },
-  onChatStreamError: (callback) => {
-    ipcRenderer.on('chat-stream-error', callback);
-  },
-  offChatStreamError: (callback) => {
-    ipcRenderer.removeListener('chat-stream-error', callback);
-  },
-  onChatToolApprovalRequest: (callback) => {
-    ipcRenderer.on('chat-tool-approval-request', callback);
-  },
-  offChatToolApprovalRequest: (callback) => {
-    ipcRenderer.removeListener('chat-tool-approval-request', callback);
-  },
-  onChatToolResult: (callback) => {
-    ipcRenderer.on('chat-tool-result', callback);
-  },
-  offChatToolResult: (callback) => {
-    ipcRenderer.removeListener('chat-tool-result', callback);
-  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

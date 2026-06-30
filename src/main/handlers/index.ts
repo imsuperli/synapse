@@ -74,7 +74,7 @@ export function registerAllHandlers(ctx: HandlerContext) {
   // 窗口组管理 (create-group, delete-group, archive-group, etc.)
   registerGroupHandlers(ctx);
 
-  // Chat AI 对话 (chat-send, chat-cancel, chat-execute-tool)
+  // Lightweight Chat completion helpers
   registerChatHandlers(ctx);
 
   // Structured agent runtime

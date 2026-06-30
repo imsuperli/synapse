@@ -15,19 +15,10 @@ import type {
   AgentTaskStatePayload,
 } from './agent';
 import type {
-  ChatSendRequest,
-  ChatStreamChunkPayload,
-  ChatStreamDonePayload,
-  ChatStreamErrorPayload,
-  ChatToolResultPayload,
-  ChatToolApprovalRequestPayload,
-  ChatToolApprovalResponse,
-  ChatExecuteToolRequest,
   ChatCompleteTextRequest,
   ChatCompleteTextResult,
   RestoreAggregatedSessionRequest,
   RestoreAggregatedSessionResult,
-  ToolResult,
   ChatSettings,
   ChatProviderValidationRequest,
   ChatProviderValidationResult,
@@ -2012,19 +2003,5 @@ export interface ElectronAPI {
   offAgentTaskState: (callback: ElectronEventHandler<AgentTaskStatePayload>) => void;
   onAgentTaskError: (callback: ElectronEventHandler<AgentTaskErrorPayload>) => void;
   offAgentTaskError: (callback: ElectronEventHandler<AgentTaskErrorPayload>) => void;
-  chatSend: (request: ChatSendRequest) => Promise<IpcResponse<{ messageId: string }>>;
-  chatCancel: (config: { paneId: string }) => Promise<IpcResponse<void>>;
   chatCompleteText: (request: ChatCompleteTextRequest) => Promise<IpcResponse<ChatCompleteTextResult>>;
-  chatExecuteTool: (request: ChatExecuteToolRequest) => Promise<IpcResponse<ToolResult>>;
-  chatRespondToolApproval: (response: ChatToolApprovalResponse) => void;
-  onChatStreamChunk: (callback: ElectronEventHandler<ChatStreamChunkPayload>) => void;
-  offChatStreamChunk: (callback: ElectronEventHandler<ChatStreamChunkPayload>) => void;
-  onChatStreamDone: (callback: ElectronEventHandler<ChatStreamDonePayload>) => void;
-  offChatStreamDone: (callback: ElectronEventHandler<ChatStreamDonePayload>) => void;
-  onChatStreamError: (callback: ElectronEventHandler<ChatStreamErrorPayload>) => void;
-  offChatStreamError: (callback: ElectronEventHandler<ChatStreamErrorPayload>) => void;
-  onChatToolApprovalRequest: (callback: ElectronEventHandler<ChatToolApprovalRequestPayload>) => void;
-  offChatToolApprovalRequest: (callback: ElectronEventHandler<ChatToolApprovalRequestPayload>) => void;
-  onChatToolResult: (callback: ElectronEventHandler<ChatToolResultPayload>) => void;
-  offChatToolResult: (callback: ElectronEventHandler<ChatToolResultPayload>) => void;
 }

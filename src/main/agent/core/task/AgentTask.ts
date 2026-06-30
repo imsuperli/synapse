@@ -34,7 +34,10 @@ import { resolveToolApprovalDecision } from '../../../services/chat/ToolApproval
 import { ChatService } from '../../../services/chat/ChatService';
 import { ToolExecutor } from '../../../services/chat/ToolExecutor';
 import { previewText } from '../../../utils/chatDebugLog';
-import { ContextManager } from '../context/ContextManager';
+import {
+  ContextManager,
+  type ContextSummaryInput,
+} from '../context/ContextManager';
 import { parseAssistantSections } from '../assistant-message';
 import { buildAgentSystemPrompt } from '../prompts/system';
 import type { RemoteTerminalManager, RemoteCommandHandle } from '../../integrations/remote-terminal';
@@ -50,6 +53,11 @@ const AGENT_OFFLOAD_DIR = path.join(os.tmpdir(), 'synapse-agent-offload');
 const RUNNING_STATE_SYNC_DEBOUNCE_MS = 80;
 const STREAM_PREVIEW_FLUSH_INTERVAL_MS = 140;
 const STREAM_PREVIEW_MAX_BUFFER_CHARS = 96;
+const CONTEXT_COMPACTION_SYSTEM_PROMPT = [
+  '你正在执行一次上下文检查点压缩，为后续继续对话的模型生成交接摘要。',
+  '摘要必须保留：当前进展和关键决定、用户明确偏好和约束、已经执行过的命令/工具及结果、仍待完成的下一步、继续时必须知道的关键数据或文件路径。',
+  '不要编造没有出现在原始对话里的事实。不要输出寒暄。用中文，结构清晰，尽量压缩但不要丢失排障结论和操作状态。',
+].join('\n');
 type ApprovalResolution = 'approved' | 'rejected' | 'cancelled';
 
 interface AgentTaskDependencies {
@@ -363,19 +371,7 @@ export class AgentTask {
         return;
       }
 
-      const summary = this.contextManager.maybeCompact();
-      if (summary) {
-        this.snapshot.messages = this.contextManager.getMessages();
-        this.appendEvent({
-          id: `context-summary-${Date.now()}`,
-          taskId: this.snapshot.taskId,
-          paneId: this.snapshot.paneId,
-          timestamp: new Date().toISOString(),
-          kind: 'context-summary',
-          status: 'completed',
-          summary,
-        });
-      }
+      await this.maybeCompactContextBeforeTurn();
 
       const toolCalls = await this.performAssistantTurn();
       if (this.isCancelled) {
@@ -397,6 +393,84 @@ export class AgentTask {
 
     this.emitNotice('error', 'Agent exceeded the maximum recursive tool rounds and stopped.');
     this.setStatus('failed');
+  }
+
+  private async maybeCompactContextBeforeTurn(): Promise<void> {
+    const compaction = await this.contextManager.maybeCompact({
+      summarizer: async (input) => this.summarizeContext(input),
+    });
+
+    if (!compaction) {
+      return;
+    }
+
+    this.snapshot.messages = this.contextManager.getMessages();
+    this.appendEvent({
+      id: `context-summary-${Date.now()}`,
+      taskId: this.snapshot.taskId,
+      paneId: this.snapshot.paneId,
+      timestamp: new Date().toISOString(),
+      kind: 'context-summary',
+      status: 'completed',
+      summary: [
+        compaction.summary,
+        '',
+        `[compacted ${compaction.compactedMessageCount} earlier messages; preserved ${compaction.preservedMessageCount} recent messages; estimated tokens ${compaction.estimatedTokensBefore} -> ${compaction.estimatedTokensAfter}${compaction.usedFallback ? '; fallback summary' : ''}]`,
+      ].join('\n'),
+    });
+  }
+
+  private async summarizeContext(input: ContextSummaryInput): Promise<string> {
+    if (!this.latestRequest || !this.currentProvider) {
+      return '';
+    }
+
+    const prompt = [
+      `请把下面较早的对话压缩成不超过约 ${input.maxSummaryTokens} tokens 的上下文检查点摘要。`,
+      '最近两轮用户对话会在摘要后原样保留，所以这里重点总结更早内容中后续仍需要知道的信息。',
+      '',
+      input.transcript,
+    ].join('\n');
+    let fullContent = '';
+    let streamError: string | null = null;
+    const abortController = new AbortController();
+
+    await this.deps.chatService.streamChat(
+      {
+        paneId: `${this.snapshot.paneId}:context-compaction`,
+        windowId: this.snapshot.windowId,
+        messages: [{
+          id: `context-compaction-input-${Date.now()}`,
+          role: 'user',
+          content: prompt,
+          timestamp: new Date().toISOString(),
+        }],
+        providerId: this.currentProvider.id,
+        model: this.snapshot.model,
+        enableTools: false,
+        systemPrompt: CONTEXT_COMPACTION_SYSTEM_PROMPT,
+        systemPromptMode: 'replace',
+        _provider: this.currentProvider,
+      } as Parameters<ChatService['streamChat']>[0] & { _provider: LLMProviderConfig },
+      {
+        onChunk: (chunk) => {
+          fullContent += chunk;
+        },
+        onDone: (content) => {
+          fullContent = content;
+        },
+        onError: (error) => {
+          streamError = error;
+        },
+      },
+      abortController.signal,
+    );
+
+    if (streamError) {
+      throw new Error(streamError);
+    }
+
+    return fullContent;
   }
 
   private async performAssistantTurn(): Promise<ToolCall[] | undefined> {

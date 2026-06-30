@@ -202,59 +202,6 @@ export interface ChatContextFragment {
   content: string;
 }
 
-/** Main → Renderer：流式文本块 */
-export interface ChatStreamChunkPayload {
-  paneId: string;
-  messageId: string;
-  chunk: string;
-}
-
-/** Main → Renderer：流式完成 */
-export interface ChatStreamDonePayload {
-  paneId: string;
-  messageId: string;
-  fullContent: string;
-  /** LLM 输出的工具调用（如有）*/
-  toolCalls?: ToolCall[];
-  /** 当前轮次是否为最终回复 */
-  isFinal?: boolean;
-}
-
-/** Main → Renderer：流式错误 */
-export interface ChatStreamErrorPayload {
-  paneId: string;
-  error: string;
-}
-
-/** Main → Renderer：工具执行结果（自动执行后推送）*/
-export interface ChatToolResultPayload {
-  paneId: string;
-  toolCallId: string;
-  content: string;
-  isError?: boolean;
-}
-
-/** Main → Renderer：请求用户审批危险命令 */
-export interface ChatToolApprovalRequestPayload {
-  paneId: string;
-  toolCall: ToolCall;
-}
-
-/** Renderer → Main：用户审批响应 */
-export interface ChatToolApprovalResponse {
-  paneId: string;
-  toolCallId: string;
-  approved: boolean;
-}
-
-/** Renderer → Main：执行工具（主动触发，用于重试等场景）*/
-export interface ChatExecuteToolRequest {
-  paneId: string;
-  windowId: string;
-  toolCall: ToolCall;
-  sshContext?: ChatSshContext;
-}
-
 export type ChatCompletionPurpose =
   | 'terminal-selection-translate'
   | 'terminal-selection-explain'
