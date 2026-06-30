@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRespondApprovalRequest, AgentSendRequest, AgentTaskSnapshot } from '../../../../../shared/types/agent';
-import type { LLMProviderConfig, ToolCall } from '../../../../../shared/types/chat';
+import type { ChatMessage, LLMProviderConfig, ToolCall } from '../../../../../shared/types/chat';
 import { AgentTask } from '../task/AgentTask';
 
 function flush(): Promise<void> {
@@ -59,6 +59,22 @@ function createProvider(): LLMProviderConfig {
     apiKey: 'sk-ant-test',
     models: ['model-1'],
     defaultModel: 'model-1',
+  };
+}
+
+function createProviderWithContextWindow(contextWindowTokens: number): LLMProviderConfig {
+  return {
+    ...createProvider(),
+    contextWindowTokens,
+  };
+}
+
+function chatMessage(id: string, role: ChatMessage['role'], content: string): ChatMessage {
+  return {
+    id,
+    role,
+    content,
+    timestamp: `2026-04-12T00:00:${id.padStart(2, '0')}.000Z`,
   };
 }
 
@@ -423,5 +439,77 @@ describe('AgentTask', () => {
     if (cancelledToolCall?.kind === 'tool-call') {
       expect(cancelledToolCall.toolCall.status).toBe('error');
     }
+  });
+
+  it('compacts oversized context before the assistant turn using a tool-free summary request', async () => {
+    const seedMessages = [
+      chatMessage('1', 'user', 'first user request ' + 'x'.repeat(1_000)),
+      chatMessage('2', 'assistant', 'first assistant answer ' + 'x'.repeat(1_000)),
+      chatMessage('3', 'user', 'second user request ' + 'x'.repeat(1_000)),
+      chatMessage('4', 'assistant', 'second assistant answer ' + 'x'.repeat(1_000)),
+      chatMessage('5', 'user', 'third user request must stay'),
+      chatMessage('6', 'assistant', 'third assistant answer must stay'),
+    ];
+    const deps = createDeps();
+    vi.mocked(deps.chatService.streamChat)
+      .mockImplementationOnce(async (request, callbacks) => {
+        expect(request.enableTools).toBe(false);
+        expect(request.systemPromptMode).toBe('replace');
+        expect(request.messages[0]?.content).toContain('请把下面较早的对话压缩');
+        callbacks.onDone('summary from model', []);
+      })
+      .mockImplementationOnce(async (request, callbacks) => {
+        expect(request.enableTools).toBe(true);
+        expect(request.messages.map((message) => message.content)).toEqual([
+          'CONTEXT CHECKPOINT SUMMARY\nsummary from model',
+          'third user request must stay',
+          'third assistant answer must stay',
+          'new request',
+        ]);
+        callbacks.onDone('final answer', []);
+      });
+
+    const task = new AgentTask(createSnapshot({ messages: seedMessages }), deps);
+    task.start(createRequest('new request'), createProviderWithContextWindow(200));
+    await flush();
+    await flush();
+    await flush();
+
+    expect(deps.chatService.streamChat).toHaveBeenCalledTimes(2);
+    expect(task.getSnapshot().status).toBe('completed');
+    expect(task.getSnapshot().timeline.some((event) => event.kind === 'context-summary')).toBe(true);
+  });
+
+  it('aborts an in-flight context compaction request when the task is cancelled', async () => {
+    const seedMessages = [
+      chatMessage('1', 'user', 'first user request ' + 'x'.repeat(1_000)),
+      chatMessage('2', 'assistant', 'first assistant answer ' + 'x'.repeat(1_000)),
+      chatMessage('3', 'user', 'second user request ' + 'x'.repeat(1_000)),
+      chatMessage('4', 'assistant', 'second assistant answer ' + 'x'.repeat(1_000)),
+      chatMessage('5', 'user', 'third user request must stay'),
+      chatMessage('6', 'assistant', 'third assistant answer must stay'),
+    ];
+    let summarySignal: AbortSignal | undefined;
+    const deps = createDeps();
+    vi.mocked(deps.chatService.streamChat).mockImplementationOnce(async (_request, callbacks, signal) => {
+      summarySignal = signal;
+      await new Promise<void>((resolve) => {
+        signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      callbacks.onError('aborted');
+    });
+
+    const task = new AgentTask(createSnapshot({ messages: seedMessages }), deps);
+    task.start(createRequest('new request'), createProviderWithContextWindow(200));
+    await flush();
+
+    task.cancel();
+    await flush();
+    await flush();
+
+    expect(summarySignal?.aborted).toBe(true);
+    expect(deps.chatService.streamChat).toHaveBeenCalledTimes(1);
+    expect(task.getSnapshot().status).toBe('cancelled');
+    expect(task.getSnapshot().timeline.some((event) => event.kind === 'context-summary')).toBe(false);
   });
 });

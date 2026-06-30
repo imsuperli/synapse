@@ -29,6 +29,8 @@ export interface LLMProviderConfig {
   /** 该 provider 支持的模型列表 */
   models: string[];
   defaultModel: string;
+  /** 可选：该 provider/model 使用的上下文窗口 token 数，用于 agent 自动压缩阈值 */
+  contextWindowTokens?: number;
 }
 
 export interface ChatSettings {

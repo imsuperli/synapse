@@ -142,4 +142,65 @@ describe('ContextManager', () => {
       'second protected answer',
     ]);
   });
+
+  it('pre-truncates the summarizer transcript when the compacted history exceeds the input budget', async () => {
+    const messages = [
+      message('1', 'user', 'first user request'),
+      message('2', 'assistant', 'old assistant answer '.repeat(1_000)),
+      message('3', 'user', 'second user request'),
+      message('4', 'assistant', 'middle assistant answer '.repeat(1_000)),
+      message('5', 'user', 'third user request must stay'),
+      message('6', 'assistant', 'third assistant answer must stay'),
+      message('7', 'user', 'fourth user request must stay'),
+      message('8', 'assistant', 'fourth assistant answer must stay'),
+    ];
+    const summarizer = vi.fn().mockResolvedValue('compressed older context');
+    const manager = new ContextManager(messages);
+
+    const result = await manager.maybeCompact({
+      force: true,
+      maxSummaryInputTokens: 220,
+      summarizer,
+    });
+
+    expect(result?.summaryInputTruncated).toBe(true);
+    const input = summarizer.mock.calls[0]?.[0];
+    expect(input.transcriptTruncated).toBe(true);
+    expect(input.transcriptEstimatedTokens).toBeLessThanOrEqual(220);
+    expect(input.transcript.length).toBeLessThan(messages.slice(0, 4).map((item) => item.content).join('\n').length);
+  });
+
+  it('can compact a long single user turn while preserving the user request and recent messages', async () => {
+    const messages = [
+      message('1', 'user', 'single long-running request must stay'),
+      message('2', 'assistant', 'old tool planning'),
+      message('3', 'user', 'tool result one'),
+      message('4', 'assistant', 'tool follow-up'),
+      message('5', 'user', 'tool result two'),
+      message('6', 'assistant', 'recent assistant state must stay'),
+      message('7', 'user', 'recent tool result must stay'),
+    ];
+    messages[2].toolResult = { toolCallId: 'tool-1', content: 'tool result one' };
+    messages[4].toolResult = { toolCallId: 'tool-2', content: 'tool result two' };
+    messages[6].toolResult = { toolCallId: 'tool-3', content: 'recent tool result must stay' };
+    const summarizer = vi.fn().mockResolvedValue('compressed current turn tool history');
+    const manager = new ContextManager(messages);
+
+    const result = await manager.maybeCompact({
+      force: true,
+      preserveRecentMessages: 2,
+      summarizer,
+    });
+
+    expect(result).toMatchObject({
+      compactedMessageCount: 4,
+      preservedMessageCount: 3,
+    });
+    expect(manager.getMessages().map((item) => item.content)).toEqual([
+      'single long-running request must stay',
+      'CONTEXT CHECKPOINT SUMMARY\ncompressed current turn tool history',
+      'recent assistant state must stay',
+      'recent tool result must stay',
+    ]);
+  });
 });
