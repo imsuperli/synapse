@@ -583,6 +583,49 @@ describe('TerminalPane resize on resume', () => {
     expect(terminal.buffer.active.viewportY).toBe(250);
   });
 
+  it('preserves the current bottom during focus recovery when output grew while already at the bottom', async () => {
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]).toBeDefined();
+    });
+    await waitForTerminalMountResizeSettle();
+
+    const terminal = terminalInstances[0]!;
+    terminal.buffer.active.baseY = 240;
+    terminal.buffer.active.viewportY = 240;
+    terminalScrollCallbacks.forEach((callback) => callback(240));
+
+    window.dispatchEvent(new Event('blur'));
+
+    terminal.buffer.active.baseY = 250;
+    terminal.buffer.active.viewportY = 250;
+    terminal.scrollToLine.mockClear();
+    fitAddonInstances[0]?.fit.mockClear();
+
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      expect(fitAddonInstances[0]?.fit).toHaveBeenCalled();
+    });
+    expect(terminal.scrollToLine).not.toHaveBeenCalled();
+    expect(terminal.buffer.active.viewportY).toBe(250);
+  });
+
   it('recovers a stale render surface on scroll without fitting or resizing the PTY', async () => {
     render(
       <TerminalPane

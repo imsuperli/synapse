@@ -938,7 +938,17 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   }, [rememberTerminalViewportY]);
 
   const preserveTerminalViewportY = useCallback((terminal: Terminal, run: () => void) => {
-    const viewportYToPreserve = lastKnownViewportYRef.current ?? readTerminalViewportY(terminal);
+    const lastKnownViewportY = lastKnownViewportYRef.current;
+    const lastKnownBaseY = lastKnownBaseYRef.current;
+    const currentBaseY = readTerminalBaseY(terminal);
+    const viewportYToPreserve = (
+      lastKnownViewportY !== null
+      && lastKnownBaseY !== null
+      && lastKnownViewportY >= lastKnownBaseY
+      && currentBaseY !== null
+    )
+      ? currentBaseY
+      : lastKnownViewportY ?? readTerminalViewportY(terminal);
 
     isRestoringViewportRef.current = true;
     try {
@@ -973,6 +983,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     const terminal = terminalRef.current;
     const container = terminalContainerRef.current;
     if (!terminal || !container || !isVisibleTerminalContainer(container)) {
+      return;
+    }
+
+    if (!terminalRenderSurfaceNeedsRecovery(terminal)) {
       return;
     }
 
