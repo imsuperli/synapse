@@ -20,6 +20,7 @@ type MockTerminalInstance = {
   refresh: ReturnType<typeof vi.fn>;
   scrollToLine: ReturnType<typeof vi.fn>;
   onScroll: ReturnType<typeof vi.fn>;
+  textarea: HTMLTextAreaElement | null;
   cols: number;
   rows: number;
   buffer: {
@@ -56,7 +57,15 @@ vi.mock('@xterm/xterm', () => ({
     const instance = {
       loadAddon: vi.fn(),
       registerLinkProvider: vi.fn(() => ({ dispose: vi.fn() })),
-      open: vi.fn(),
+      open: vi.fn((container?: HTMLElement) => {
+        if (!container || instance.textarea) {
+          return;
+        }
+
+        const textarea = document.createElement('textarea');
+        instance.textarea = textarea;
+        container.appendChild(textarea);
+      }),
       focus: vi.fn(),
       blur: vi.fn(),
       dispose: vi.fn(),
@@ -74,6 +83,7 @@ vi.mock('@xterm/xterm', () => ({
         instance.buffer.active.viewportY = line;
         terminalScrollCallbacks.forEach((callback) => callback(line));
       }),
+      textarea: null,
       attachCustomKeyEventHandler: vi.fn(),
       options: {},
       cols: 120,
@@ -493,6 +503,161 @@ describe('TerminalPane resize on resume', () => {
       expect(terminal.scrollToLine).toHaveBeenCalledWith(120);
     });
     expect(terminal.buffer.active.viewportY).toBe(120);
+  });
+
+  it('preserves the terminal viewport when focus recovery briefly jumps to the bottom', async () => {
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]).toBeDefined();
+    });
+    await waitForTerminalMountResizeSettle();
+
+    const terminal = terminalInstances[0]!;
+    terminal.buffer.active.baseY = 240;
+    terminal.buffer.active.viewportY = 120;
+    terminalScrollCallbacks.forEach((callback) => callback(120));
+    terminal.scrollToLine.mockClear();
+
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
+
+    terminal.buffer.active.viewportY = 240;
+    terminalScrollCallbacks.forEach((callback) => callback(240));
+
+    await waitFor(() => {
+      expect(terminal.scrollToLine).toHaveBeenCalledWith(120);
+    });
+    expect(terminal.buffer.active.viewportY).toBe(120);
+  });
+
+  it('continues following the bottom when output grows while the viewport was already at the bottom', async () => {
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]).toBeDefined();
+    });
+    await waitForTerminalMountResizeSettle();
+
+    const terminal = terminalInstances[0]!;
+    terminal.buffer.active.baseY = 240;
+    terminal.buffer.active.viewportY = 240;
+    terminalScrollCallbacks.forEach((callback) => callback(240));
+    terminal.scrollToLine.mockClear();
+
+    window.dispatchEvent(new Event('blur'));
+
+    terminal.buffer.active.baseY = 250;
+    terminal.buffer.active.viewportY = 250;
+    terminalScrollCallbacks.forEach((callback) => callback(250));
+
+    expect(terminal.scrollToLine).not.toHaveBeenCalled();
+    expect(terminal.buffer.active.viewportY).toBe(250);
+  });
+
+  it('recovers a stale render surface on scroll without fitting or resizing the PTY', async () => {
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(window.electronAPI.ptyResize).toHaveBeenCalled();
+    });
+    await waitForTerminalMountResizeSettle();
+
+    const terminal = terminalInstances[0]!;
+    const renderService = terminal._core._renderService;
+    renderService._isPaused = true;
+    renderService._needsFullRefresh = true;
+    renderService._pausedResizeTask.flush.mockClear();
+    renderService.handleResize.mockClear();
+    renderService.handleDevicePixelRatioChange.mockClear();
+    renderService.refreshRows.mockClear();
+    terminal.refresh.mockClear();
+    fitAddonInstances[0]?.fit.mockClear();
+    vi.mocked(window.electronAPI.ptyResize).mockClear();
+
+    terminalScrollCallbacks.forEach((callback) => callback(24));
+
+    await waitFor(() => {
+      expect(renderService._isPaused).toBe(false);
+      expect(renderService._needsFullRefresh).toBe(false);
+      expect(renderService._pausedResizeTask.flush).toHaveBeenCalledTimes(1);
+      expect(renderService.handleResize).toHaveBeenCalledWith(120, 40);
+      expect(renderService.handleDevicePixelRatioChange).toHaveBeenCalledTimes(1);
+      expect(renderService.refreshRows).toHaveBeenCalledWith(0, 39, true);
+      expect(terminal.refresh).toHaveBeenCalledWith(0, 39);
+    });
+    expect(fitAddonInstances[0]?.fit).not.toHaveBeenCalled();
+    expect(window.electronAPI.ptyResize).not.toHaveBeenCalled();
+  });
+
+  it('focuses the helper textarea without allowing focus to scroll the viewport', async () => {
+    const { container } = render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.textarea).toBeInstanceOf(HTMLTextAreaElement);
+    });
+
+    const textarea = terminalInstances[0]!.textarea!;
+    const focusSpy = vi.spyOn(textarea, 'focus');
+    fireEvent.click(container.querySelector('[data-terminal-input-region="true"]')!);
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it('does not recover a hidden terminal viewport when the app regains focus', async () => {

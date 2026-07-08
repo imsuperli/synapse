@@ -185,6 +185,11 @@ function readTerminalViewportY(terminal: Terminal): number | null {
   return typeof viewportY === 'number' && Number.isFinite(viewportY) ? viewportY : null;
 }
 
+function readTerminalBaseY(terminal: Terminal): number | null {
+  const baseY = terminal.buffer?.active?.baseY;
+  return typeof baseY === 'number' && Number.isFinite(baseY) ? baseY : null;
+}
+
 function restoreTerminalViewportY(terminal: Terminal, viewportY: number | null): void {
   if (viewportY === null || !Number.isFinite(viewportY)) {
     return;
@@ -399,6 +404,15 @@ type TerminalWithRenderService = Terminal & {
   };
 };
 
+function getTerminalRenderService(terminal: Terminal): TerminalRenderServiceRecovery | undefined {
+  return (terminal as TerminalWithRenderService)._core?._renderService;
+}
+
+function terminalRenderSurfaceNeedsRecovery(terminal: Terminal): boolean {
+  const renderService = getTerminalRenderService(terminal);
+  return Boolean(renderService?._isPaused || renderService?._needsFullRefresh);
+}
+
 function resetTerminalKeyboardProtocolState(terminal: Terminal): void {
   applyTerminalKeyboardProtocolState(terminal, {
     applicationCursorKeysMode: false,
@@ -460,7 +474,7 @@ function recoverTerminalRenderSurface(terminal: Terminal): void {
     return;
   }
 
-  const renderService = (terminal as TerminalWithRenderService)._core?._renderService;
+  const renderService = getTerminalRenderService(terminal);
   if (!renderService) {
     refreshTerminalViewport(terminal);
     return;
@@ -754,6 +768,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const resizeFrameRef = useRef<number | null>(null);
   const repaintFrameRef = useRef<number | null>(null);
   const repaintTimerRef = useRef<number | null>(null);
+  const staleRenderRecoveryFrameRef = useRef<number | null>(null);
   const lastContainerSizeRef = useRef({ width: 0, height: 0 });
   const lastSyncedTerminalSizeRef = useRef({ cols: 0, rows: 0 });
   const isActiveRef = useRef(isActive); // 使用 ref 跟踪 isActive 状态
@@ -776,6 +791,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const liveOsc8GuardRef = useRef(createTerminalOsc8Guard());
   const replayOsc8GuardRef = useRef(createTerminalOsc8Guard());
   const lastKnownViewportYRef = useRef<number | null>(null);
+  const lastKnownBaseYRef = useRef<number | null>(null);
   const isWindowFocusedRef = useRef(typeof document === 'undefined' ? true : document.hasFocus());
   const isRestoringViewportRef = useRef(false);
   const isVisibleSurfaceRecoveryPendingRef = useRef(false);
@@ -843,7 +859,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
         const textarea = terminalContainerRef.current?.querySelector('textarea');
         if (textarea instanceof HTMLElement && typeof textarea.focus === 'function') {
-          textarea.focus();
+          textarea.focus({ preventScroll: true });
         }
       } catch (error) {
         console.error(`[TerminalPane] Error focusing pane ${pane.id}:`, error);
@@ -879,16 +895,28 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     const lastKnownViewportY = lastKnownViewportYRef.current;
-    if (
-      (!isWindowFocusedRef.current || isVisibleSurfaceRecoveryPendingRef.current)
-      && viewportY === 0
-      && (lastKnownViewportY ?? 0) > 0
-    ) {
-      const terminal = terminalRef.current;
+    const hasLastKnownViewportY = lastKnownViewportY !== null && Number.isFinite(lastKnownViewportY);
+    const savedViewportY = hasLastKnownViewportY ? lastKnownViewportY : null;
+    const terminal = terminalRef.current;
+    const baseY = terminal ? readTerminalBaseY(terminal) : null;
+    const lastKnownBaseY = lastKnownBaseYRef.current;
+    const lastKnownWasAtBottom = (
+      savedViewportY !== null
+      && lastKnownBaseY !== null
+      && savedViewportY >= lastKnownBaseY
+    );
+    const isUnexpectedRecoveryJump = savedViewportY !== null
+      && (!isWindowFocusedRef.current || isVisibleSurfaceRecoveryPendingRef.current)
+      && (
+        (viewportY === 0 && savedViewportY > 0)
+        || (baseY !== null && viewportY === baseY && savedViewportY < baseY && !lastKnownWasAtBottom)
+      );
+
+    if (isUnexpectedRecoveryJump) {
       if (terminal && isVisibleSurfaceRecoveryPendingRef.current) {
         isRestoringViewportRef.current = true;
         try {
-          restoreTerminalViewportY(terminal, lastKnownViewportY);
+          restoreTerminalViewportY(terminal, savedViewportY);
         } finally {
           isRestoringViewportRef.current = false;
         }
@@ -897,6 +925,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     lastKnownViewportYRef.current = viewportY;
+    lastKnownBaseYRef.current = baseY;
   }, []);
 
   const captureCurrentTerminalViewportY = useCallback(() => {
@@ -939,6 +968,36 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       recoverTerminalRenderSurface(terminal);
     });
   }, [preserveTerminalViewportY, syncPtySize]);
+
+  const scheduleStaleRenderSurfaceRecovery = useCallback(() => {
+    const terminal = terminalRef.current;
+    const container = terminalContainerRef.current;
+    if (!terminal || !container || !isVisibleTerminalContainer(container)) {
+      return;
+    }
+
+    if (staleRenderRecoveryFrameRef.current !== null) {
+      return;
+    }
+
+    staleRenderRecoveryFrameRef.current = requestAnimationFrame(() => {
+      staleRenderRecoveryFrameRef.current = null;
+
+      const currentTerminal = terminalRef.current;
+      const currentContainer = terminalContainerRef.current;
+      if (!currentTerminal || !currentContainer || !isVisibleTerminalContainer(currentContainer)) {
+        return;
+      }
+
+      if (!terminalRenderSurfaceNeedsRecovery(currentTerminal)) {
+        return;
+      }
+
+      preserveTerminalViewportY(currentTerminal, () => {
+        recoverTerminalRenderSurface(currentTerminal);
+      });
+    });
+  }, [preserveTerminalViewportY]);
 
   const scheduleVisibleTerminalRepaint = useCallback((options?: { delayed?: boolean }) => {
     const scheduleFrame = (clearRecoveryPending: boolean) => {
@@ -1550,6 +1609,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
       lastKnownViewportYRef.current = null;
+      lastKnownBaseYRef.current = null;
       terminalRef.current?.reset();
     }
 
@@ -1828,6 +1888,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       const guardedData = liveOsc8GuardRef.current.sanitize(data);
       if (guardedData) {
         currentTerminal.write(guardedData);
+        scheduleStaleRenderSurfaceRecovery();
       }
     };
 
@@ -2224,6 +2285,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     });
     const scrollDisposable = terminal.onScroll((viewportY) => {
       rememberTerminalViewportY(viewportY);
+      scheduleStaleRenderSurfaceRecovery();
     });
 
     const unsubscribePtyData = subscribeToPanePtyData(windowId, pane.id, queueLiveOutput, {
@@ -2282,6 +2344,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         window.clearTimeout(repaintTimerRef.current);
         repaintTimerRef.current = null;
       }
+      if (staleRenderRecoveryFrameRef.current !== null) {
+        cancelAnimationFrame(staleRenderRecoveryFrameRef.current);
+        staleRenderRecoveryFrameRef.current = null;
+      }
       isVisibleSurfaceRecoveryPendingRef.current = false;
 
       clearQueuedOutput();
@@ -2306,6 +2372,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     handleTerminalLinkLeave,
     hideSelectionAiOverlay,
     rememberTerminalViewportY,
+    scheduleStaleRenderSurfaceRecovery,
     showSelectionAiOverlay,
     syncPtySize,
     suppressFocusReportsForWindowTransition,
