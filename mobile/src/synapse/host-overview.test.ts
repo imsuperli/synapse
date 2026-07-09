@@ -10,6 +10,7 @@ vi.mock('../transport/rpc-client', () => ({
 }))
 
 import {
+  canCreateWindow,
   canUseWindowList,
   flattenTerminalPanes,
   loadHostOverviewData
@@ -72,6 +73,7 @@ describe('Synapse Mobile host overview data', () => {
     await expect(loadHostOverviewData(client)).resolves.toMatchObject({
       mode: 'terminals',
       deviceScope: 'mobile.control',
+      canCreateWindow: false,
       terminals: [{ windowId: 'w1', paneId: 'p1' }]
     })
     expect(client.sendRequest).not.toHaveBeenCalledWith('window.list', expect.anything())
@@ -87,7 +89,10 @@ describe('Synapse Mobile host overview data', () => {
       'remote.capabilities': {
         id: 'rpc-2',
         ok: true,
-        result: { protocolVersion: 1, methods: ['window.list', 'pane.list', 'terminal.list'] }
+        result: {
+          protocolVersion: 1,
+          methods: ['window.create', 'window.list', 'pane.list', 'terminal.list']
+        }
       },
       'window.list': {
         id: 'rpc-3',
@@ -128,6 +133,7 @@ describe('Synapse Mobile host overview data', () => {
     await expect(loadHostOverviewData(client)).resolves.toMatchObject({
       mode: 'windows',
       deviceScope: 'mobile.window-control',
+      canCreateWindow: true,
       windows: [{ windowId: 'w1', name: 'Workspace' }],
       terminals: [{ windowId: 'w1', paneId: 'p1', pid: 8 }]
     })
@@ -139,6 +145,8 @@ describe('Synapse Mobile host overview data', () => {
     expect(canUseWindowList('mobile.control', ['window.list'])).toBe(false)
     expect(canUseWindowList('mobile.window-control', [])).toBe(false)
     expect(canUseWindowList('mobile.admin', ['window.list'])).toBe(true)
+    expect(canCreateWindow('mobile.control', ['window.create'])).toBe(false)
+    expect(canCreateWindow('mobile.window-control', ['window.create'])).toBe(true)
   })
 
   it('flattens running and stopped terminal panes into terminal routes', () => {

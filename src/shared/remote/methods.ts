@@ -13,6 +13,7 @@ export const REMOTE_METHODS = {
   DEVICE_LIST: 'device.list',
   DEVICE_REVOKE: 'device.revoke',
   WINDOW_LIST: 'window.list',
+  WINDOW_CREATE: 'window.create',
   WINDOW_ACTIVATE: 'window.activate',
   WINDOW_START: 'window.start',
   WINDOW_CLOSE: 'window.close',
@@ -48,6 +49,7 @@ const MOBILE_CONTROL_METHODS = new Set<string>([
 const MOBILE_WINDOW_CONTROL_METHODS = new Set<string>([
   ...MOBILE_CONTROL_METHODS,
   REMOTE_METHODS.WINDOW_LIST,
+  REMOTE_METHODS.WINDOW_CREATE,
   REMOTE_METHODS.WINDOW_START,
   REMOTE_METHODS.WINDOW_ACTIVATE,
   REMOTE_METHODS.WINDOW_CLOSE,

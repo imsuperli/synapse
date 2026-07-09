@@ -431,6 +431,7 @@ describe('RemoteDispatcher', () => {
     const stateProvider = {
       listWindows: vi.fn(),
       listPanes: vi.fn(),
+      createWindow: vi.fn(),
     };
     const harness = createHarness('mobile.control', { stateProvider });
 
@@ -463,6 +464,7 @@ describe('RemoteDispatcher', () => {
           },
         ],
       })),
+      createWindow: vi.fn(),
       startWindow: vi.fn(),
     };
     const harness = createHarness('mobile.window-control', { stateProvider });
@@ -509,6 +511,7 @@ describe('RemoteDispatcher', () => {
     const stateProvider = {
       listWindows: vi.fn(),
       listPanes: vi.fn(),
+      createWindow: vi.fn(),
       startWindow: vi.fn(() => ({
         window: {
           windowId: 'win-1',
@@ -546,6 +549,47 @@ describe('RemoteDispatcher', () => {
     });
   });
 
+  it('creates a local terminal window through the state provider for window-control devices', async () => {
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      startWindow: vi.fn(),
+      createWindow: vi.fn(() => ({
+        window: {
+          windowId: 'win-created',
+          name: 'Mobile Shell',
+          panes: [],
+        },
+        pane: {
+          windowId: 'win-created',
+          paneId: 'pane-created',
+          kind: 'terminal',
+          running: true,
+        },
+      })),
+    };
+    const harness = createHarness('mobile.window-control', { stateProvider });
+
+    const response = await dispatch(harness, REMOTE_METHODS.WINDOW_CREATE, {
+      name: 'Mobile Shell',
+      workingDirectory: '/repo',
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        pane: {
+          windowId: 'win-created',
+          paneId: 'pane-created',
+        },
+      },
+    });
+    expect(stateProvider.createWindow).toHaveBeenCalledWith({
+      name: 'Mobile Shell',
+      workingDirectory: '/repo',
+    });
+  });
+
   it('does not advertise window methods when no state provider is registered', async () => {
     const harness = createHarness('mobile.window-control');
 
@@ -568,6 +612,7 @@ describe('RemoteDispatcher', () => {
     const stateProvider = {
       listWindows: vi.fn(() => ({ windows: [] })),
       listPanes: vi.fn(() => ({ panes: [] })),
+      createWindow: vi.fn(),
       startWindow: vi.fn(),
     };
     const readHarness = createHarness('mobile.read', { stateProvider });

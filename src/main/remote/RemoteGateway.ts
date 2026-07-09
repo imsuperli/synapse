@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'crypto';
 import WebSocket, { type RawData } from 'ws';
 import type { ProcessManager } from '../services/ProcessManager';
 import type { Workspace } from '../types/workspace';
+import type { Window } from '../../shared/types/window';
 import { WindowStatus } from '../../shared/types/window';
 import type { RemoteDeviceScope } from '../../shared/remote/methods';
 import { PathValidator } from '../utils/pathValidator';
@@ -39,6 +40,7 @@ type RemoteGatewayOptions = {
   onPaneData?: (payload: { windowId: string; paneId: string; data: string; seq?: number }) => void;
   onPanePtySubscription?: (paneId: string, unsubscribe: () => void) => void;
   onLocalPaneStarted?: (payload: { windowId: string; workingDirectory: string }) => void | Promise<void>;
+  onRemoteWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
   transportOptions?: Partial<RemoteWebSocketTransportOptions>;
 };
 
@@ -68,6 +70,7 @@ export class RemoteGateway {
   private readonly onPaneData: ((payload: { windowId: string; paneId: string; data: string; seq?: number }) => void) | undefined;
   private readonly onPanePtySubscription: ((paneId: string, unsubscribe: () => void) => void) | undefined;
   private readonly onLocalPaneStarted: ((payload: { windowId: string; workingDirectory: string }) => void | Promise<void>) | undefined;
+  private readonly onRemoteWindowCreated: ((payload: { window: Window; workspace: Workspace }) => void | Promise<void>) | undefined;
   private readonly settingsStore: RemoteSettingsStore;
   private readonly deviceRegistry: RemoteDeviceRegistry;
   private readonly keypair: RemoteE2EEKeypair;
@@ -92,6 +95,7 @@ export class RemoteGateway {
     this.onPaneData = options.onPaneData;
     this.onPanePtySubscription = options.onPanePtySubscription;
     this.onLocalPaneStarted = options.onLocalPaneStarted;
+    this.onRemoteWindowCreated = options.onRemoteWindowCreated;
     this.settingsStore = new RemoteSettingsStore(this.userDataPath);
     this.deviceRegistry = new RemoteDeviceRegistry(this.userDataPath);
     this.keypair = loadOrCreateRemoteKeypair(this.userDataPath);
@@ -100,6 +104,7 @@ export class RemoteGateway {
           getCurrentWorkspace: options.getCurrentWorkspace,
           processManager: this.processManager,
           startLocalTerminalPane: (params) => this.startLocalTerminalPane(params),
+          onWindowCreated: (payload) => this.onRemoteWindowCreated?.(payload),
         })
       : undefined;
     this.dispatcher = new RemoteDispatcher({
@@ -153,7 +158,7 @@ export class RemoteGateway {
     command?: string;
     initialCols?: number;
     initialRows?: number;
-  }): Promise<{ pid: number; sessionId: string; status: WindowStatus }> {
+  }): Promise<{ pid: number; sessionId: string; status: WindowStatus; command: string }> {
     const pathValidation = PathValidator.validate(params.workingDirectory);
     if (!pathValidation.valid) {
       throw new Error(`Invalid working directory: ${pathValidation.reason}`);
@@ -208,6 +213,7 @@ export class RemoteGateway {
       pid: handle.pid,
       sessionId: handle.sessionId,
       status: WindowStatus.WaitingForInput,
+      command: shellCommand,
     };
   }
 

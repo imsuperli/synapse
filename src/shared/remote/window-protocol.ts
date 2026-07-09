@@ -43,6 +43,11 @@ export type WindowStartResult = {
   startedPanes: RemotePaneSummary[];
 };
 
+export type WindowCreateResult = {
+  window: RemoteWindowSummary;
+  pane: RemotePaneSummary;
+};
+
 export const WindowListParamsSchema = z.object({
   includeArchived: z.boolean().optional(),
   terminalOnly: z.boolean().optional(),
@@ -57,6 +62,14 @@ export const PaneListParamsSchema = z.object({
 export const WindowStartParamsSchema = z.object({
   windowId: z.string().min(1),
   paneId: z.string().min(1).optional(),
+  initialCols: z.number().int().min(1).max(1000).optional(),
+  initialRows: z.number().int().min(1).max(1000).optional(),
+}).strict();
+
+export const WindowCreateParamsSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  workingDirectory: z.string().trim().min(1).optional(),
+  command: z.string().trim().min(1).max(500).optional(),
   initialCols: z.number().int().min(1).max(1000).optional(),
   initialRows: z.number().int().min(1).max(1000).optional(),
 }).strict();

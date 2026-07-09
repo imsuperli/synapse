@@ -189,8 +189,94 @@ describe('RemoteStateProvider', () => {
         pid: 222,
         sessionId: 'session-222',
         status: WindowStatus.WaitingForInput,
+        command: 'bash',
       },
     });
+  });
+
+  it('creates a new local terminal window and reports it through the mobile summary shape', async () => {
+    const workspace = createWorkspace();
+    const processes: Array<{
+      windowId: string;
+      paneId: string;
+      pid: number;
+      sessionId: string;
+      status: ProcessStatus;
+    }> = [];
+    const startLocalTerminalPane = vi.fn(async (params) => {
+      processes.push({
+        windowId: params.windowId,
+        paneId: params.paneId,
+        pid: 333,
+        sessionId: 'session-333',
+        status: ProcessStatus.Alive,
+      });
+      return {
+        pid: 333,
+        sessionId: 'session-333',
+        status: WindowStatus.WaitingForInput,
+        command: params.command || 'bash',
+      };
+    });
+    const onWindowCreated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => processes) } as any,
+      startLocalTerminalPane,
+      onWindowCreated,
+    });
+
+    const result = await provider.createWindow({ name: 'Mobile Shell', workingDirectory: '/repo' });
+
+    expect(startLocalTerminalPane).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Mobile Shell',
+        workingDirectory: '/repo',
+      }),
+    );
+    expect(result.window).toMatchObject({
+      name: 'Mobile Shell',
+      terminalPaneCount: 1,
+    });
+    expect(result.pane).toMatchObject({
+      running: true,
+      pid: 333,
+      sessionId: 'session-333',
+      cwd: '/repo',
+      command: 'bash',
+    });
+    expect(workspace.windows.at(-1)).toMatchObject({
+      name: 'Mobile Shell',
+      layout: {
+        pane: {
+          cwd: '/repo',
+          pid: 333,
+          sessionId: 'session-333',
+          command: 'bash',
+        },
+      },
+    });
+    expect(onWindowCreated).toHaveBeenCalledWith({
+      window: workspace.windows.at(-1),
+      workspace,
+    });
+  });
+
+  it('rolls back the inserted window when remote window creation fails', async () => {
+    const workspace = createWorkspace();
+    const originalWindowCount = workspace.windows.length;
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      startLocalTerminalPane: vi.fn(async () => {
+        throw new Error('spawn_failed');
+      }),
+    });
+
+    await expect(provider.createWindow({ workingDirectory: '/repo' })).rejects.toThrow(
+      'spawn_failed',
+    );
+    expect(workspace.windows).toHaveLength(originalWindowCount);
   });
 
   it('rejects starting stopped SSH panes from the mobile remote path', async () => {

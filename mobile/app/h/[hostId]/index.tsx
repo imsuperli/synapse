@@ -6,12 +6,14 @@ import {
   RefreshControl,
   StyleSheet,
   Text,
+  TextInput,
   View
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Layers, Play, RotateCw, Settings, TerminalSquare } from 'lucide-react-native'
+import { Layers, Play, Plus, RotateCw, Search, Settings, TerminalSquare } from 'lucide-react-native'
 import {
   connectToHost,
+  createRemoteWindow,
   loadHostById,
   startRemoteWindow,
   type RemotePaneSummary,
@@ -19,6 +21,11 @@ import {
   type RemoteWindowSummary
 } from '../../../src/synapse/remote'
 import { loadHostOverviewData } from '../../../src/synapse/host-overview'
+import {
+  filterTerminals,
+  filterWindows,
+  normalizeTerminalSearchQuery
+} from '../../../src/synapse/terminal-search'
 import type { RpcClient } from '../../../src/transport/rpc-client'
 import type { ConnectionLogEntry, ConnectionState, HostProfile } from '../../../src/transport/types'
 import { colors, radii, spacing, typography } from '../../../src/theme/mobile-theme'
@@ -151,19 +158,35 @@ export default function HostOverviewScreen() {
   const [terminals, setTerminals] = useState<RemoteTerminalSummary[]>([])
   const [windows, setWindows] = useState<RemoteWindowSummary[]>([])
   const [overviewMode, setOverviewMode] = useState<'terminals' | 'windows'>('terminals')
+  const [canCreateWindow, setCanCreateWindow] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [creatingWindow, setCreatingWindow] = useState(false)
   const [startingPaneKey, setStartingPaneKey] = useState<string | null>(null)
   const clientRef = useRef<RpcClient | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
 
+  const normalizedSearchQuery = useMemo(
+    () => normalizeTerminalSearchQuery(searchQuery),
+    [searchQuery]
+  )
+  const visibleWindows = useMemo(
+    () => filterWindows(windows, normalizedSearchQuery),
+    [normalizedSearchQuery, windows]
+  )
+  const visibleTerminals = useMemo(
+    () => filterTerminals(terminals, normalizedSearchQuery),
+    [normalizedSearchQuery, terminals]
+  )
   const overviewItems = useMemo<OverviewItem[]>(
     () =>
       overviewMode === 'windows'
-        ? windows.map((window) => ({ type: 'window', window }))
-        : terminals.map((terminal) => ({ type: 'terminal', terminal })),
-    [overviewMode, terminals, windows]
+        ? visibleWindows.map((window) => ({ type: 'window', window }))
+        : visibleTerminals.map((terminal) => ({ type: 'terminal', terminal })),
+    [overviewMode, visibleTerminals, visibleWindows]
   )
+  const hasSearchQuery = normalizedSearchQuery.length > 0
 
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-80)
@@ -183,6 +206,7 @@ export default function HostOverviewScreen() {
     setTerminals([])
     setWindows([])
     setOverviewMode('terminals')
+    setCanCreateWindow(false)
     setStartingPaneKey(null)
     try {
       const loadedHost = await loadHostById(hostId)
@@ -200,6 +224,7 @@ export default function HostOverviewScreen() {
       clientRef.current = client
       const overview = await loadHostOverviewData(client)
       setOverviewMode(overview.mode)
+      setCanCreateWindow(overview.canCreateWindow)
       setWindows(overview.windows)
       setTerminals(
         overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
@@ -280,6 +305,48 @@ export default function HostOverviewScreen() {
     [hostId, router]
   )
 
+  const handleCreateWindow = useCallback(async () => {
+    if (!canCreateWindow) {
+      setError(t('overview.createUnavailable'))
+      return
+    }
+    const client = clientRef.current
+    if (!client) {
+      setError(t('overview.notConnected'))
+      return
+    }
+    setCreatingWindow(true)
+    setError(null)
+    try {
+      const result = await createRemoteWindow(client)
+      setWindows((current) => [result.window, ...current.filter((window) => window.windowId !== result.window.windowId)])
+      setTerminals((current) => [
+        {
+          windowId: result.pane.windowId,
+          paneId: result.pane.paneId,
+          sessionId: result.pane.sessionId ?? `${result.pane.windowId}:${result.pane.paneId}`,
+          pid: result.pane.pid ?? 0,
+          backend: result.pane.backend ?? 'local',
+          status: result.pane.running ? 'alive' : 'exited',
+          workingDirectory: result.pane.cwd ?? '',
+          command: result.pane.command ?? undefined
+        },
+        ...current.filter(
+          (terminal) =>
+            terminal.windowId !== result.pane.windowId || terminal.paneId !== result.pane.paneId
+        )
+      ])
+      setOverviewMode('windows')
+      router.push(
+        `/h/${hostId}/t/${encodeURIComponent(result.pane.windowId)}/${encodeURIComponent(result.pane.paneId)}`
+      )
+    } catch (err) {
+      setError(t('overview.createFailed', { message: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setCreatingWindow(false)
+    }
+  }, [canCreateWindow, hostId, router, t])
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -290,6 +357,21 @@ export default function HostOverviewScreen() {
           </Text>
         </View>
         <View style={styles.headerActions}>
+          <Pressable
+            style={[
+              styles.iconButton,
+              (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
+            ]}
+            disabled={creatingWindow}
+            onPress={() => void handleCreateWindow()}
+            accessibilityLabel={t('overview.newTerminal')}
+          >
+            {creatingWindow ? (
+              <ActivityIndicator color={colors.textPrimary} />
+            ) : (
+              <Plus size={18} color={colors.textPrimary} />
+            )}
+          </Pressable>
           <Pressable style={styles.iconButton} onPress={() => void loadAndConnect()}>
             <RotateCw size={18} color={colors.textPrimary} />
           </Pressable>
@@ -318,6 +400,21 @@ export default function HostOverviewScreen() {
       <Text style={styles.sectionTitle}>
         {overviewMode === 'windows' ? t('overview.windowsTitle') : t('overview.terminalsTitle')}
       </Text>
+      <View style={styles.searchBox}>
+        <Search size={16} color={colors.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder={t('overview.searchPlaceholder')}
+          placeholderTextColor={colors.textMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          clearButtonMode="while-editing"
+          selectionColor={colors.accentBlue}
+        />
+      </View>
       <FlatList
         data={overviewItems}
         keyExtractor={(item) =>
@@ -341,14 +438,16 @@ export default function HostOverviewScreen() {
             <Text style={styles.emptyTitle}>
               {refreshing
                 ? t('overview.loadingTerminals')
-                : overviewMode === 'windows'
-                  ? t('overview.emptyTitle')
+                : hasSearchQuery
+                  ? t('overview.emptySearchTitle')
                   : t('overview.emptyTitle')}
             </Text>
             <Text style={styles.emptyText}>
-              {overviewMode === 'windows'
-                ? t('overview.emptyWindowsText')
-                : t('overview.emptyTerminalsText')}
+              {hasSearchQuery
+                ? t('overview.emptySearchText')
+                : overviewMode === 'windows'
+                  ? t('overview.emptyWindowsText')
+                  : t('overview.emptyTerminalsText')}
             </Text>
           </View>
         }
@@ -573,6 +672,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
+  iconButtonDisabled: {
+    opacity: 0.52
+  },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -605,6 +707,24 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 16,
     fontWeight: '700'
+  },
+  searchBox: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel,
+    borderRadius: radii.input,
+    paddingHorizontal: spacing.md
+  },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textPrimary,
+    fontSize: typography.bodySize,
+    paddingVertical: spacing.sm
   },
   list: {
     gap: spacing.sm

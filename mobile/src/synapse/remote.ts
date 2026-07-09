@@ -5,6 +5,7 @@ import type { RemoteDeviceScope } from '../../../src/shared/remote/methods'
 import type {
   RemotePaneSummary,
   RemoteWindowSummary,
+  WindowCreateResult,
   WindowStartResult
 } from '../../../src/shared/remote/window-protocol'
 import { WindowStatus, type PaneBackend, type PaneKind, type WindowKind } from '../../../src/shared/types/window'
@@ -13,6 +14,7 @@ export type {
   RemoteDeviceScope,
   RemotePaneSummary,
   RemoteWindowSummary,
+  WindowCreateResult,
   WindowStartResult
 }
 
@@ -142,6 +144,14 @@ export async function startRemoteWindow(
     throw new Error(response.error.message)
   }
   return parseWindowStartResult(response.result)
+}
+
+export async function createRemoteWindow(client: RpcClient): Promise<WindowCreateResult> {
+  const response = await client.sendRequest('window.create', {})
+  if (!response.ok) {
+    throw new Error(response.error.message)
+  }
+  return parseWindowCreateResult(response.result)
 }
 
 export async function requestTerminalHistory(
@@ -302,6 +312,22 @@ export function parseWindowStartResult(value: unknown): WindowStartResult {
     window: windows[0]!,
     pane,
     startedPanes
+  }
+}
+
+export function parseWindowCreateResult(value: unknown): WindowCreateResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid window create response')
+  }
+  const result = value as Record<string, unknown>
+  const windows = parseWindowList({ windows: [result.window] })
+  const pane = parseRemotePaneSummary(result.pane)[0] ?? null
+  if (windows.length === 0 || !pane) {
+    throw new Error('Invalid window create response')
+  }
+  return {
+    window: windows[0]!,
+    pane
   }
 }
 

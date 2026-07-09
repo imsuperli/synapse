@@ -608,6 +608,12 @@ if (hasSingleInstanceLock) {
           }
         });
       },
+      onRemoteWindowCreated: ({ workspace }) => {
+        currentWorkspace = workspace;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('workspace-loaded', workspace);
+        }
+      },
     });
     await remoteGateway.startFromSavedSettings().catch((error) => {
       console.error('[Main] Failed to restore remote gateway:', error);

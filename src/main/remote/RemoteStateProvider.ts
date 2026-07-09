@@ -1,8 +1,10 @@
+import { randomUUID } from 'crypto';
 import type { ProcessManager } from '../services/ProcessManager';
 import { ProcessStatus } from '../types/process';
 import type { Workspace } from '../types/workspace';
 import { WindowStatus, type LayoutNode, type Pane, type PaneBackend, type PaneKind, type Window } from '../../shared/types/window';
 import type {
+  WindowCreateResult,
   PaneListResult,
   RemotePaneSummary,
   RemoteWindowSummary,
@@ -21,7 +23,8 @@ type RemoteStateProviderOptions = {
     command?: string;
     initialCols?: number;
     initialRows?: number;
-  }) => Promise<{ pid: number; sessionId: string; status: WindowStatus }>;
+  }) => Promise<{ pid: number; sessionId: string; status: WindowStatus; command?: string }>;
+  onWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
 };
 
 type ListOptions = {
@@ -39,6 +42,14 @@ type LivePaneProcess = {
 type StartWindowOptions = {
   windowId: string;
   paneId?: string;
+  initialCols?: number;
+  initialRows?: number;
+};
+
+type CreateWindowOptions = {
+  name?: string;
+  workingDirectory?: string;
+  command?: string;
   initialCols?: number;
   initialRows?: number;
 };
@@ -138,6 +149,7 @@ export class RemoteStateProvider {
         pane.pid = result.pid;
         pane.sessionId = result.sessionId;
         pane.status = result.status;
+        pane.command = result.command ?? pane.command;
         startedPaneIds.push(pane.id);
       } catch (error) {
         pane.pid = null;
@@ -153,6 +165,82 @@ export class RemoteStateProvider {
       window,
       pane: findResultPane(window, options.paneId ?? targetWindow.activePaneId),
       startedPanes: window.panes.filter((pane) => startedPaneIds.includes(pane.paneId)),
+    };
+  }
+
+  async createWindow(options: CreateWindowOptions = {}): Promise<WindowCreateResult> {
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+
+    const startLocalTerminalPane = this.options.startLocalTerminalPane;
+    if (!startLocalTerminalPane) {
+      throw new Error('remote_window_create_unavailable');
+    }
+
+    const workingDirectory = options.workingDirectory ?? getDefaultWorkingDirectory(workspace);
+    const now = new Date().toISOString();
+    const windowId = randomUUID();
+    const paneId = randomUUID();
+    const windowName = options.name?.trim() || getDefaultWindowName(workingDirectory);
+    const pane: Pane = {
+      id: paneId,
+      cwd: workingDirectory,
+      command: options.command ?? '',
+      status: WindowStatus.Restoring,
+      pid: null,
+      backend: 'local',
+    };
+    const window: Window = {
+      id: windowId,
+      name: windowName,
+      activePaneId: paneId,
+      createdAt: now,
+      lastActiveAt: now,
+      kind: 'local',
+      layout: {
+        type: 'pane',
+        id: paneId,
+        pane,
+      },
+    };
+
+    workspace.windows.push(window);
+
+    try {
+      const result = await startLocalTerminalPane({
+        windowId,
+        paneId,
+        name: windowName,
+        workingDirectory,
+        command: options.command,
+        initialCols: options.initialCols,
+        initialRows: options.initialRows,
+      });
+      pane.pid = result.pid;
+      pane.sessionId = result.sessionId;
+      pane.status = result.status;
+      pane.command = result.command ?? pane.command;
+    } catch (error) {
+      const insertedIndex = workspace.windows.findIndex((item) => item.id === windowId);
+      if (insertedIndex >= 0) {
+        workspace.windows.splice(insertedIndex, 1);
+      }
+      throw error;
+    }
+
+    await this.options.onWindowCreated?.({ window, workspace });
+
+    const livePaneProcesses = this.getLivePaneProcesses();
+    const summary = this.summarizeWindow(window, livePaneProcesses, { terminalOnly: true });
+    const summaryPane = findResultPane(summary, paneId);
+    if (!summaryPane) {
+      throw new Error('created_pane_not_found');
+    }
+    return {
+      window: summary,
+      pane: summaryPane,
     };
   }
 
@@ -256,4 +344,19 @@ function findResultPane(window: RemoteWindowSummary, paneId: string): RemotePane
   return window.panes.find((pane) => pane.paneId === paneId)
     ?? window.panes.find((pane) => pane.kind === 'terminal')
     ?? null;
+}
+
+function getDefaultWorkingDirectory(workspace: Workspace): string {
+  const recentLocalPane = workspace.windows
+    .filter((window) => !window.archived)
+    .sort((a, b) => Date.parse(b.lastActiveAt || b.createdAt) - Date.parse(a.lastActiveAt || a.createdAt))
+    .flatMap((window) => collectPanes(window.layout))
+    .find((pane) => getPaneKind(pane) === 'terminal' && getPaneBackend(pane, 'terminal') === 'local' && pane.cwd);
+  return recentLocalPane?.cwd || process.cwd();
+}
+
+function getDefaultWindowName(workingDirectory: string): string {
+  const normalized = workingDirectory.replace(/[\\/]+$/, '');
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) || 'Terminal';
 }

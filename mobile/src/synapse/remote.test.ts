@@ -12,6 +12,8 @@ vi.mock('../transport/rpc-client', () => ({
 import {
   clearTerminal,
   connectToHost,
+  createRemoteWindow,
+  parseWindowCreateResult,
   parseTerminalClearResult,
   parseTerminalHistory,
   parseTerminalList,
@@ -272,6 +274,59 @@ describe('Synapse remote terminal helpers', () => {
       windowId: 'w1',
       paneId: 'p1'
     })
+  })
+
+  it('creates a remote local terminal window through the window.create RPC', async () => {
+    const client = mockClient({
+      id: 'rpc-1',
+      ok: true,
+      result: {
+        window: {
+          windowId: 'w-new',
+          name: 'Mobile Shell',
+          activePaneId: 'p-new',
+          paneCount: 1,
+          terminalPaneCount: 1,
+          panes: [
+            {
+              windowId: 'w-new',
+              paneId: 'p-new',
+              kind: 'terminal',
+              backend: 'local',
+              status: 'waiting',
+              running: true,
+              pid: 44,
+              sessionId: 's-new',
+              cwd: '/repo',
+              command: 'bash'
+            }
+          ]
+        },
+        pane: {
+          windowId: 'w-new',
+          paneId: 'p-new',
+          kind: 'terminal',
+          backend: 'local',
+          status: 'waiting',
+          running: true,
+          pid: 44,
+          sessionId: 's-new',
+          cwd: '/repo',
+          command: 'bash'
+        }
+      }
+    })
+
+    await expect(createRemoteWindow(client)).resolves.toMatchObject({
+      pane: { windowId: 'w-new', paneId: 'p-new', running: true }
+    })
+    expect(client.sendRequest).toHaveBeenCalledWith('window.create', {})
+  })
+
+  it('rejects malformed window create responses', () => {
+    expect(() => parseWindowCreateResult({ window: null, pane: null })).toThrow(
+      'Invalid window create response'
+    )
   })
 
   it('throws RPC error messages from terminal helpers', async () => {

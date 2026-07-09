@@ -20,6 +20,7 @@ import {
 } from '../../shared/remote/terminal-protocol';
 import {
   PaneListParamsSchema,
+  WindowCreateParamsSchema,
   WindowListParamsSchema,
   WindowStartParamsSchema,
 } from '../../shared/remote/window-protocol';
@@ -270,6 +271,14 @@ export class RemoteDispatcher {
         handler: (params) => {
           const typed = WindowStartParamsSchema.parse(params);
           return stateProvider.startWindow(typed);
+        },
+      });
+
+      this.methods.set(REMOTE_METHODS.WINDOW_CREATE, {
+        params: WindowCreateParamsSchema,
+        handler: (params) => {
+          const typed = WindowCreateParamsSchema.parse(params);
+          return stateProvider.createWindow(typed);
         },
       });
 
