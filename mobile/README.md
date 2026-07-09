@@ -64,11 +64,13 @@ The mobile scripts use the local Expo CLI from `mobile/node_modules`. If `mobile
 
 `npm run mobile:android` / `npm run android` launches the app on a connected Android device or emulator. It requires a local Android SDK. If you only need an installable APK and do not have Android Studio installed, use GitHub Actions:
 
-1. Open GitHub > Actions > Mobile.
+1. Open GitHub > Actions > Test Build.
 2. Click `Run workflow`.
-3. Keep `Build a downloadable Android APK artifact` enabled.
-4. When the run finishes, download the `synapse-mobile-android-apk` artifact.
+3. Choose `android` to build only the APK, or `all` to build desktop installers and the APK together.
+4. When the run finishes, download the `android-apk-test` artifact.
 5. Install `synapse-mobile-android.apk` on your Android phone.
+
+The dedicated GitHub > Actions > Mobile workflow can also build the APK manually; its artifact is named `synapse-mobile-android-apk`.
 
 The artifact APK is built by CI with Expo prebuild and Gradle, then signed with the generated debug key from the temporary native project. It is suitable for manual testing, not for Play Store distribution.
 

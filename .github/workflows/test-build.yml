@@ -12,6 +12,7 @@ on:
           - all
           - mac
           - windows
+          - android
   push:
     branches:
       - test-build-*
@@ -21,7 +22,7 @@ permissions:
 
 jobs:
   build-mac:
-    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'mac' }}
+    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'mac' }}
     runs-on: macos-latest
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -52,7 +53,7 @@ jobs:
           retention-days: 7
 
   build-windows:
-    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
+    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -78,4 +79,55 @@ jobs:
         with:
           name: windows-installer-test
           path: release/*.exe
+          retention-days: 7
+
+  build-android:
+    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'android' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.1.12297006"
+
+      - name: Upgrade npm to v11
+        working-directory: ${{ runner.temp }}
+        run: npm install --global npm@11.11.1
+
+      - name: Install desktop dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install mobile dependencies
+        run: npm ci --prefix mobile
+
+      - name: Verify Synapse Mobile identity
+        run: npm run mobile:verify:identity
+
+      - name: Build Android APK
+        run: npm run mobile:build:android-apk
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: android-apk-test
+          path: mobile/dist/android/*.apk
+          if-no-files-found: error
           retention-days: 7
