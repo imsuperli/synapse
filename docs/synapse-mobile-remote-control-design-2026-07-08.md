@@ -2,7 +2,7 @@
 
 Date: 2026-07-08
 
-Status: proposed
+Status: reviewed implementation plan with implementation-status corrections
 
 Scope: Synapse desktop, Synapse mobile app, optional public relay service
 
@@ -32,6 +32,36 @@ Synapse already has the most important backend primitive for this feature: a uni
 4. Sharing one global token across all mobile devices.
 5. Sending unencrypted terminal traffic over a public network.
 
+## Implementation Boundary
+
+This is a complete staged implementation plan, not an MVP-only plan. The phases are ordered to reduce risk, but the user-facing remote-control feature is not considered complete until the relevant completion boundary is reached:
+
+1. Terminal-first direct mobile remote control is complete only after Phase 1 through Phase 6 pass their definitions of done. This release lets a phone pair, list running terminal panes, open a terminal, type, resize, clear, reconnect, and use LAN/Tailscale/manual `wss://` tunnel endpoints.
+2. Full desktop-layout remote control is complete only after Phase 2B also passes. This is the boundary for showing the same window/pane model as Synapse desktop, including paused or non-running terminal panes.
+3. Public remote control without a hosted Synapse relay is complete when manual `wss://` tunnel endpoint pairing and terminal control work end to end, including revocation through the tunnel.
+4. Hosted Synapse Relay is a separate production boundary that requires Phase 8 and Phase 9.
+5. Internal milestones may expose `terminal.list` before full `window.list`, but the final plan still includes the main-owned window/pane API.
+6. Mobile app source must be copied into this repository at the root `mobile/` directory. Do not use `apps/mobile/`, a git submodule, or a symlink to `../tmp/orca/mobile`.
+
+## Current Implementation Status
+
+This document is both a design and an implementation checklist. As of the current repository state on 2026-07-08:
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Mobile source location | Implemented | Synapse Mobile lives in the repository root `mobile/` directory as a normal directory, not a symlink, submodule, or `apps/mobile/` package. |
+| Desktop remote foundation | Implemented | Shared protocol, device registry, keypair storage, E2EE channel, WebSocket transport, gateway lifecycle, settings persistence, desktop settings IPC, and settings UI are present. |
+| Terminal remote API | Implemented | `terminal.list`, `terminal.history`, `terminal.subscribe`, `terminal.unsubscribe`, `terminal.send`, `terminal.resize`, and `terminal.clear` are implemented through the remote dispatcher. |
+| Terminal recovery | Implemented | Terminal history uses monotonic sequence numbers, `sinceSeq`, gap detection, duplicate suppression, and clear-without-sequence-reset behavior. |
+| Main-owned read-only state | Implemented for privileged mobile scopes | `RemoteStateProvider` backs `window.list` and `pane.list`. Synapse Mobile uses it only when the paired device scope allows `window.list`; default `mobile.control` pairing still uses `terminal.list`. |
+| Window lifecycle mutation | Pending | `RemoteWindowLifecycleService` is still required before enabling `window.start`, `window.activate`, `window.close`, `pane.focus`, or `pane.close`. These must not call Electron IPC handlers directly. |
+| Mobile app | Implemented for terminal control and privileged read-only layout | The Expo app is copied/adapted under `mobile/`, uses `synapse://pair`, stores tokens securely, connects over E2EE RPC, lists running terminals, opens terminal panes, and can show grouped window/pane summaries when the paired scope includes `window.list`. |
+| Mobile identity | Implemented with release checks | App name, package id, bundle id, scheme, storage prefixes, and visible Synapse strings are changed. Release verification must continue to fail on stale Orca identity. |
+| Copied Orca reference code | Release-scoped, cleanup pending | Synapse Mobile routes, typecheck scope, and identity verification cover the Synapse import graph. Some copied Orca reference modules remain outside that graph and should be deleted or moved to an excluded reference area before a store/release build. |
+| Mobile GitHub automation | Implemented for validation, pending for signed artifacts | `.github/workflows/mobile.yml` installs dependencies and runs mobile typecheck, tests, and identity verification. It does not yet build or sign Android APK/AAB or iOS IPA artifacts. |
+| Public direct tunnel | Partially implemented | Settings accept manual endpoints and pairing can advertise `wss://`; tunnel setup docs and provider smoke tests remain pending. |
+| Hosted relay | Pending | Official Synapse Relay remains a separate Phase 8/9 production boundary. |
+
 ## Orca Design Findings
 
 The relevant Orca implementation is split across these areas:
@@ -50,6 +80,22 @@ The relevant Orca implementation is split across these areas:
 
 Orca's LAN limitation is not fundamental. The pairing offer carries an endpoint, and Orca already documents `--pairing-address` for LAN, Tailscale, tunnel, or public hostname scenarios in `../tmp/orca/docs/reference/headless-linux-server.md`.
 
+## Other Orca Designs Worth Referencing
+
+Beyond the mobile remote-control path, Orca has several engineering patterns worth adopting selectively:
+
+| Area | Orca reference | Synapse use |
+| --- | --- | --- |
+| Reliability gates | `../tmp/orca/config/reliability-gates.jsonc`, `../tmp/orca/config/scripts/check-reliability-gates.mjs` | Keep long-lived terminal and remote-control regressions behind explicit local/CI gates instead of relying only on unit tests |
+| Terminal performance budgets | `../tmp/orca/config/scripts/run-terminal-scale-perf-report-gate.mjs`, `../tmp/orca/config/scripts/check-terminal-perf-report-budgets.mjs` | Add measurable limits for large output streams, terminal startup, and remote replay memory growth |
+| Mobile emulator workflows | `../tmp/orca/docs/android-emulation.md`, `../tmp/orca/docs/android-emulation-streaming.md`, `../tmp/orca/mobile/scripts/start-emulator.mjs` | Provide a repeatable Android pairing/control smoke path for developers without manual emulator setup |
+| Release asset verification | `../tmp/orca/config/scripts/verify-release-required-assets.mjs` | Add a Synapse release check that fails if mobile/desktop packaging misses required branded assets |
+| Secure local file writes | `../tmp/orca/docs/windows-secure-file-acl-hardening.md` and secure-file helpers | Reuse the hardened write/permissions pattern for remote keypairs, device registry, and settings |
+| Main-owned terminal state | `../tmp/orca/docs/terminal-main-owned-state.md` | Use main-owned state as the model for `RemoteStateProvider`, instead of deriving full UI state from renderer-only stores |
+| Connection diagnostics | `../tmp/orca/mobile/src/components/ConnectionLog.tsx`, mobile transport logs | Keep user-visible pairing/reconnect diagnostics so public endpoint failures can be debugged without developer logs |
+
+These should be treated as patterns, not bulk ports. Synapse should copy only the modules that match its architecture and rewrite product-specific Orca concepts such as worktrees, browser panes, agent sessions, and source-control workflows.
+
 ## Synapse Fit
 
 Synapse already has these backend capabilities:
@@ -65,7 +111,7 @@ Synapse already has these backend capabilities:
 | Read PTY history | `src/main/services/ProcessManager.ts` | `terminal.history` |
 | Start/close windows | `src/main/handlers/windowHandlers.ts` | Source logic to extract into a remote-safe lifecycle service |
 
-The missing pieces are:
+The remote subsystem must provide these pieces, whether implemented in the first terminal release or deferred to later phases:
 
 1. External WebSocket RPC server.
 2. Pairing service and QR UI.
@@ -107,7 +153,7 @@ Applied adjustment:
 Add:
 
 ```text
-src/main/remote/RemoteWindowStateProvider.ts
+src/main/remote/RemoteStateProvider.ts
 src/main/remote/RemoteWindowLifecycleService.ts
 ```
 
@@ -162,6 +208,21 @@ Implementation rule:
 3. The remote terminal controller must not rely on `ptyOutputBuffers`.
 4. If history was evicted, return `gap: true` and force a full terminal reload or snapshot fetch.
 
+### Terminal Sequence Numbers Must Be Monotonic
+
+Sequence numbers are the contract that lets mobile deduplicate replayed output and recover after reconnects. They must be monotonic for a pane during a running PTY session.
+
+Required behavior:
+
+1. `terminal.history` returns `firstSeq`, `lastSeq`, and `gap`.
+2. `terminal.subscribe` returns an initial `TerminalSubscribeResult` with `subscriptionId`, `firstSeq`, `lastSeq`, and `gap`.
+3. Live `TerminalOutputEvent.seq` must be greater than the last emitted or replayed sequence, except legacy or diagnostic events with `seq: 0`.
+4. Mobile must ignore sequenced output events where `seq <= lastSeq`.
+5. `terminal.clear` must clear replayable chunks but must not reset the pane's next output sequence.
+6. Process exit or replacement may discard the pane history state; a new session for the same pane starts from a clean history buffer.
+
+Without rule 5, an active mobile subscription can miss all output after a remote clear because the server would restart at `seq: 1` while mobile is still filtering `seq <= previousLastSeq`.
+
 ### Mobile App Identity Must Be Changed, Not Only UI Text
 
 Copying Orca mobile is acceptable, but shipping it as Synapse requires a full app identity rewrite:
@@ -181,6 +242,21 @@ Copying Orca mobile is acceptable, but shipping it as Synapse requires a full ap
 
 The implementation should fail review if a released build still uses Orca package identifiers, scheme, icons, token storage keys, or visible branding.
 
+### Copied Mobile Code Must Be Release-Scoped
+
+Copying `../tmp/orca/mobile` is useful as a starting point, but leaving every copied module inside the release build/typecheck scope creates a false implementation burden. Orca mobile includes worktree, git, browser, file preview, dictation, notifications, and agent/session screens that are not part of Synapse Mobile terminal remote control.
+
+Applied rule:
+
+1. The mobile project lives at repository root `mobile/`.
+2. Synapse release code may keep only the app routes and source modules that are imported by Synapse Mobile.
+3. Unmigrated Orca modules must be deleted before release or moved under an explicitly excluded reference directory such as `mobile/orca-reference/`.
+4. `mobile/tsconfig.json`, Metro, and tests must cover the Synapse Mobile import graph, not the entire unfiltered Orca copy.
+5. No runtime source may import from `../tmp/orca`.
+6. Release verification must fail if app metadata, storage keys, visible strings, package identifiers, schemes, icons, or splash assets still carry Orca identity.
+
+This rule prevents the first mobile release from accidentally promising unsupported Orca features while still allowing targeted source reuse.
+
 ### Public Connectivity Should Be Staged
 
 The design's final relay plan is valid, but it should not be mixed into the first implementation milestone. Direct LAN/Tailscale/manual tunnel support should ship first. Official relay requires account, abuse prevention, rate limits, metrics, support policy, and cost controls.
@@ -191,6 +267,45 @@ Recommended staging:
 2. Manual `wss://` tunnel endpoint.
 3. Optional local tunnel provider integrations.
 4. Official Synapse relay.
+
+### Pairing Scope Must Match The Permission Model
+
+The pairing payload must not use vague scopes such as `mobile` or `runtime`. It should use the same `RemoteDeviceScope` values that the dispatcher enforces:
+
+```text
+mobile.read
+mobile.control
+mobile.window-control
+mobile.admin
+```
+
+Default Synapse Mobile pairing grants `mobile.control`. `mobile.admin` is reserved for explicitly trusted admin clients and should not be granted by the default QR flow. Runtime-level or desktop automation clients must use a separate future scope model; the Synapse Mobile pairing payload must reject any `runtime.*` scope.
+
+### Shared Protocol Must Be Mobile-Safe
+
+The shared remote protocol code is used by both Electron main/preload tests and the Expo mobile app. Shared files must not depend on Electron, Node-only APIs, filesystem APIs, or desktop-only types at runtime.
+
+Implementation requirements:
+
+1. Keep `src/shared/remote` as the protocol source of truth, or extract it into a local package such as `packages/remote-protocol`.
+2. Configure `mobile/metro.config.js` and `mobile/tsconfig.json` so Synapse Mobile imports that same source through an alias such as `@synapse/remote-protocol`.
+3. If Expo cannot consume the source directly, generate the mobile copy from the same source during build; do not hand-maintain a divergent protocol copy.
+4. Replace Node-only `Buffer` base64url helpers with cross-runtime helpers, or add an explicit mobile-safe polyfill and tests.
+5. Add tests that encode/decode the same pairing offer in desktop and mobile runtimes.
+
+### Settings Persistence Is Part Of The Feature
+
+Remote settings must persist across desktop restarts. The first install remains deny-by-default, but after a user explicitly enables remote control, Synapse should restore the saved remote settings on launch unless the user disables the feature.
+
+Persist at least:
+
+1. `enabled`
+2. bind host, defaulting to `0.0.0.0`
+3. preferred port, defaulting to `6868`
+4. selected network interface or address
+5. manual endpoint, if configured
+6. whether the user explicitly accepted a plain `ws://` warning for a non-local endpoint
+7. whether remote control should start automatically when Synapse launches
 
 ## User Experience
 
@@ -223,10 +338,12 @@ Expected first-release mobile app:
 5. Saved host list.
 6. Secure token storage.
 7. Running terminal list for the first release.
-8. Full window/pane list after `RemoteStateProvider` ships.
+8. Full read-only window/pane list when the paired device has `mobile.window-control` or `mobile.admin` scope and the desktop advertises `window.list`.
 9. Remote terminal screen using xterm in WebView.
 10. Reconnect status and diagnostics.
 11. Host settings with remove/re-pair actions.
+
+From the user's perspective, the first production release is a Synapse Mobile app, not an embedded web page. The phone app starts at a saved-host list, pairs by scanning `synapse://pair` QR codes from desktop settings, then opens a host overview. Default mobile pairing lists running terminal panes. If a desktop build and device scope advertise `window.list`, the same overview groups terminal panes by Synapse window and shows non-running terminal panes as disabled until a safe lifecycle service is available.
 
 ### First Pairing Flow
 
@@ -333,10 +450,16 @@ type PairingOffer = {
   endpoint: string
   deviceToken: string
   publicKeyB64: string
-  scope: 'mobile' | 'runtime'
+  scope: RemoteDeviceScope
   hostName?: string
   relaySessionId?: string
 }
+
+type RemoteDeviceScope =
+  | 'mobile.read'
+  | 'mobile.control'
+  | 'mobile.window-control'
+  | 'mobile.admin'
 ```
 
 Rules:
@@ -344,7 +467,7 @@ Rules:
 1. `endpoint` may be `ws://`, `wss://`, or a relay endpoint.
 2. `deviceToken` is a bearer credential and must only be shown inside the QR/code.
 3. `publicKeyB64` is the desktop static E2EE public key.
-4. `scope` controls the method allowlist.
+4. `scope` controls the exact dispatcher method allowlist.
 5. `relaySessionId` is present only for official relay pairing.
 
 ### E2EE Handshake
@@ -434,6 +557,24 @@ Do not expose existing IPC names directly. Define remote methods as a separate A
 | --- | --- |
 | `terminal.list` | List running terminal sessions known to `ProcessManager` |
 
+`terminal.list` should return only controllable entries by default:
+
+```ts
+type RemoteTerminalSummary = {
+  windowId: string
+  paneId: string
+  sessionId: string
+  pid: number
+  backend: 'local' | 'ssh'
+  status: 'alive' | 'exited'
+  workingDirectory: string
+  command?: string
+  profileId?: string
+}
+```
+
+If a future source returns a session that has no stable `windowId` and `paneId`, mobile may show it as diagnostic information but must not open it for `terminal.history`, `terminal.send`, or `terminal.resize`.
+
 ### Terminal Methods
 
 | Method | Purpose |
@@ -443,11 +584,11 @@ Do not expose existing IPC names directly. Define remote methods as a separate A
 | `terminal.unsubscribe` | Stop a terminal output subscription |
 | `terminal.send` | Write user input to a terminal |
 | `terminal.resize` | Resize a terminal to mobile viewport dimensions |
-| `terminal.clear` | Clear remote-side history or terminal display, depending on policy |
+| `terminal.clear` | Clear remote replay history for a pane and tell mobile to reset its local terminal display; it must not inject shell input |
 
 ### Deferred Window and Pane Methods
 
-These methods require `RemoteStateProvider` and `RemoteWindowLifecycleService`. They must not be implemented by calling Electron IPC handlers directly.
+Read-only `window.list` and `pane.list` require `RemoteStateProvider`. Mutating lifecycle methods require `RemoteWindowLifecycleService`. None of these methods may be implemented by calling Electron IPC handlers directly.
 
 | Method | Purpose |
 | --- | --- |
@@ -516,12 +657,9 @@ mobile.admin
   everything in mobile.window-control
   device.list
   device.revoke
-
-runtime.full
-  future desktop/web runtime clients only
 ```
 
-Default mobile pairing should grant `mobile.control`, not `mobile.admin`.
+Default mobile pairing should grant `mobile.control`, not `mobile.admin`. The current mobile remote-control protocol intentionally has no `runtime.full` escape hatch; any future desktop automation or runtime client should get a separate explicitly reviewed protocol and pairing flow.
 
 ## Desktop Implementation Plan
 
@@ -668,6 +806,7 @@ Add:
 
 ```text
 src/main/remote/RemoteGateway.ts
+src/main/remote/RemoteSettingsStore.ts
 ```
 
 Responsibilities:
@@ -678,6 +817,8 @@ Responsibilities:
 4. Revoke devices.
 5. Publish status to the settings UI.
 6. Shut down cleanly when Synapse exits.
+7. Persist remote settings under Electron `userData`.
+8. Restore saved settings on app launch only after explicit user enablement.
 
 Integrate it from `src/main/index.ts` near other service construction, not from renderer code.
 
@@ -696,6 +837,8 @@ remote:updateSettings
 ```
 
 These IPC handlers are local desktop UI only. They are not the network API.
+
+`remote:updateSettings` must validate and persist the settings before applying them. It should reject invalid endpoint schemes and require explicit user acknowledgement before accepting a public-looking `ws://` endpoint.
 
 ### Step 7: Desktop Settings UI
 
@@ -728,6 +871,14 @@ Public internet: wss:// tunnel or Synapse Relay
 Encryption: application-layer E2EE always enabled
 ```
 
+Validation and persistence requirements:
+
+1. Save changes through `RemoteSettingsStore`, not renderer local state.
+2. Start or stop `RemoteGateway` only after settings validation succeeds.
+3. Accept `ws://` only for LAN, localhost, or explicit user-acknowledged non-public use.
+4. Require or strongly warn for `wss://` on public internet endpoints.
+5. Regenerate the QR after endpoint, interface, port, or scope changes.
+
 ## Mobile Implementation Plan
 
 ### Step 1: Create Synapse Mobile App Package
@@ -740,7 +891,7 @@ mobile/
 
 For this project, do not use `apps/mobile/`. The mobile source must live at the repository root `mobile/` directory so desktop, mobile, and shared protocol files are easy to navigate together.
 
-Start by copying Orca mobile app, then remove Orca-specific features.
+Start by copying `../tmp/orca/mobile` into `./mobile`, then remove Orca-specific features. The copied directory should become normal Synapse source controlled by this repository, not a submodule and not a symlink back to Orca.
 
 Keep:
 
@@ -776,6 +927,12 @@ Required app identity changes:
 | Permission text | Replace camera/network copy with Synapse wording |
 | Package metadata | Update `package.json`, Expo config, native project names, and app store metadata |
 
+Permission cleanup rule:
+
+1. Terminal-first Synapse Mobile should request camera access for QR pairing and local-network access where the platform requires it.
+2. Microphone, photo-library, notification, file-picker, or document permissions copied from Orca must be removed unless the corresponding Synapse feature is intentionally shipped.
+3. If a later Synapse feature reintroduces those permissions, its user-facing copy must describe the Synapse feature, not Orca's original workflow.
+
 Required asset work:
 
 1. Create Synapse mobile launcher icon in Android adaptive icon sizes.
@@ -783,6 +940,38 @@ Required asset work:
 3. Create splash screen assets.
 4. Replace any Orca in-app logo or wordmark.
 5. Verify no visible Orca branding remains in screenshots.
+
+Required repository integration:
+
+1. Add mobile scripts from the root package where useful, for example `mobile:start`, `mobile:android`, `mobile:ios`, and `mobile:test`.
+2. Keep `mobile/package.json` as the Expo app package.
+3. Keep mobile-specific native assets, Fastlane metadata, plugins, and build scripts under `mobile/`.
+4. Wire mobile imports to the shared remote protocol source through Metro/TypeScript config or a generated protocol package.
+5. Add a CI or local verification command that scans release metadata for stale Orca identifiers.
+6. Keep `mobile/` as a normal tracked directory in this repository; do not keep it as a symlink, git submodule, or path alias to `../tmp/orca/mobile`.
+
+### Step 1A: Shared Protocol Consumption
+
+The mobile app must not fork the remote protocol definitions.
+
+Preferred implementation:
+
+1. Keep shared protocol source in `src/shared/remote`.
+2. Add a small barrel module for mobile-safe exports.
+3. Configure `mobile/metro.config.js` with the repository root in `watchFolders`.
+4. Configure `mobile/tsconfig.json` paths so `@synapse/remote-protocol` resolves to the shared remote source.
+5. Keep the shared code free of Node-only runtime dependencies.
+
+Alternative implementation:
+
+1. Extract `src/shared/remote` into a local package, for example `packages/remote-protocol`.
+2. Make desktop and `mobile/` both depend on that package.
+3. Keep tests in the package and run them from both desktop and mobile commands.
+
+Rejected implementation:
+
+1. Copy protocol files once into `mobile/` and edit them independently.
+2. Keep separate desktop and mobile definitions for pairing, scopes, RPC envelopes, or terminal events.
 
 ### Step 2: Mobile Routes
 
@@ -855,7 +1044,7 @@ Pairing timeout should be explicit, around 25 seconds, with connection logs visi
 7. xterm viewport changes send `terminal.resize`.
 8. App background/foreground triggers reconnect and resubscribe.
 
-After `RemoteStateProvider` ships, host overview may switch from `terminal.list` to `window.list` plus `pane.list` so the mobile app can show paused panes and the full desktop layout.
+After `RemoteStateProvider` ships, host overview may switch from `terminal.list` to `window.list` plus `pane.list` only when both the device scope and server capabilities allow it. Default `mobile.control` devices remain on `terminal.list`.
 
 ## Terminal Streaming Design
 
@@ -889,6 +1078,19 @@ type TerminalSubscribeParams = {
 }
 ```
 
+### Subscribe Result
+
+```ts
+type TerminalSubscribeResult = {
+  subscriptionId: string
+  firstSeq: number
+  lastSeq: number
+  gap: boolean
+}
+```
+
+The subscribe result is delivered before stream events. Mobile must inspect it before treating subsequent payloads as terminal output. If `gap` is true, mobile should cancel the current subscription, reload `terminal.history`, then subscribe again from the new `lastSeq`.
+
 ### Stream Event
 
 ```ts
@@ -900,14 +1102,40 @@ type TerminalOutputEvent = {
 }
 ```
 
+### Clear Params And Result
+
+```ts
+type TerminalClearParams = {
+  windowId: string
+  paneId: string
+}
+
+type TerminalClearResult = {
+  windowId: string
+  paneId: string
+  cleared: true
+  lastSeq: number
+}
+```
+
+`terminal.clear` clears remote replay history for the pane and lets mobile clear its xterm display locally. It must not send `clear`, Ctrl+L, or any other input into the shell.
+
+Implementation rule:
+
+1. Preserve the pane's `lastSeq` and `nextSeq` when clearing replay history.
+2. Return the preserved `lastSeq` in `TerminalClearResult`.
+3. Mobile updates its local `lastSeq` from the clear result before clearing the WebView display.
+4. Future PTY output for the same running session continues at a higher `seq`.
+
 ### Recovery Rules
 
 1. Mobile tracks `lastSeq`.
 2. On reconnect, mobile resubscribes with `sinceSeq`.
 3. Desktop replays missing chunks if still in buffer.
-4. If missing chunks were evicted, desktop returns `gap: true`.
-5. Mobile reloads `terminal.history` on gap.
-6. Desktop drops or coalesces output if socket backpressure is too high.
+4. If missing chunks were evicted, desktop returns `gap: true` in the subscribe result.
+5. Mobile cancels that subscription, reloads `terminal.history`, and subscribes from the new `lastSeq`.
+6. Mobile ignores sequenced live events where `seq <= lastSeq`.
+7. Desktop drops or coalesces output if socket backpressure is too high.
 
 ### Future Terminal Snapshot
 
@@ -999,7 +1227,7 @@ type RelayPairingOffer = {
   relaySessionId: string
   deviceToken: string
   publicKeyB64: string
-  scope: 'mobile'
+  scope: 'mobile.control'
 }
 ```
 
@@ -1080,6 +1308,7 @@ Deliverables:
 5. E2EE channel.
 6. WebSocket transport.
 7. RemoteGateway lifecycle.
+8. Remote settings store with deny-by-default initial settings.
 
 Definition of done:
 
@@ -1096,7 +1325,7 @@ Deliverables:
 2. `status.get`, `host.info`, `remote.capabilities`.
 3. `terminal.list` for running terminal sessions.
 4. `terminal.history`, `terminal.subscribe`, `terminal.unsubscribe`.
-5. `terminal.send`, `terminal.resize`.
+5. `terminal.send`, `terminal.resize`, `terminal.clear`.
 6. Subscription cleanup on disconnect.
 
 Definition of done:
@@ -1106,26 +1335,30 @@ Definition of done:
 3. A local test client can subscribe to live output.
 4. A local test client can type into a terminal.
 5. A local test client can resize a terminal.
+6. A local test client can clear remote replay history without injecting shell input.
 
 ### Phase 2B: Main-Owned Window State And Window API
 
 Deliverables:
 
 1. `RemoteStateProvider`.
-2. `RemoteWindowLifecycleService`.
-3. `window.list`.
-4. `pane.list`.
-5. `window.start`, if paused terminal panes need mobile restore.
-6. `window.activate`, if desktop focus sync is needed.
-7. `pane.focus`, if desktop focus sync is needed.
-8. `window.close` and `pane.close`, only through the safe lifecycle service.
+2. `window.list`.
+3. `pane.list`.
+4. Synapse Mobile capability-gated consumption of `window.list`.
+5. `RemoteWindowLifecycleService`.
+6. `window.start`, if paused terminal panes need mobile restore.
+7. `window.activate`, if desktop focus sync is needed.
+8. `pane.focus`, if desktop focus sync is needed.
+9. `window.close` and `pane.close`, only through the safe lifecycle service.
 
 Definition of done:
 
 1. Remote `window.list` matches the desktop workspace/window state for terminal panes.
 2. Remote list includes enough metadata for mobile to distinguish running and non-running panes.
-3. Window lifecycle methods do not call Electron IPC handlers directly.
-4. Deferred methods are protected by explicit scope checks.
+3. Mobile uses `window.list` only when both scope and capabilities allow it, and falls back to `terminal.list` otherwise.
+4. Window lifecycle methods do not call Electron IPC handlers directly.
+5. Mutating lifecycle methods update main-owned workspace state and notify the renderer before being enabled.
+6. Deferred mutating methods are protected by explicit scope checks.
 
 ### Phase 3: Desktop Settings UI
 
@@ -1140,18 +1373,22 @@ Deliverables:
 7. QR rotation.
 8. Paired device list.
 9. Device revoke.
+10. Persistent settings and startup restore.
+11. Public endpoint validation and warnings.
 
 Definition of done:
 
 1. User can pair from a visible QR/code.
 2. User can choose LAN/Tailscale/manual endpoint.
 3. User can revoke a device and active connection closes.
+4. Remote settings survive desktop restart after explicit enablement.
+5. Public-looking `ws://` endpoints require an explicit warning acknowledgement.
 
 ### Phase 4: Synapse Mobile App
 
 Deliverables:
 
-1. Mobile project copied/adapted from Orca.
+1. Mobile project copied/adapted from Orca into repository root `mobile/`.
 2. `synapse://pair` support.
 3. Host list.
 4. Pair scan/paste.
@@ -1162,6 +1399,7 @@ Deliverables:
 9. Android package name changed to Synapse identity.
 10. iOS bundle id changed to Synapse identity.
 11. App name, icon, splash, scheme, storage keys, and visible branding changed to Synapse.
+12. Shared remote protocol imported from the Synapse source of truth, not independently forked.
 
 Definition of done:
 
@@ -1172,6 +1410,13 @@ Definition of done:
 5. Mobile reconnects after app background/foreground.
 6. Build artifacts and installed app do not contain Orca package id, URL scheme, app name, launcher icon, or storage-key prefix.
 7. Full window/pane list is enabled only after Phase 2B is complete.
+8. `mobile/` can run its own typecheck/test/build commands from the current repository.
+
+GitHub automation boundary:
+
+1. The repository should run mobile typecheck, tests, and identity verification in CI.
+2. Automatic APK/AAB and IPA artifact builds require a separate release workflow with Android keystore, Apple signing credentials, provisioning profiles, and store/release-channel decisions.
+3. Until that release workflow exists, CI passing means the mobile source is validated, not that GitHub has produced installable mobile artifacts.
 
 ### Phase 5: Terminal Reliability
 
@@ -1181,8 +1426,10 @@ Deliverables:
 2. `sinceSeq` subscription recovery.
 3. Gap detection.
 4. Reconnect resubscription.
-5. Backpressure handling.
-6. Connection diagnostics UI.
+5. Mobile-side gap resync from `terminal.history`.
+6. Monotonic pane sequence numbers across `terminal.clear`.
+7. Backpressure handling.
+8. Connection diagnostics UI.
 
 Definition of done:
 
@@ -1190,7 +1437,9 @@ Definition of done:
 2. Mobile can recover after app background.
 3. Missing terminal output is replayed when still buffered.
 4. Mobile reloads history when a gap is detected.
-5. Slow clients do not cause unbounded desktop memory growth.
+5. Mobile ignores duplicate sequenced output after reconnect/replay.
+6. `terminal.clear` does not reset server-side sequence numbers for a running pane.
+7. Slow clients do not cause unbounded desktop memory growth.
 
 ### Phase 6: Manual Public Endpoint and Tunnel Docs
 
@@ -1279,6 +1528,9 @@ Definition of done:
 10. Method allowlist.
 11. RPC envelope validation.
 12. Terminal method param validation.
+13. Shared remote protocol avoids Node-only runtime dependencies or has explicit mobile-safe polyfills.
+14. `terminal.clear` clears replay history without writing to the PTY.
+15. `terminal.clear` preserves `lastSeq` and the next output sequence for an active pane.
 
 ### Integration Tests
 
@@ -1291,8 +1543,14 @@ Definition of done:
 7. `terminal.send` routes to correct `windowId:paneId`.
 8. `terminal.resize` routes to correct `windowId:paneId`.
 9. `terminal.history` returns expected chunks and sequence.
-10. Unauthorized device cannot call any method.
-11. Read-only scope cannot send terminal input.
+10. `terminal.subscribe` returns `firstSeq`, `lastSeq`, and `gap` before stream events.
+11. `terminal.subscribe` replays chunks after `sinceSeq` and reports `gap: true` when history was evicted.
+12. Delayed subscription activation does not emit after connection cleanup.
+13. Unauthorized device cannot call any method.
+14. Read-only scope cannot send terminal input.
+15. Remote settings persist and restore after desktop restart.
+16. `remote:updateSettings` rejects invalid endpoint schemes.
+17. Public-looking `ws://` endpoints require explicit acknowledgement.
 
 ### Mobile Tests
 
@@ -1305,7 +1563,12 @@ Definition of done:
 7. Reconnect backoff state transitions.
 8. Foreground recovery triggers reconnect.
 9. Terminal resubscribes after reconnect.
-10. Revoked token shows re-pair state.
+10. Terminal reloads history and resubscribes when subscribe result has `gap: true`.
+11. Terminal ignores duplicate sequenced output after replay.
+12. Clear result updates mobile `lastSeq` before clearing the WebView display.
+13. Revoked token shows re-pair state.
+14. Release metadata contains Synapse package id, app name, scheme, icons, splash, and storage prefixes.
+15. Desktop and mobile decode the same pairing payload fixtures.
 
 ### End-to-End Tests
 
@@ -1360,6 +1623,8 @@ For official relay:
 9. Relay private beta.
 10. Public release with relay optional, not required.
 
+The direct public remote-control release gate is step 5 plus the Phase 6 tunnel definition of done. The official hosted relay release gate is step 10 plus Phase 9.
+
 ## Open Questions
 
 1. Should Synapse support biometric unlock before opening a saved host on mobile?
@@ -1377,10 +1642,10 @@ The recommended order is:
 1. Build shared protocol and security modules by adapting Orca.
 2. Build a narrow desktop `RemoteGateway` around `ProcessManager`.
 3. Build `terminal.list` plus terminal remote control over LAN/Tailscale.
-4. Copy Orca mobile into this repository's `mobile/` directory and rebrand it as Synapse Mobile.
+4. Copy Orca mobile into this repository's root `mobile/` directory and rebrand it as Synapse Mobile.
 5. Add `RemoteStateProvider` and remote-safe window lifecycle service before enabling full `window.list`/`pane.list`.
 6. Harden terminal streaming and reconnect behavior.
-7. Add manual public `wss://` endpoint support.
+7. Add manual public `wss://` endpoint support and verify terminal control through a tunnel.
 8. Add optional tunnel provider integrations.
 9. Build official relay only after the direct/tunnel path is reliable.
 

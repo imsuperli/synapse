@@ -52,13 +52,17 @@ type PaneHistoryBuffer = {
   totalLength: number;
   nextSeq: number;
   lastSeq: number;
+  evictedBeforeSeq: number;
   keyboardState: TrackedKeyboardProtocolState;
 };
 
 // 灏濊瘯瀵煎叆 node-pty锛屽鏋滃け璐ュ垯浣跨敤 mock
 let pty: any;
 try {
-  pty = require('node-pty');
+  const testPty = process.env.NODE_ENV === 'test'
+    ? (globalThis as { __SYNAPSE_TEST_NODE_PTY__?: unknown }).__SYNAPSE_TEST_NODE_PTY__
+    : undefined;
+  pty = testPty ?? require('node-pty');
 } catch {
   pty = null;
 }
@@ -787,25 +791,74 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     return buffer ? buffer.length > 0 : false;
   }
 
-  getPtyHistory(paneId: string): { chunks: string[]; lastSeq: number; keyboardState: PtyKeyboardProtocolState } {
+  getPtyHistory(paneId: string): {
+    chunks: string[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    keyboardState: PtyKeyboardProtocolState;
+  } {
     const history = this.paneHistoryBuffers.get(paneId);
     if (!history) {
       return {
         chunks: [],
+        firstSeq: 0,
         lastSeq: 0,
+        evictedBeforeSeq: 0,
         keyboardState: cloneKeyboardProtocolState(createDefaultKeyboardProtocolState()),
       };
     }
 
     return {
       chunks: history.entries.map((entry) => entry.data),
+      firstSeq: getPaneHistoryFirstSeq(history),
       lastSeq: history.lastSeq,
+      evictedBeforeSeq: history.evictedBeforeSeq,
       keyboardState: cloneKeyboardProtocolState(history.keyboardState),
     };
   }
 
+  getPtyHistoryEntriesSince(
+    paneId: string,
+    sinceSeq: number = 0,
+  ): {
+    entries: PaneHistoryEntry[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    gap: boolean;
+  } {
+    const history = this.paneHistoryBuffers.get(paneId);
+    if (!history) {
+      return {
+        entries: [],
+        firstSeq: 0,
+        lastSeq: 0,
+        evictedBeforeSeq: 0,
+        gap: false,
+      };
+    }
+
+    const firstSeq = getPaneHistoryFirstSeq(history);
+    return {
+      entries: history.entries.filter((entry) => entry.seq > sinceSeq),
+      firstSeq,
+      lastSeq: history.lastSeq,
+      evictedBeforeSeq: history.evictedBeforeSeq,
+      gap: history.evictedBeforeSeq > sinceSeq,
+    };
+  }
+
   clearPtyHistory(paneId: string): void {
-    this.paneHistoryBuffers.delete(paneId);
+    const history = this.paneHistoryBuffers.get(paneId);
+    if (!history) {
+      return;
+    }
+
+    history.entries = [];
+    history.totalLength = 0;
+    history.evictedBeforeSeq = Math.max(history.evictedBeforeSeq, history.lastSeq);
+    history.nextSeq = Math.max(history.nextSeq, history.lastSeq + 1);
   }
 
   getLatestPaneOutputSeq(paneId: string): number {
@@ -1691,7 +1744,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.ptyOutputBuffers.delete(pid);
     this.ptys.delete(pid);
     if (processInfo.paneId) {
-      this.clearPtyHistory(processInfo.paneId);
+      this.paneHistoryBuffers.delete(processInfo.paneId);
     }
 
     const paneKey = this.getPaneKey(processInfo.windowId, processInfo.paneId);
@@ -1718,6 +1771,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       totalLength: 0,
       nextSeq: 1,
       lastSeq: 0,
+      evictedBeforeSeq: 0,
       keyboardState: createDefaultKeyboardProtocolState(),
     });
   }
@@ -1732,6 +1786,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       totalLength: 0,
       nextSeq: 1,
       lastSeq: 0,
+      evictedBeforeSeq: 0,
       keyboardState: createDefaultKeyboardProtocolState(),
     };
 
@@ -1750,6 +1805,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
         break;
       }
       history.totalLength -= removed.data.length;
+      history.evictedBeforeSeq = Math.max(history.evictedBeforeSeq, removed.seq);
     }
 
     this.paneHistoryBuffers.set(paneId, history);
@@ -1776,6 +1832,14 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     const message = error instanceof Error ? error.message : String(error);
     return /Cannot resize a pty that has already exited/i.test(message);
   }
+}
+
+function getPaneHistoryFirstSeq(history: PaneHistoryBuffer): number {
+  const firstEntry = history.entries[0];
+  if (firstEntry) {
+    return firstEntry.seq;
+  }
+  return history.lastSeq > 0 ? history.lastSeq + 1 : 0;
 }
 
 function isSSHPortForwardSession(value: unknown): value is {

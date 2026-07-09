@@ -1,0 +1,39 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "strict": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@synapse/remote-protocol/*": ["../src/shared/remote/*"],
+      "tweetnacl": ["./node_modules/tweetnacl"],
+      "ws": ["./node_modules/@types/ws"],
+      "zod": ["./node_modules/zod"]
+    }
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/synapse/**/*.ts",
+    "src/synapse/**/*.tsx",
+    "src/transport/**/*.ts",
+    "src/transport/**/*.tsx",
+    "src/terminal/**/*.ts",
+    "src/terminal/**/*.tsx",
+    "src/theme/**/*.ts",
+    "src/theme/**/*.tsx",
+    "src/components/BottomDrawer.tsx",
+    "src/components/ConnectionLog.tsx",
+    "src/components/TextInputModal.tsx",
+    "src/components/bottom-drawer-mount-state.ts",
+    "src/layout/responsive-layout.ts",
+    "src/layout/responsive-layout-metrics.ts",
+    "src/platform/haptics.ts",
+    "../src/shared/remote/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "../src/shared/remote/__tests__/**"
+  ]
+}

@@ -10,6 +10,7 @@ import { TmuxCompatService } from './TmuxCompatService';
 import { CodeProjectIndexService } from './code/CodeProjectIndexService';
 import { LanguageFeatureService } from './language/LanguageFeatureService';
 import { Workspace } from '../types/workspace';
+import { RemoteGateway } from '../remote/RemoteGateway';
 
 /**
  * 关闭上下文
@@ -26,6 +27,7 @@ export interface ShutdownContext {
   tmuxCompatService: TmuxCompatService | null;
   codeProjectIndexService?: CodeProjectIndexService | null;
   languageFeatureService?: LanguageFeatureService | null;
+  remoteGateway?: RemoteGateway | null;
   currentWorkspace: Workspace | null;
 }
 
@@ -171,6 +173,7 @@ export class ShutdownManager {
     context.gitBranchWatcher?.unwatchAll(); // 停止所有 git 分支监听
     context.fileWatcherService?.destroy(); // 销毁文件监听服务
     context.tmuxCompatService?.destroy(); // 销毁 tmux 兼容服务（内部会关闭 RPC 服务器）
+    await context.remoteGateway?.stop();
     await context.codeProjectIndexService?.destroy();
     await context.languageFeatureService?.resetSessions();
   }

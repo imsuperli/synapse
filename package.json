@@ -21,6 +21,12 @@
     "dist:no-rebuild": "npm run dist",
     "dist:rebuild": "npm run build && electron-builder -c.npmRebuild=true",
     "test": "vitest",
+    "mobile:start": "npm --prefix mobile run start",
+    "mobile:android": "npm --prefix mobile run android",
+    "mobile:ios": "npm --prefix mobile run ios",
+    "mobile:test": "npm --prefix mobile run test",
+    "mobile:typecheck": "npm --prefix mobile run typecheck",
+    "mobile:verify:identity": "npm --prefix mobile run verify:identity",
     "prepare": "git config core.hooksPath .githooks"
   },
   "keywords": [
@@ -56,9 +62,11 @@
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^24.0.0",
     "@types/pidusage": "^2.0.5",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/ssh2": "^1.15.5",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.4.27",
     "concurrently": "^8.0.0",
@@ -101,6 +109,7 @@
     "node-pty": "^1.1.0",
     "openai": "^6.34.0",
     "pidusage": "^4.0.1",
+    "qrcode": "^1.5.4",
     "react": "^19.2.5",
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1",
@@ -108,9 +117,12 @@
     "semver": "^7.7.4",
     "ssh-config": "^5.1.0",
     "ssh2": "^1.17.0",
+    "tweetnacl": "^1.0.3",
     "uuid": "^13.0.0",
+    "ws": "^8.21.0",
     "yauzl": "^2.10.0",
     "zmodem.js": "^0.1.10",
+    "zod": "^4.4.3",
     "zustand": "^5.0.11"
   }
 }

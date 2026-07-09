@@ -3,7 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Select from '@radix-ui/react-select';
 import * as Switch from '@radix-ui/react-switch';
 import * as Tabs from '@radix-ui/react-tabs';
-import { X, Plus, Trash2, Search, Check, ChevronDown, Globe, Folder, Edit2, FolderOpen, Languages, Compass, Plug, Wrench, Monitor, Command, Palette, Wallpaper, SunMoon } from 'lucide-react';
+import { X, Plus, Trash2, Search, Check, ChevronDown, Globe, Folder, Edit2, FolderOpen, Languages, Compass, Plug, Wrench, Monitor, Command, Palette, Wallpaper, SunMoon, Smartphone } from 'lucide-react';
 import { IDEIcon } from './icons/IDEIcons';
 import { notifyIDESettingsUpdated } from '../hooks/useIDESettings';
 import { notifyWorkspaceSettingsUpdated } from '../utils/settingsEvents';
@@ -25,6 +25,7 @@ import { AppLanguage } from '../../shared/i18n';
 import { ChatSettingsTab } from './ChatSettingsTab';
 import { PluginCenter } from './settings/PluginCenter';
 import { CompactSettingRow, CompactSettingsSection } from './settings/CompactSettings';
+import { RemoteSettingsTab } from './settings/RemoteSettingsTab';
 import { applyAppearanceToDocument, getAppearanceBackdropDescriptor, getAppearanceSkinStyle } from '../utils/appearance';
 import {
   formatKeyboardShortcut,
@@ -63,7 +64,7 @@ interface SettingsPanelProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'appearance' | 'shortcuts' | 'quicknav' | 'chat' | 'plugins' | 'advanced';
+type SettingsTab = 'general' | 'appearance' | 'shortcuts' | 'quicknav' | 'chat' | 'plugins' | 'remote' | 'advanced';
 type QuickNavSubTab = 'ide' | 'custom';
 const AUTO_SHELL_OPTION_VALUE = '__auto__';
 const DEFAULT_STATUSLINE_CONFIG: StatusLineConfig = {
@@ -1106,6 +1107,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
       icon: Monitor,
     },
     {
+      value: 'remote' as SettingsTab,
+      label: 'Remote',
+      icon: Smartphone,
+    },
+    {
       value: 'advanced' as SettingsTab,
       label: t('settings.tab.advanced'),
       icon: Wrench,
@@ -2134,6 +2140,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
 
               <Tabs.Content value="chat" className="h-full overflow-y-auto px-8 py-8 data-[state=inactive]:hidden">
                 <ChatSettingsTab />
+              </Tabs.Content>
+
+              <Tabs.Content value="remote" className="h-full overflow-y-auto px-6 py-6 data-[state=inactive]:hidden">
+                <RemoteSettingsTab />
               </Tabs.Content>
 
               <Tabs.Content value="advanced" className="h-full overflow-y-auto px-6 py-6 data-[state=inactive]:hidden">

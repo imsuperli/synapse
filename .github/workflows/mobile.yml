@@ -1,0 +1,55 @@
+name: Mobile
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - 'src/shared/remote/**'
+      - '.github/workflows/mobile.yml'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches:
+      - main
+      - test-build-*
+    paths:
+      - 'mobile/**'
+      - 'src/shared/remote/**'
+      - '.github/workflows/mobile.yml'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Upgrade npm to v11
+        working-directory: ${{ runner.temp }}
+        run: npm install --global npm@11.11.1
+
+      - name: Install desktop dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install mobile dependencies
+        run: npm ci --prefix mobile
+
+      - name: Typecheck mobile
+        run: npm run mobile:typecheck
+
+      - name: Test mobile
+        run: npm run mobile:test
+
+      - name: Verify Synapse Mobile identity
+        run: npm run mobile:verify:identity

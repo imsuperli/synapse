@@ -1629,7 +1629,9 @@ export interface PtyKeyboardProtocolState {
 
 export interface PtyHistorySnapshot {
   chunks: string[];
+  firstSeq: number;
   lastSeq: number;
+  evictedBeforeSeq: number;
   keyboardState?: PtyKeyboardProtocolState;
 }
 
@@ -1652,6 +1654,55 @@ export interface CleanupProgressPayload {
 export interface AppVersionInfo {
   version: string;
   name: string;
+}
+
+export interface RemoteNetworkInterface {
+  name: string;
+  address: string;
+}
+
+export interface RemoteStatus {
+  ready: boolean;
+  endpoint: string | null;
+  settings: RemoteSettings;
+}
+
+export interface RemotePairingQR {
+  available: boolean;
+  qrDataUrl?: string;
+  pairingUrl?: string;
+  endpoint?: string;
+  deviceId?: string;
+  expiresAt?: number | null;
+}
+
+export interface RemoteDevice {
+  deviceId: string;
+  name: string;
+  scope: string;
+  pairedAt: number;
+  lastSeenAt: number;
+}
+
+export interface RemoteSettings {
+  enabled: boolean;
+  bindHost: string;
+  preferredPort: number;
+  selectedAddress: string | null;
+  manualEndpoint: string | null;
+  acceptedPlainWsNonLocal: boolean;
+  startOnLaunch: boolean;
+}
+
+export interface RemoteSettingsUpdate {
+  enabled?: boolean;
+  bindHost?: string;
+  preferredPort?: number;
+  selectedAddress?: string | null;
+  manualEndpoint?: string | null;
+  acceptedPlainWsNonLocal?: boolean;
+  acceptPlainWsNonLocal?: boolean;
+  startOnLaunch?: boolean;
 }
 
 export type ElectronEventHandler<T> = (event: unknown, payload: T) => void;
@@ -1718,6 +1769,13 @@ export interface ElectronAPI {
 
   getSettings: () => Promise<IpcResponse<Settings>>;
   updateSettings: (settings: SettingsPatch) => Promise<IpcResponse<Settings>>;
+  remoteListNetworkInterfaces: () => Promise<IpcResponse<{ interfaces: RemoteNetworkInterface[] }>>;
+  remoteUpdateSettings: (settings: RemoteSettingsUpdate) => Promise<IpcResponse<{ settings: RemoteSettings; endpoint: string | null }>>;
+  remoteGetStatus: () => Promise<IpcResponse<RemoteStatus>>;
+  remoteGetPairingQR: (config?: { address?: string; rotate?: boolean }) => Promise<IpcResponse<RemotePairingQR>>;
+  remoteRotatePairingQR: (config?: { address?: string }) => Promise<IpcResponse<RemotePairingQR>>;
+  remoteListDevices: () => Promise<IpcResponse<{ devices: RemoteDevice[] }>>;
+  remoteRevokeDevice: (deviceId: string) => Promise<IpcResponse<{ revoked: boolean }>>;
   validateChatProvider: (config: ChatProviderValidationRequest) => Promise<IpcResponse<ChatProviderValidationResult>>;
   getAvailableShells: () => Promise<IpcResponse<ShellProgramOption[]>>;
   scanIDEs: () => Promise<IpcResponse<IDEConfig[]>>;

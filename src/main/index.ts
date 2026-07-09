@@ -52,6 +52,7 @@ import { isTerminalPane } from '../shared/utils/terminalCapabilities';
 import { isAllowedBrowserUrl } from '../shared/utils/browserUrls';
 import { normalizeImagePath, toFileUrl } from '../shared/utils/appImage';
 import { getAgentController } from './handlers/agentHandlers';
+import { RemoteGateway } from './remote/RemoteGateway';
 
 const APP_DISPLAY_NAME = 'Synapse';
 const USER_DATA_DIR_NAME = 'synapse';
@@ -121,6 +122,7 @@ let sessionAggregationService: SessionAggregationService | null = null;
 let taskArtifactService: TaskArtifactService | null = null;
 let browserSyncService: BrowserSyncService | null = null;
 let mcpCapabilityService: McpCapabilityService | null = null;
+let remoteGateway: RemoteGateway | null = null;
 let currentWorkspace: Workspace | null = null; // 缓存当前工作区状态
 const forwardPtyData = createPtyDataForwarder(() => mainWindow);
 
@@ -475,6 +477,7 @@ function createWindow() {
           fileWatcherService,
           gitBranchWatcher,
           tmuxCompatService,
+          remoteGateway,
           languageFeatureService,
           currentWorkspace,
         };
@@ -578,6 +581,17 @@ if (hasSingleInstanceLock) {
 
     processManager.warmupConPtyDll().catch((error) => {
       console.error('[Main] ConPTY DLL warmup failed:', error);
+    });
+
+    remoteGateway = new RemoteGateway({
+      processManager,
+      userDataPath: app.getPath('userData'),
+      hostName: APP_DISPLAY_NAME,
+      appVersion: app.getVersion(),
+      getCurrentWorkspace: () => currentWorkspace,
+    });
+    await remoteGateway.startFromSavedSettings().catch((error) => {
+      console.error('[Main] Failed to restore remote gateway:', error);
     });
 
     // 初始化 TmuxCompatService（内部会创建 TmuxRpcServer）
@@ -856,6 +870,7 @@ if (hasSingleInstanceLock) {
       taskArtifactService,
       browserSyncService,
       mcpCapabilityService,
+      remoteGateway,
       currentWorkspace,
       getMainWindow: () => mainWindow,
       getCurrentWorkspace: () => currentWorkspace,
@@ -934,6 +949,7 @@ app.on('window-all-closed', () => {
         fileWatcherService,
         gitBranchWatcher,
         tmuxCompatService,
+        remoteGateway,
         codeProjectIndexService,
         languageFeatureService,
         currentWorkspace,

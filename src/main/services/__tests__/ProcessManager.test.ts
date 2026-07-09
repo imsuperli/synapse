@@ -1,4 +1,39 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const ptyTestHarness = vi.hoisted(() => {
+  let nextPid = 4321;
+
+  function createMockPtyProcess(pid = nextPid++) {
+    return {
+      pid,
+      onData: vi.fn(() => ({ dispose: vi.fn() })),
+      onExit: vi.fn(() => ({ dispose: vi.fn() })),
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+    };
+  }
+
+  const nodePty = {
+    spawn: vi.fn(() => createMockPtyProcess()),
+  };
+
+  (globalThis as { __SYNAPSE_TEST_NODE_PTY__?: unknown }).__SYNAPSE_TEST_NODE_PTY__ = nodePty;
+
+  return {
+    nodePty,
+    createMockPtyProcess,
+  };
+});
+
+vi.mock('electron', () => ({
+  app: {
+    getAppPath: () => process.cwd(),
+    getPath: () => process.cwd(),
+    isPackaged: false,
+  },
+}));
+
 import { ProcessManager } from '../ProcessManager';
 import { ProcessStatus } from '../../types/process';
 import { TmuxCompatService } from '../TmuxCompatService';
@@ -9,18 +44,11 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 
 function getPtyModule() {
-  return require('node-pty');
+  return ptyTestHarness.nodePty;
 }
 
 function makeMockPtyProcess(pid = 4321) {
-  return {
-    pid,
-    onData: vi.fn(() => ({ dispose: vi.fn() })),
-    onExit: vi.fn(() => ({ dispose: vi.fn() })),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn(),
-  };
+  return ptyTestHarness.createMockPtyProcess(pid);
 }
 
 const defaultKeyboardProtocolState = {
@@ -86,6 +114,63 @@ describe('ProcessManager', () => {
         spawnSpy.mockRestore();
       }
     });
+
+    it('tracks firstSeq and gap when replay history evicts old chunks', async () => {
+      const ptyModule = getPtyModule();
+      const dataListeners: Array<(data: string) => void> = [];
+      (processManager as unknown as { PANE_HISTORY_CHUNK_LIMIT: number }).PANE_HISTORY_CHUNK_LIMIT = 3;
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...makeMockPtyProcess(4328),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListeners.push(handler);
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-history-evict',
+          paneId: 'pane-history-evict',
+        });
+
+        for (let i = 1; i <= 5; i += 1) {
+          dataListeners.forEach((listener) => listener(`chunk-${i}`));
+        }
+
+        expect(processManager.getPtyHistory('pane-history-evict')).toEqual({
+          chunks: ['chunk-3', 'chunk-4', 'chunk-5'],
+          firstSeq: 3,
+          lastSeq: 5,
+          evictedBeforeSeq: 2,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-evict', 1)).toEqual({
+          entries: [
+            { seq: 3, data: 'chunk-3' },
+            { seq: 4, data: 'chunk-4' },
+            { seq: 5, data: 'chunk-5' },
+          ],
+          firstSeq: 3,
+          lastSeq: 5,
+          evictedBeforeSeq: 2,
+          gap: true,
+        });
+
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-evict', 3)).toMatchObject({
+          entries: [
+            { seq: 4, data: 'chunk-4' },
+            { seq: 5, data: 'chunk-5' },
+          ],
+          gap: false,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
   });
 
   describe('spawnTerminal', () => {
@@ -122,8 +207,8 @@ describe('ProcessManager', () => {
 
       expect(status).toBeDefined();
       expect(status?.command).toBeDefined();
-      // Should use platform default shell
-      expect(status?.command).toMatch(/(pwsh|cmd|zsh|bash)/);
+      // Should use platform default shell.
+      expect(status?.command).toMatch(/(pwsh|cmd|zsh|bash|sh)/);
     });
 
     it('uses the global default shell when the window does not override it', async () => {
@@ -506,7 +591,9 @@ describe('ProcessManager', () => {
         dataListeners.forEach((listener) => listener('first-output'));
         expect(processManager.getPtyHistory('pane-history')).toEqual({
           chunks: ['first-output'],
+          firstSeq: 1,
           lastSeq: 1,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
@@ -520,14 +607,18 @@ describe('ProcessManager', () => {
 
         expect(processManager.getPtyHistory('pane-history')).toEqual({
           chunks: [],
+          firstSeq: 0,
           lastSeq: 0,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
         dataListeners.forEach((listener) => listener('second-output'));
         expect(processManager.getPtyHistory('pane-history')).toEqual({
           chunks: ['second-output'],
+          firstSeq: 1,
           lastSeq: 1,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
       } finally {
@@ -563,7 +654,9 @@ describe('ProcessManager', () => {
         dataListeners.forEach((listener) => listener('stale-output'));
         expect(processManager.getPtyHistory('pane-history-exit')).toEqual({
           chunks: ['stale-output'],
+          firstSeq: 1,
           lastSeq: 1,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
@@ -571,8 +664,74 @@ describe('ProcessManager', () => {
 
         expect(processManager.getPtyHistory('pane-history-exit')).toEqual({
           chunks: [],
+          firstSeq: 0,
           lastSeq: 0,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
+    it('clears replayable chunks without resetting output sequence numbers', async () => {
+      const ptyModule = getPtyModule();
+      const dataListeners: Array<(data: string) => void> = [];
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...makeMockPtyProcess(4329),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListeners.push(handler);
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-history-clear',
+          paneId: 'pane-history-clear',
+        });
+
+        dataListeners.forEach((listener) => {
+          listener('before-1');
+          listener('before-2');
+        });
+        expect(processManager.getLatestPaneOutputSeq('pane-history-clear')).toBe(2);
+
+        processManager.clearPtyHistory('pane-history-clear');
+
+        expect(processManager.getPtyHistory('pane-history-clear')).toEqual({
+          chunks: [],
+          firstSeq: 3,
+          lastSeq: 2,
+          evictedBeforeSeq: 2,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-clear', 2)).toEqual({
+          entries: [],
+          firstSeq: 3,
+          lastSeq: 2,
+          evictedBeforeSeq: 2,
+          gap: false,
+        });
+
+        dataListeners.forEach((listener) => listener('after-clear'));
+
+        expect(processManager.getPtyHistory('pane-history-clear')).toEqual({
+          chunks: ['after-clear'],
+          firstSeq: 3,
+          lastSeq: 3,
+          evictedBeforeSeq: 2,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-clear', 2)).toEqual({
+          entries: [{ seq: 3, data: 'after-clear' }],
+          firstSeq: 3,
+          lastSeq: 3,
+          evictedBeforeSeq: 2,
+          gap: false,
         });
       } finally {
         spawnSpy.mockRestore();
@@ -606,7 +765,9 @@ describe('ProcessManager', () => {
 
         expect(processManager.getPtyHistory('pane-keyboard-history')).toEqual({
           chunks: ['\u001b[?9001h\u001b[=5u\u001b[>3u', '\u001b[<1u\u001b[?9001l\u001b[=0u'],
+          firstSeq: 1,
           lastSeq: 2,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
@@ -626,7 +787,9 @@ describe('ProcessManager', () => {
             '5',
             'u',
           ],
+          firstSeq: 1,
           lastSeq: 6,
+          evictedBeforeSeq: 0,
           keyboardState: {
             ...defaultKeyboardProtocolState,
             bracketedPasteMode: true,
@@ -655,7 +818,9 @@ describe('ProcessManager', () => {
             'u',
             '\u001b[=7u\u001b[?1049h\u001b[=3u\u001b[?1049l',
           ],
+          firstSeq: 1,
           lastSeq: 7,
+          evictedBeforeSeq: 0,
           keyboardState: {
             ...defaultKeyboardProtocolState,
             bracketedPasteMode: true,

@@ -231,7 +231,9 @@ function extractPtyHistorySnapshot(response: unknown): PtyHistorySnapshot {
   if (Array.isArray(response)) {
     return {
       chunks: response.filter((chunk): chunk is string => typeof chunk === 'string'),
+      firstSeq: 0,
       lastSeq: 0,
+      evictedBeforeSeq: 0,
     };
   }
 
@@ -250,9 +252,21 @@ function extractPtyHistorySnapshot(response: unknown): PtyHistorySnapshot {
       && Array.isArray((data as { chunks?: unknown }).chunks)
       && typeof (data as { lastSeq?: unknown }).lastSeq === 'number'
     ) {
+      const snapshot = data as {
+        chunks: unknown[];
+        firstSeq?: unknown;
+        lastSeq: number;
+        evictedBeforeSeq?: unknown;
+      };
       return {
-        chunks: (data as { chunks: unknown[] }).chunks.filter((chunk): chunk is string => typeof chunk === 'string'),
-        lastSeq: (data as { lastSeq: number }).lastSeq,
+        chunks: snapshot.chunks.filter((chunk): chunk is string => typeof chunk === 'string'),
+        firstSeq: typeof snapshot.firstSeq === 'number'
+          ? snapshot.firstSeq
+          : 0,
+        lastSeq: snapshot.lastSeq,
+        evictedBeforeSeq: typeof snapshot.evictedBeforeSeq === 'number'
+          ? snapshot.evictedBeforeSeq
+          : 0,
         keyboardState: extractKeyboardProtocolState(data),
       };
     }
@@ -260,14 +274,18 @@ function extractPtyHistorySnapshot(response: unknown): PtyHistorySnapshot {
     if (Array.isArray(data)) {
       return {
         chunks: data.filter((chunk): chunk is string => typeof chunk === 'string'),
+        firstSeq: 0,
         lastSeq: 0,
+        evictedBeforeSeq: 0,
       };
     }
   }
 
   return {
     chunks: [],
+    firstSeq: 0,
     lastSeq: 0,
+    evictedBeforeSeq: 0,
   };
 }
 

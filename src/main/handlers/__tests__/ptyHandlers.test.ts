@@ -35,7 +35,12 @@ describe('registerPtyHandlers', () => {
       listProcesses: vi.fn(),
       writeToPty: vi.fn(),
       resizePty: vi.fn(),
-      getPtyHistory: vi.fn().mockReturnValue({ chunks: ['line-1', 'line-2'], lastSeq: 2 }),
+      getPtyHistory: vi.fn().mockReturnValue({
+        chunks: ['line-1', 'line-2'],
+        firstSeq: 1,
+        lastSeq: 2,
+        evictedBeforeSeq: 0,
+      }),
     };
     const ctx = {
       processManager,
@@ -46,13 +51,18 @@ describe('registerPtyHandlers', () => {
 
     const response = await historyHandler({}, { paneId: 'pane-1' }) as {
       success: boolean;
-      data?: { chunks: string[]; lastSeq: number };
+      data?: { chunks: string[]; firstSeq: number; lastSeq: number; evictedBeforeSeq: number };
     };
 
     expect(processManager.getPtyHistory).toHaveBeenCalledWith('pane-1');
     expect(response).toEqual({
       success: true,
-      data: { chunks: ['line-1', 'line-2'], lastSeq: 2 },
+      data: {
+        chunks: ['line-1', 'line-2'],
+        firstSeq: 1,
+        lastSeq: 2,
+        evictedBeforeSeq: 0,
+      },
     });
   });
 

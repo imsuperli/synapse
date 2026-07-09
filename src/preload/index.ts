@@ -69,6 +69,15 @@ const electronAPI: ElectronAPI = {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings: unknown) => ipcRenderer.invoke('update-settings', settings),
+  remoteListNetworkInterfaces: () => ipcRenderer.invoke('remote:listNetworkInterfaces'),
+  remoteUpdateSettings: (settings) => ipcRenderer.invoke('remote:updateSettings', settings),
+  remoteGetStatus: () => ipcRenderer.invoke('remote:getStatus'),
+  remoteGetPairingQR: (config?: { address?: string; rotate?: boolean }) =>
+    ipcRenderer.invoke('remote:getPairingQR', config),
+  remoteRotatePairingQR: (config?: { address?: string }) =>
+    ipcRenderer.invoke('remote:rotatePairingQR', config),
+  remoteListDevices: () => ipcRenderer.invoke('remote:listDevices'),
+  remoteRevokeDevice: (deviceId: string) => ipcRenderer.invoke('remote:revokeDevice', { deviceId }),
   validateChatProvider: (config: unknown) => ipcRenderer.invoke('validate-chat-provider', config),
   getAvailableShells: () => ipcRenderer.invoke('get-available-shells'),
   scanIDEs: () => ipcRenderer.invoke('scan-ides'),
