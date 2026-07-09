@@ -13,11 +13,27 @@ import { connect } from '../src/transport/rpc-client'
 import type { ConnectionLogEntry, PairingOffer, RpcResponse } from '../src/transport/types'
 import { colors, radii, spacing, typography } from '../src/theme/mobile-theme'
 import { normalizeRelayEndpoint } from '../../src/shared/remote/relay'
+import { useMobileI18n, type MobileTranslate } from '../src/i18n'
 
 const PAIRING_OVERALL_TIMEOUT_MS = 25_000
 
+function routeErrorMessage(
+  errorCode: 'missing-code' | 'invalid-code' | null,
+  t: MobileTranslate
+): string {
+  switch (errorCode) {
+    case 'missing-code':
+      return t('confirm.missingCode')
+    case 'invalid-code':
+      return t('confirm.invalidCode')
+    case null:
+      return ''
+  }
+}
+
 export default function PairConfirmScreen() {
   const router = useRouter()
+  const { t } = useMobileI18n()
   const params = useLocalSearchParams<{ code?: string }>()
   const state = resolvePairConfirmRouteState(
     Array.isArray(params.code) ? params.code[0] : params.code
@@ -26,9 +42,7 @@ export default function PairConfirmScreen() {
   const [status, setStatus] = useState<'ready' | 'connecting' | 'error'>(
     state.kind === 'ready' ? 'ready' : 'error'
   )
-  const [errorMessage, setErrorMessage] = useState(
-    state.kind === 'error' ? state.errorMessage : ''
-  )
+  const [errorMessage, setErrorMessage] = useState('')
   const [relayEndpointInput, setRelayEndpointInput] = useState(initialOffer?.relayEndpoint ?? '')
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
   const logsRef = useRef<ConnectionLogEntry[]>([])
@@ -89,8 +103,10 @@ export default function PairConfirmScreen() {
         setStatus('error')
         setErrorMessage(
           timedOut
-            ? `Couldn't connect within ${PAIRING_OVERALL_TIMEOUT_MS / 1000}s. Check the desktop endpoint.`
-            : `Cannot connect to Synapse desktop: ${err instanceof Error ? err.message : String(err)}`
+            ? t('confirm.connectTimeout', { seconds: PAIRING_OVERALL_TIMEOUT_MS / 1000 })
+            : t('confirm.connectFailed', {
+                message: err instanceof Error ? err.message : String(err)
+              })
         )
         return
       }
@@ -108,8 +124,8 @@ export default function PairConfirmScreen() {
         setStatus('error')
         setErrorMessage(
           response.error.code === 'unauthorized'
-            ? 'Authentication failed. Regenerate the QR code on desktop and pair again.'
-            : `Synapse desktop rejected pairing: ${response.error.message}`
+            ? t('confirm.authFailed')
+            : t('confirm.rejected', { message: response.error.message })
         )
         return
       }
@@ -135,28 +151,29 @@ export default function PairConfirmScreen() {
       } catch (err) {
         setStatus('error')
         setErrorMessage(
-          `Pairing succeeded but saving the host failed: ${err instanceof Error ? err.message : String(err)}`
+          t('confirm.saveFailed', { message: err instanceof Error ? err.message : String(err) })
         )
       }
     },
-    [appendLog, relayEndpointInput, router]
+    [appendLog, relayEndpointInput, router, t]
   )
 
   const offer = state.kind === 'ready' ? state.offer : null
+  const displayErrorMessage = errorMessage || routeErrorMessage(state.errorCode, t)
 
   return (
     <View ref={setRootRef} style={styles.container}>
       <View style={styles.panel}>
-        <Text style={styles.title}>Confirm Pairing</Text>
+        <Text style={styles.title}>{t('confirm.title')}</Text>
         {offer ? (
           <>
-            <Text style={styles.label}>Desktop endpoint</Text>
+            <Text style={styles.label}>{t('confirm.desktopEndpoint')}</Text>
             <Text style={styles.endpoint} numberOfLines={2}>
               {offer.endpoint}
             </Text>
             {offer.relayEndpoint && offer.relaySessionId && offer.relayClientToken ? (
               <>
-                <Text style={styles.label}>Relay endpoint</Text>
+                <Text style={styles.label}>{t('confirm.relayEndpoint')}</Text>
                 <TextInput
                   value={relayEndpointInput}
                   onChangeText={setRelayEndpointInput}
@@ -176,22 +193,22 @@ export default function PairConfirmScreen() {
         {status === 'connecting' ? (
           <View style={styles.statusBlock}>
             <ActivityIndicator color={colors.textSecondary} />
-            <Text style={styles.statusText}>Connecting...</Text>
+            <Text style={styles.statusText}>{t('confirm.connecting')}</Text>
           </View>
         ) : null}
 
         {status === 'error' ? (
           <View style={styles.statusBlock}>
             <X size={22} color={colors.statusRed} />
-            <Text style={styles.errorText}>{errorMessage}</Text>
+            <Text style={styles.errorText}>{displayErrorMessage}</Text>
           </View>
         ) : null}
 
-        {logs.length > 0 ? <ConnectionLog entries={logs} title="Pairing log" /> : null}
+        {logs.length > 0 ? <ConnectionLog entries={logs} title={t('confirm.pairingLog')} /> : null}
 
         <View style={styles.actions}>
           <Pressable style={styles.secondaryButton} onPress={() => router.replace('/')}>
-            <Text style={styles.secondaryButtonText}>Cancel</Text>
+            <Text style={styles.secondaryButtonText}>{t('confirm.cancel')}</Text>
           </Pressable>
           <Pressable
             disabled={!offer || status === 'connecting'}
@@ -199,7 +216,7 @@ export default function PairConfirmScreen() {
             onPress={() => offer && void pairAndSave(offer)}
           >
             <Check size={16} color={colors.bgBase} />
-            <Text style={styles.primaryButtonText}>Pair</Text>
+            <Text style={styles.primaryButtonText}>{t('confirm.pair')}</Text>
           </Pressable>
         </View>
       </View>

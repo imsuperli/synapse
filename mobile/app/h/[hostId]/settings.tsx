@@ -1,12 +1,13 @@
 import { useCallback, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Cloud, Pencil, Trash2 } from 'lucide-react-native'
+import { Cloud, Languages, Pencil, Trash2 } from 'lucide-react-native'
 import { TextInputModal } from '../../../src/components/TextInputModal'
 import { loadHostById } from '../../../src/synapse/remote'
 import { removeHost, renameHost, updateHostRelayEndpoint } from '../../../src/transport/host-store'
 import type { HostProfile } from '../../../src/transport/types'
 import { colors, radii, spacing, typography } from '../../../src/theme/mobile-theme'
+import { useMobileI18n } from '../../../src/i18n'
 
 function getParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
@@ -14,6 +15,7 @@ function getParam(value: string | string[] | undefined): string {
 
 export default function HostSettingsScreen() {
   const router = useRouter()
+  const { t, nextLanguageLabel, toggleLanguage } = useMobileI18n()
   const params = useLocalSearchParams<{ hostId?: string }>()
   const hostId = getParam(params.hostId)
   const [host, setHost] = useState<HostProfile | null>(null)
@@ -44,13 +46,13 @@ export default function HostSettingsScreen() {
   return (
     <View style={styles.container}>
       <View>
-        <Text style={styles.title}>{host?.name ?? 'Host Settings'}</Text>
+        <Text style={styles.title}>{host?.name ?? t('hostSettings.title')}</Text>
         <Text style={styles.endpoint} numberOfLines={2}>
           {host?.endpoint ?? hostId}
         </Text>
         {host?.relayEndpoint ? (
           <Text style={styles.relayEndpoint} numberOfLines={2}>
-            Relay {host.relayEndpoint}
+            {t('common.relay')} {host.relayEndpoint}
           </Text>
         ) : null}
       </View>
@@ -61,8 +63,8 @@ export default function HostSettingsScreen() {
         <Pressable style={styles.actionRow} onPress={() => setRenameVisible(true)}>
           <Pencil size={18} color={colors.textPrimary} />
           <View style={styles.actionText}>
-            <Text style={styles.actionTitle}>Rename</Text>
-            <Text style={styles.actionMeta}>Change the saved display name on this phone.</Text>
+            <Text style={styles.actionTitle}>{t('hostSettings.rename')}</Text>
+            <Text style={styles.actionMeta}>{t('hostSettings.renameMeta')}</Text>
           </View>
         </Pressable>
 
@@ -70,31 +72,38 @@ export default function HostSettingsScreen() {
           <Pressable style={styles.actionRow} onPress={() => setRelayVisible(true)}>
             <Cloud size={18} color={colors.textPrimary} />
             <View style={styles.actionText}>
-              <Text style={styles.actionTitle}>Relay address</Text>
-              <Text style={styles.actionMeta}>Change the relay service this phone uses.</Text>
+              <Text style={styles.actionTitle}>{t('hostSettings.relayAddress')}</Text>
+              <Text style={styles.actionMeta}>{t('hostSettings.relayMeta')}</Text>
             </View>
           </Pressable>
         ) : null}
 
+        <Pressable style={styles.actionRow} onPress={() => void toggleLanguage()}>
+          <Languages size={18} color={colors.textPrimary} />
+          <View style={styles.actionText}>
+            <Text style={styles.actionTitle}>{t('hostSettings.language')}</Text>
+            <Text style={styles.actionMeta}>
+              {t('hostSettings.languageMeta')} {nextLanguageLabel}
+            </Text>
+          </View>
+        </Pressable>
+
         <Pressable style={styles.actionRow} onPress={() => void handleRemove()}>
           <Trash2 size={18} color={colors.statusRed} />
           <View style={styles.actionText}>
-            <Text style={styles.dangerTitle}>Remove from phone</Text>
-            <Text style={styles.actionMeta}>This deletes local metadata and the secure token.</Text>
+            <Text style={styles.dangerTitle}>{t('hostSettings.remove')}</Text>
+            <Text style={styles.actionMeta}>{t('hostSettings.removeMeta')}</Text>
           </View>
         </Pressable>
       </View>
 
-      <Text style={styles.note}>
-        To revoke this phone on the desktop, open Synapse desktop Settings &gt; Remote and revoke
-        the paired device.
-      </Text>
+      <Text style={styles.note}>{t('hostSettings.note')}</Text>
 
       <TextInputModal
         visible={renameVisible}
-        title="Rename Host"
+        title={t('hostSettings.renameTitle')}
         defaultValue={host?.name ?? ''}
-        submitLabel="Rename"
+        submitLabel={t('hostSettings.renameSubmit')}
         onCancel={() => setRenameVisible(false)}
         onSubmit={(value) => {
           setRenameVisible(false)
@@ -104,9 +113,9 @@ export default function HostSettingsScreen() {
 
       <TextInputModal
         visible={relayVisible}
-        title="Relay Address"
+        title={t('hostSettings.relayTitle')}
         defaultValue={host?.relayEndpoint ?? ''}
-        submitLabel="Save"
+        submitLabel={t('common.save')}
         onCancel={() => setRelayVisible(false)}
         onSubmit={(value) => {
           setRelayVisible(false)

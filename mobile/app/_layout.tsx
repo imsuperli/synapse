@@ -6,9 +6,19 @@ import { StatusBar } from 'expo-status-bar'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { extractPairingCodeFromUrl } from '../src/transport/pairing'
 import { colors } from '../src/theme/mobile-theme'
+import { MobileI18nProvider, useMobileI18n } from '../src/i18n'
 
 export default function RootLayout() {
+  return (
+    <MobileI18nProvider>
+      <RootStack />
+    </MobileI18nProvider>
+  )
+}
+
+function RootStack() {
   const router = useRouter()
+  const { t } = useMobileI18n()
 
   useEffect(() => {
     const openPairingUrl = (url: string | null) => {
@@ -38,10 +48,10 @@ export default function RootLayout() {
             contentStyle: { backgroundColor: colors.bgBase }
           }}
         >
-          <Stack.Screen name="index" options={{ title: 'Synapse Mobile' }} />
-          <Stack.Screen name="pair" options={{ title: 'Pair' }} />
-          <Stack.Screen name="pair-scan" options={{ title: 'Pair Desktop' }} />
-          <Stack.Screen name="pair-confirm" options={{ title: 'Confirm Pairing' }} />
+          <Stack.Screen name="index" options={{ title: t('nav.home') }} />
+          <Stack.Screen name="pair" options={{ title: t('nav.pair') }} />
+          <Stack.Screen name="pair-scan" options={{ title: t('nav.pairDesktop') }} />
+          <Stack.Screen name="pair-confirm" options={{ title: t('nav.confirmPairing') }} />
           <Stack.Screen name="h" options={{ headerShown: false }} />
         </Stack>
       </SafeAreaProvider>

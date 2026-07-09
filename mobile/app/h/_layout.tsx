@@ -1,7 +1,10 @@
 import { Stack } from 'expo-router'
 import { colors } from '../../src/theme/mobile-theme'
+import { useMobileI18n } from '../../src/i18n'
 
 export default function HostLayout() {
+  const { t } = useMobileI18n()
+
   return (
     <Stack
       screenOptions={{
@@ -11,9 +14,9 @@ export default function HostLayout() {
         contentStyle: { backgroundColor: colors.bgBase }
       }}
     >
-      <Stack.Screen name="[hostId]/index" options={{ title: 'Desktop' }} />
-      <Stack.Screen name="[hostId]/settings" options={{ title: 'Host Settings' }} />
-      <Stack.Screen name="[hostId]/t/[windowId]/[paneId]" options={{ title: 'Terminal' }} />
+      <Stack.Screen name="[hostId]/index" options={{ title: t('nav.desktop') }} />
+      <Stack.Screen name="[hostId]/settings" options={{ title: t('nav.hostSettings') }} />
+      <Stack.Screen name="[hostId]/t/[windowId]/[paneId]" options={{ title: t('nav.terminal') }} />
     </Stack>
   )
 }

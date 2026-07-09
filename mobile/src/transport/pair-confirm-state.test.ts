@@ -23,7 +23,7 @@ describe('resolvePairConfirmRouteState', () => {
     expect(resolvePairConfirmRouteState(encodeOffer(offer))).toEqual({
       kind: 'ready',
       offer,
-      errorMessage: ''
+      errorCode: null
     })
   })
 
@@ -31,7 +31,7 @@ describe('resolvePairConfirmRouteState', () => {
     expect(resolvePairConfirmRouteState(`synapse://pair#${encodeOffer(offer)}`)).toEqual({
       kind: 'ready',
       offer,
-      errorMessage: ''
+      errorCode: null
     })
   })
 
@@ -39,7 +39,7 @@ describe('resolvePairConfirmRouteState', () => {
     expect(resolvePairConfirmRouteState(undefined)).toEqual({
       kind: 'error',
       offer: null,
-      errorMessage: 'Missing pairing code'
+      errorCode: 'missing-code'
     })
   })
 
@@ -47,7 +47,7 @@ describe('resolvePairConfirmRouteState', () => {
     expect(resolvePairConfirmRouteState('not a pairing code')).toEqual({
       kind: 'error',
       offer: null,
-      errorMessage: 'Not a valid pairing code'
+      errorCode: 'invalid-code'
     })
   })
 })

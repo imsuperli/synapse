@@ -1,13 +1,15 @@
 import { useCallback, useState } from 'react'
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { Link, useFocusEffect, useRouter } from 'expo-router'
-import { Plus, Server } from 'lucide-react-native'
+import { Languages, Plus, Server } from 'lucide-react-native'
 import { loadHosts } from '../src/transport/host-store'
 import type { HostProfile } from '../src/transport/types'
 import { colors, radii, spacing, typography } from '../src/theme/mobile-theme'
+import { useMobileI18n } from '../src/i18n'
 
 export default function HostListScreen() {
   const router = useRouter()
+  const { t, nextLanguageLabel, toggleLanguage } = useMobileI18n()
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -35,14 +37,24 @@ export default function HostListScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Synapse Mobile</Text>
-          <Text style={styles.subtitle}>Paired desktop hosts</Text>
+          <Text style={styles.subtitle}>{t('home.subtitle')}</Text>
         </View>
-        <Link href="/pair-scan" asChild>
-          <Pressable style={styles.primaryButton}>
-            <Plus size={18} color={colors.bgBase} />
-            <Text style={styles.primaryButtonText}>Pair</Text>
+        <View style={styles.headerActions}>
+          <Pressable
+            style={styles.languageButton}
+            onPress={() => void toggleLanguage()}
+            accessibilityLabel={t('home.language')}
+          >
+            <Languages size={17} color={colors.textPrimary} />
+            <Text style={styles.languageButtonText}>{nextLanguageLabel}</Text>
           </Pressable>
-        </Link>
+          <Link href="/pair-scan" asChild>
+            <Pressable style={styles.primaryButton}>
+              <Plus size={18} color={colors.bgBase} />
+              <Text style={styles.primaryButtonText}>{t('home.pair')}</Text>
+            </Pressable>
+          </Link>
+        </View>
       </View>
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -55,11 +67,11 @@ export default function HostListScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Server size={28} color={colors.textSecondary} />
-            <Text style={styles.emptyTitle}>No paired desktops</Text>
-            <Text style={styles.emptyText}>Pair from Synapse desktop Settings &gt; Remote.</Text>
+            <Text style={styles.emptyTitle}>{t('home.emptyTitle')}</Text>
+            <Text style={styles.emptyText}>{t('home.emptyText')}</Text>
             <Link href="/pair-scan" asChild>
               <Pressable style={styles.secondaryButton}>
-                <Text style={styles.secondaryButtonText}>Scan QR or paste code</Text>
+                <Text style={styles.secondaryButtonText}>{t('home.scanOrPaste')}</Text>
               </Pressable>
             </Link>
           </View>
@@ -75,7 +87,7 @@ export default function HostListScreen() {
             <View style={styles.hostMain}>
               <Text style={styles.hostName}>{item.name}</Text>
               <Text style={styles.hostEndpoint} numberOfLines={1}>
-                {item.relayEndpoint ? `Relay ${item.relayEndpoint}` : item.endpoint}
+                {item.relayEndpoint ? `${t('common.relay')} ${item.relayEndpoint}` : item.endpoint}
               </Text>
             </View>
           </Pressable>
@@ -97,6 +109,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     marginBottom: spacing.lg
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm
   },
   title: {
     color: colors.textPrimary,
@@ -120,6 +137,21 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: colors.bgBase,
     fontSize: typography.bodySize,
+    fontWeight: '700'
+  },
+  languageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.button,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm
+  },
+  languageButtonText: {
+    color: colors.textPrimary,
+    fontSize: typography.metaSize,
     fontWeight: '700'
   },
   secondaryButton: {

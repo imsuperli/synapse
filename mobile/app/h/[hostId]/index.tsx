@@ -22,27 +22,28 @@ import { loadHostOverviewData } from '../../../src/synapse/host-overview'
 import type { RpcClient } from '../../../src/transport/rpc-client'
 import type { ConnectionLogEntry, ConnectionState, HostProfile } from '../../../src/transport/types'
 import { colors, radii, spacing, typography } from '../../../src/theme/mobile-theme'
+import { useMobileI18n, type MobileTranslate } from '../../../src/i18n'
 
 function getParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
 }
 
-function connectionLabel(state: ConnectionState | 'loading'): string {
+function connectionLabel(state: ConnectionState | 'loading', t: MobileTranslate): string {
   switch (state) {
     case 'connected':
-      return 'Connected'
+      return t('common.connected')
     case 'connecting':
-      return 'Connecting'
+      return t('common.connecting')
     case 'handshaking':
-      return 'Securing channel'
+      return t('common.handshaking')
     case 'reconnecting':
-      return 'Reconnecting'
+      return t('common.reconnecting')
     case 'auth-failed':
-      return 'Auth failed'
+      return t('common.authFailed')
     case 'disconnected':
-      return 'Disconnected'
+      return t('common.disconnected')
     case 'loading':
-      return 'Loading'
+      return t('common.loading')
   }
 }
 
@@ -50,32 +51,52 @@ type OverviewItem =
   | { type: 'window'; window: RemoteWindowSummary }
   | { type: 'terminal'; terminal: RemoteTerminalSummary }
 
-function paneTitle(pane: RemotePaneSummary): string {
-  return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || 'Terminal'
+function paneTitle(pane: RemotePaneSummary, t: MobileTranslate): string {
+  return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || t('common.terminal')
 }
 
-function paneMeta(pane: RemotePaneSummary): string {
-  const backend = pane.backend ?? 'local'
-  const cwd = pane.cwd || 'unknown cwd'
-  return pane.running ? `${backend} - pid ${pane.pid ?? '-'} - ${cwd}` : `${backend} - ${cwd}`
+function backendLabel(backend: string | null | undefined, t: MobileTranslate): string {
+  switch (backend ?? 'local') {
+    case 'local':
+      return t('overview.backendLocal')
+    case 'ssh':
+      return t('overview.backendSsh')
+    default:
+      return backend ?? t('overview.backendLocal')
+  }
 }
 
-function statusLabel(status: string, running: boolean): string {
+function paneMeta(pane: RemotePaneSummary, t: MobileTranslate): string {
+  const backend = backendLabel(pane.backend, t)
+  const cwd = pane.cwd || t('overview.unknownCwd')
+  return pane.running
+    ? `${backend} - ${t('overview.pid')} ${pane.pid ?? '-'} - ${cwd}`
+    : `${backend} - ${cwd}`
+}
+
+function windowPaneCountLabel(count: number, t: MobileTranslate): string {
+  return t(
+    count === 1 ? 'overview.windowTerminalPaneCountOne' : 'overview.windowTerminalPaneCountMany',
+    { count }
+  )
+}
+
+function statusLabel(status: string, running: boolean, t: MobileTranslate): string {
   if (running) {
-    return 'Running'
+    return t('overview.running')
   }
   switch (status) {
     case 'waiting':
-      return 'Waiting'
+      return t('overview.waiting')
     case 'error':
-      return 'Error'
+      return t('overview.error')
     case 'restoring':
-      return 'Starting'
+      return t('common.starting')
     case 'paused':
-      return 'Stopped'
+      return t('overview.stopped')
     case 'completed':
     default:
-      return 'Stopped'
+      return t('overview.stopped')
   }
 }
 
@@ -124,6 +145,7 @@ export default function HostOverviewScreen() {
   const params = useLocalSearchParams<{ hostId?: string }>()
   const hostId = getParam(params.hostId)
   const router = useRouter()
+  const { t } = useMobileI18n()
   const [host, setHost] = useState<HostProfile | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [terminals, setTerminals] = useState<RemoteTerminalSummary[]>([])
@@ -166,7 +188,7 @@ export default function HostOverviewScreen() {
       const loadedHost = await loadHostById(hostId)
       if (!loadedHost) {
         setHost(null)
-        setError('Host not found. Pair this desktop again.')
+        setError(t('overview.hostNotFound'))
         setConnectionState('disconnected')
         return
       }
@@ -187,7 +209,7 @@ export default function HostOverviewScreen() {
     } finally {
       setRefreshing(false)
     }
-  }, [appendLog, closeClient, hostId])
+  }, [appendLog, closeClient, hostId, t])
 
   useFocusEffect(
     useCallback(() => {
@@ -206,12 +228,12 @@ export default function HostOverviewScreen() {
         setError(null)
         if (!pane.running) {
           if (!isStartableLocalPane(pane)) {
-            setError('Only stopped local terminal panes can be started from mobile right now.')
+            setError(t('overview.onlyLocalStart'))
             return
           }
           const client = clientRef.current
           if (!client) {
-            setError('Not connected to Synapse desktop.')
+            setError(t('overview.notConnected'))
             return
           }
           setStartingPaneKey(paneKey)
@@ -236,7 +258,7 @@ export default function HostOverviewScreen() {
         setStartingPaneKey(null)
       }
     },
-    [hostId, router]
+    [hostId, router, t]
   )
 
   const openWindow = useCallback(
@@ -262,7 +284,7 @@ export default function HostOverviewScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.hostTitleBlock}>
-          <Text style={styles.title}>{host?.name ?? 'Synapse Desktop'}</Text>
+          <Text style={styles.title}>{host?.name ?? t('overview.hostFallback')}</Text>
           <Text style={styles.endpoint} numberOfLines={1}>
             {host?.endpoint ?? hostId}
           </Text>
@@ -288,13 +310,13 @@ export default function HostOverviewScreen() {
                 : styles.statusAmber
           ]}
         />
-        <Text style={styles.statusText}>{connectionLabel(connectionState)}</Text>
+        <Text style={styles.statusText}>{connectionLabel(connectionState, t)}</Text>
       </View>
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <Text style={styles.sectionTitle}>
-        {overviewMode === 'windows' ? 'Terminal Windows' : 'Terminals'}
+        {overviewMode === 'windows' ? t('overview.windowsTitle') : t('overview.terminalsTitle')}
       </Text>
       <FlatList
         data={overviewItems}
@@ -318,34 +340,39 @@ export default function HostOverviewScreen() {
             )}
             <Text style={styles.emptyTitle}>
               {refreshing
-                ? 'Loading terminals'
+                ? t('overview.loadingTerminals')
                 : overviewMode === 'windows'
-                  ? 'No terminal panes'
-                  : 'No terminal panes'}
+                  ? t('overview.emptyTitle')
+                  : t('overview.emptyTitle')}
             </Text>
             <Text style={styles.emptyText}>
               {overviewMode === 'windows'
-                ? 'Open or restore a terminal pane in Synapse desktop, then refresh this screen.'
-                : 'Open a terminal pane in Synapse desktop, then refresh this screen.'}
+                ? t('overview.emptyWindowsText')
+                : t('overview.emptyTerminalsText')}
             </Text>
           </View>
         }
         renderItem={({ item }) =>
           item.type === 'window'
-            ? renderWindowItem(item.window, startingPaneKey, openWindow, openPane)
-            : renderTerminalItem(item.terminal, openTerminal)
+            ? renderWindowItem(item.window, startingPaneKey, openWindow, openPane, t)
+            : renderTerminalItem(item.terminal, openTerminal, t)
         }
       />
     </View>
   )
 }
 
-function renderTerminalItem(item: RemoteTerminalSummary, onOpen: (terminal: RemoteTerminalSummary) => void) {
+function renderTerminalItem(
+  item: RemoteTerminalSummary,
+  onOpen: (terminal: RemoteTerminalSummary) => void,
+  t: MobileTranslate
+) {
   return (
     <TerminalListRow
       terminal={item}
       disabled={item.status !== 'alive'}
       onPress={() => onOpen(item)}
+      t={t}
     />
   )
 }
@@ -355,13 +382,15 @@ function PaneCardRow({
   active,
   disabled,
   starting,
-  onPress
+  onPress,
+  t
 }: {
   pane: RemotePaneSummary
   active: boolean
   disabled: boolean
   starting: boolean
   onPress: () => void
+  t: MobileTranslate
 }) {
   return (
     <Pressable
@@ -378,14 +407,14 @@ function PaneCardRow({
       <View style={styles.paneMain}>
         <View style={styles.terminalTitleRow}>
           <Text style={styles.terminalTitle} numberOfLines={1}>
-            {paneTitle(pane)}
+            {paneTitle(pane, t)}
           </Text>
           <Text style={styles.badge}>
-            {starting ? 'Starting' : statusLabel(pane.status, pane.running)}
+            {starting ? t('common.starting') : statusLabel(pane.status, pane.running, t)}
           </Text>
         </View>
         <Text style={styles.terminalMeta} numberOfLines={1}>
-          {paneMeta(pane)}
+          {paneMeta(pane, t)}
         </Text>
       </View>
       {!pane.running && isStartableLocalPane(pane) ? (
@@ -401,7 +430,8 @@ function renderWindowItem(
   item: RemoteWindowSummary,
   startingPaneKey: string | null,
   onOpenWindow: (window: RemoteWindowSummary) => void | Promise<void>,
-  onOpenPane: (pane: RemotePaneSummary) => void | Promise<void>
+  onOpenPane: (pane: RemotePaneSummary) => void | Promise<void>,
+  t: MobileTranslate
 ) {
   const activePane = getActiveTerminalPane(item)
   return (
@@ -428,7 +458,7 @@ function renderWindowItem(
               {item.name}
             </Text>
             <Text style={styles.windowMeta}>
-              {item.terminalPaneCount} terminal {item.terminalPaneCount === 1 ? 'pane' : 'panes'}
+              {windowPaneCountLabel(item.terminalPaneCount, t)}
             </Text>
           </View>
         </View>
@@ -453,6 +483,7 @@ function renderWindowItem(
             disabled={!canOpen || starting}
             starting={starting}
             onPress={() => void onOpenPane(pane)}
+            t={t}
           />
         )
       })}
@@ -464,12 +495,14 @@ function TerminalListRow({
   terminal,
   disabled = false,
   badge,
-  onPress
+  onPress,
+  t
 }: {
   terminal: RemoteTerminalSummary
   disabled?: boolean
   badge?: string
   onPress: () => void
+  t: MobileTranslate
 }) {
   return (
     <Pressable
@@ -492,7 +525,8 @@ function TerminalListRow({
           {badge ? <Text style={styles.badge}>{badge}</Text> : null}
         </View>
         <Text style={styles.terminalMeta} numberOfLines={1}>
-          {terminal.backend} - pid {terminal.pid || '-'} - {terminal.workingDirectory || 'unknown cwd'}
+          {backendLabel(terminal.backend, t)} - {t('overview.pid')} {terminal.pid || '-'} -{' '}
+          {terminal.workingDirectory || t('overview.unknownCwd')}
         </Text>
       </View>
     </Pressable>

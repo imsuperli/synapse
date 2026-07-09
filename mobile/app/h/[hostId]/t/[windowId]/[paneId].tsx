@@ -50,14 +50,15 @@ import type { RpcClient } from '../../../../../src/transport/rpc-client'
 import type { ConnectionLogEntry, ConnectionState, HostProfile } from '../../../../../src/transport/types'
 import type { MobileTerminalTheme } from '../../../../../src/terminal/mobile-terminal-theme'
 import { colors, radii, spacing, typography } from '../../../../../src/theme/mobile-theme'
+import { useMobileI18n, type MobileTranslate } from '../../../../../src/i18n'
 
 type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryInput>
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
 
-function terminalPaneLabel(pane: RemotePaneSummary): string {
-  return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || 'Terminal'
+function terminalPaneLabel(pane: RemotePaneSummary, t: MobileTranslate): string {
+  return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || t('common.terminal')
 }
 
 function terminalPaneStatusColor(pane: RemotePaneSummary): string {
@@ -112,22 +113,22 @@ function getParam(value: string | string[] | undefined): string {
   }
 }
 
-function connectionLabel(state: ConnectionState | 'loading'): string {
+function connectionLabel(state: ConnectionState | 'loading', t: MobileTranslate): string {
   switch (state) {
     case 'connected':
-      return 'Connected'
+      return t('common.connected')
     case 'connecting':
-      return 'Connecting'
+      return t('common.connecting')
     case 'handshaking':
-      return 'Securing channel'
+      return t('common.handshaking')
     case 'reconnecting':
-      return 'Reconnecting'
+      return t('common.reconnecting')
     case 'auth-failed':
-      return 'Auth failed'
+      return t('common.authFailed')
     case 'disconnected':
-      return 'Disconnected'
+      return t('common.disconnected')
     case 'loading':
-      return 'Loading'
+      return t('common.loading')
   }
 }
 
@@ -139,6 +140,7 @@ export default function RemoteTerminalScreen() {
   const terminalHandle = `${windowId}:${paneId}`
   const router = useRouter()
   const insets = useSafeAreaInsets()
+  const { t } = useMobileI18n()
   const terminalRef = useRef<TerminalWebViewHandle | null>(null)
   const clientRef = useRef<RpcClient | null>(null)
   const unsubscribeRef = useRef<(() => void) | null>(null)
@@ -329,7 +331,7 @@ export default function RemoteTerminalScreen() {
     try {
       const loadedHost = await loadHostById(hostId)
       if (!loadedHost) {
-        throw new Error('Host not found. Pair this desktop again.')
+        throw new Error(t('terminal.hostNotFound'))
       }
       if (runIdRef.current !== runId) {
         return
@@ -367,7 +369,8 @@ export default function RemoteTerminalScreen() {
     loadWindowPaneTabs,
     loadTerminalHistorySnapshot,
     measureAndFitLocalTerminal,
-    startTerminalSubscription
+    startTerminalSubscription,
+    t
   ])
 
   useFocusEffect(
@@ -425,12 +428,12 @@ export default function RemoteTerminalScreen() {
         return
       }
       if (!isStartableLocalPane(pane)) {
-        setError('Only stopped local terminal panes can be started from mobile right now.')
+        setError(t('terminal.onlyLocalStart'))
         return
       }
       const client = clientRef.current
       if (!client) {
-        setError('Not connected to Synapse desktop.')
+        setError(t('terminal.notConnected'))
         return
       }
       const paneKey = `${pane.windowId}:${pane.paneId}`
@@ -446,7 +449,7 @@ export default function RemoteTerminalScreen() {
         setStartingTabPaneKey(null)
       }
     },
-    [hostId, loadWindowPaneTabs, paneId, router]
+    [hostId, loadWindowPaneTabs, paneId, router, t]
   )
 
   const handleLayout = useCallback(
@@ -469,7 +472,7 @@ export default function RemoteTerminalScreen() {
         return false
       }
       if (!isTerminalLiveInputWithinByteLimit(text)) {
-        setError('Input too large.')
+        setError(t('terminal.inputTooLarge'))
         return false
       }
       const client = clientRef.current
@@ -484,7 +487,7 @@ export default function RemoteTerminalScreen() {
         }
       )
     },
-    [connectionState, paneId, terminalHandle, windowId]
+    [connectionState, paneId, terminalHandle, t, windowId]
   )
   sendLiveTerminalInputRef.current = sendLiveTerminalInput
 
@@ -580,9 +583,9 @@ export default function RemoteTerminalScreen() {
     <View style={styles.container}>
       <View style={styles.toolbar}>
         <View style={styles.titleBlock}>
-          <Text style={styles.title}>{host?.name ?? 'Terminal'}</Text>
+          <Text style={styles.title}>{host?.name ?? t('common.terminal')}</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
-            {windowId}:{paneId} - {connectionLabel(connectionState)}
+            {windowId}:{paneId} - {connectionLabel(connectionState, t)}
           </Text>
         </View>
         <View style={styles.toolbarActions}>
@@ -629,7 +632,9 @@ export default function RemoteTerminalScreen() {
                     style={[styles.paneTabText, active && styles.paneTabTextActive]}
                     numberOfLines={1}
                   >
-                    {starting ? 'Starting' : terminalPaneLabel(pane) || `Pane ${index + 1}`}
+                    {starting
+                      ? t('common.starting')
+                      : terminalPaneLabel(pane, t) || `${t('overview.pane')} ${index + 1}`}
                   </Text>
                 </Pressable>
               )
@@ -651,7 +656,7 @@ export default function RemoteTerminalScreen() {
         {loading ? (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator color={colors.textSecondary} />
-            <Text style={styles.loadingText}>Loading terminal...</Text>
+            <Text style={styles.loadingText}>{t('terminal.loading')}</Text>
           </View>
         ) : null}
       </View>
@@ -683,10 +688,10 @@ export default function RemoteTerminalScreen() {
               ]}
               disabled={!canSend}
               onPress={() => void handlePaste()}
-              accessibilityLabel="Paste from clipboard"
+              accessibilityLabel={t('terminal.pasteAccessibility')}
             >
               <Text style={[styles.accessoryKeyText, !canSend && styles.accessoryKeyTextDisabled]}>
-                Paste
+                {t('terminal.paste')}
               </Text>
             </Pressable>
             {accessoryKeys.map((key) => (
@@ -717,7 +722,7 @@ export default function RemoteTerminalScreen() {
                   }
                   void handleAccessoryKey(createTerminalLiveAccessoryInput(key))
                 }}
-                accessibilityLabel={key.accessibilityLabel ?? `Send ${key.label}`}
+                accessibilityLabel={key.accessibilityLabel ?? t('terminal.sendKey', { key: key.label })}
               >
                 <Text
                   style={[styles.accessoryKeyText, !canSend && styles.accessoryKeyTextDisabled]}
@@ -739,8 +744,8 @@ export default function RemoteTerminalScreen() {
             disabled={!canSend}
             onPress={focusLiveInput}
             accessibilityRole="button"
-            accessibilityLabel="Show keyboard for live terminal input"
-            accessibilityHint="Typed text is sent directly to the active terminal"
+            accessibilityLabel={t('terminal.showKeyboard')}
+            accessibilityHint={t('terminal.showKeyboardHint')}
           >
             <KeyboardIcon size={16} color={colors.textSecondary} strokeWidth={2} />
             <MobileTerminalLiveInputStatus dictation={passiveDictationState} isAttaching={false} />

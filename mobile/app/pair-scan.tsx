@@ -12,23 +12,13 @@ import { CameraView, useCameraPermissions } from 'expo-camera'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ChevronLeft, Clipboard, QrCode } from 'lucide-react-native'
-import { ConnectionLog } from '../src/components/ConnectionLog'
 import { TextInputModal } from '../src/components/TextInputModal'
-import { getNextHostName, saveHost } from '../src/transport/host-store'
-import { decodePairingUrl, parsePairingCode } from '../src/transport/pairing'
-import {
-  startPairingConnectionAttempt,
-  type PairingConnectionAttempt
-} from '../src/transport/pairing-connection-attempt'
-import { connect } from '../src/transport/rpc-client'
-import type { ConnectionLogEntry, PairingOffer, RpcResponse } from '../src/transport/types'
+import { extractPairingCodeFromUrl, parsePairingCode } from '../src/transport/pairing'
 import { colors, radii, spacing, typography } from '../src/theme/mobile-theme'
+import { useMobileI18n } from '../src/i18n'
 
-const PAIRING_OVERALL_TIMEOUT_MS = 25_000
 const SCAN_RETICLE_SCALE = 0.62
 const SCAN_RETICLE_MAX_SIZE = 360
-
-type PairingStatus = 'scanning' | 'connecting' | 'error'
 
 function Step({ number, text }: { number: number; text: string }) {
   return (
@@ -44,118 +34,20 @@ function Step({ number, text }: { number: number; text: string }) {
 export default function PairScanScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
+  const { t } = useMobileI18n()
   const [permission, requestPermission] = useCameraPermissions()
-  const [status, setStatus] = useState<PairingStatus>('scanning')
   const [errorMessage, setErrorMessage] = useState('')
   const [pasteVisible, setPasteVisible] = useState(false)
   const [cameraBounds, setCameraBounds] = useState({ width: 0, height: 0 })
-  const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
-  const logsRef = useRef<ConnectionLogEntry[]>([])
   const processingRef = useRef(false)
-  const mountedRef = useRef(true)
-  const activeAttemptRef = useRef<PairingConnectionAttempt | null>(null)
+  const [status, setStatus] = useState<'scanning' | 'error'>('scanning')
 
   const setRootRef = useCallback((node: View | null) => {
     if (node) {
-      mountedRef.current = true
+      processingRef.current = false
       return
     }
-    mountedRef.current = false
-    activeAttemptRef.current?.dispose()
-    activeAttemptRef.current = null
   }, [])
-
-  const appendLog = useCallback((entry: ConnectionLogEntry) => {
-    logsRef.current = [...logsRef.current, entry]
-    setLogs(logsRef.current)
-  }, [])
-
-  const pairAndSave = useCallback(
-    async (offer: PairingOffer) => {
-      setStatus('connecting')
-      setErrorMessage('')
-      logsRef.current = []
-      setLogs([])
-      let client: ReturnType<typeof connect> | null = null
-      activeAttemptRef.current?.dispose()
-      const attempt = startPairingConnectionAttempt({
-        timeoutMs: PAIRING_OVERALL_TIMEOUT_MS,
-        closeClient: () => client?.close()
-      })
-      activeAttemptRef.current = attempt
-
-      let response: RpcResponse
-      try {
-        client = connect(offer.endpoint, offer.deviceToken, offer.publicKeyB64, {
-          onLog: (entry) => {
-            if (mountedRef.current && activeAttemptRef.current === attempt) {
-              appendLog(entry)
-            }
-          }
-        })
-        response = await client.sendRequest('status.get')
-      } catch (err) {
-        const timedOut = attempt.timedOut
-        const current = activeAttemptRef.current === attempt
-        attempt.dispose()
-        if (activeAttemptRef.current === attempt) {
-          activeAttemptRef.current = null
-        }
-        if (!mountedRef.current || !current) {
-          return
-        }
-        setStatus('error')
-        setErrorMessage(
-          timedOut
-            ? `Couldn't connect within ${PAIRING_OVERALL_TIMEOUT_MS / 1000}s. Check the log and desktop endpoint.`
-            : `Cannot connect to Synapse desktop: ${err instanceof Error ? err.message : String(err)}`
-        )
-        processingRef.current = false
-        return
-      }
-
-      const current = activeAttemptRef.current === attempt
-      attempt.dispose()
-      if (activeAttemptRef.current === attempt) {
-        activeAttemptRef.current = null
-      }
-      if (!mountedRef.current || !current) {
-        return
-      }
-
-      if (!response.ok) {
-        setStatus('error')
-        setErrorMessage(
-          response.error.code === 'unauthorized'
-            ? 'Authentication failed. Regenerate the QR code on desktop and pair again.'
-            : `Synapse desktop rejected pairing: ${response.error.message}`
-        )
-        processingRef.current = false
-        return
-      }
-
-      try {
-        const hostId = `host-${Date.now()}`
-        await saveHost({
-          id: hostId,
-          name: offer.hostName || (await getNextHostName()),
-          endpoint: offer.endpoint,
-          deviceToken: offer.deviceToken,
-          publicKeyB64: offer.publicKeyB64,
-          relaySessionId: offer.relaySessionId,
-          lastConnected: Date.now()
-        })
-        router.replace(`/h/${hostId}`)
-      } catch (err) {
-        setStatus('error')
-        setErrorMessage(
-          `Pairing succeeded but saving the host failed: ${err instanceof Error ? err.message : String(err)}`
-        )
-        processingRef.current = false
-      }
-    },
-    [appendLog, router]
-  )
 
   const handleCode = useCallback(
     (input: string, fromQr: boolean) => {
@@ -163,20 +55,20 @@ export default function PairScanScreen() {
         return
       }
       processingRef.current = true
-      const offer = fromQr ? decodePairingUrl(input) : parsePairingCode(input)
-      if (!offer) {
+      const candidate = fromQr ? extractPairingCodeFromUrl(input) ?? input : input.trim()
+      if (!parsePairingCode(candidate)) {
         setStatus('error')
         setErrorMessage(
           fromQr
-            ? 'Not a valid Synapse pairing QR code.'
-            : 'Not a valid pairing code. Copy the code from Synapse desktop and paste again.'
+            ? t('pair.invalidQr')
+            : t('pair.invalidCode')
         )
         processingRef.current = false
         return
       }
-      void pairAndSave(offer)
+      router.push({ pathname: '/pair-confirm', params: { code: candidate } })
     },
-    [pairAndSave]
+    [router, t]
   )
 
   const handleCameraLayout = useCallback((event: LayoutChangeEvent) => {
@@ -190,10 +82,6 @@ export default function PairScanScreen() {
   }, [])
 
   const retry = useCallback(() => {
-    activeAttemptRef.current?.dispose()
-    activeAttemptRef.current = null
-    logsRef.current = []
-    setLogs([])
     setStatus('scanning')
     setErrorMessage('')
     processingRef.current = false
@@ -212,6 +100,7 @@ export default function PairScanScreen() {
     return (
       <View ref={setRootRef} style={[styles.container, containerPadding]}>
         <ActivityIndicator color={colors.textSecondary} />
+        <Text style={styles.connectingText}>{t('pair.cameraLoading')}</Text>
       </View>
     )
   }
@@ -225,12 +114,12 @@ export default function PairScanScreen() {
         </Pressable>
         <View style={styles.centered}>
           <Text style={styles.title}>
-            {canAskAgain ? 'Pair Synapse Desktop' : 'Camera Access Disabled'}
+            {canAskAgain ? t('pair.title') : t('pair.cameraDisabledTitle')}
           </Text>
           <Text style={styles.subtitle}>
             {canAskAgain
-              ? 'Scan the QR code from Synapse desktop, or paste the pairing code.'
-              : 'Enable camera access in Settings, or paste the pairing code instead.'}
+              ? t('pair.subtitle')
+              : t('pair.cameraDisabledSubtitle')}
           </Text>
           <Pressable
             style={styles.primaryButton}
@@ -238,16 +127,19 @@ export default function PairScanScreen() {
           >
             {canAskAgain ? <QrCode size={16} color={colors.bgBase} /> : null}
             <Text style={styles.primaryButtonText}>
-              {canAskAgain ? 'Continue' : 'Open Settings'}
+              {canAskAgain ? t('pair.continue') : t('pair.openSettings')}
             </Text>
           </Pressable>
           <Pressable style={styles.pasteButton} onPress={() => setPasteVisible(true)}>
             <Clipboard size={16} color={colors.textSecondary} />
-            <Text style={styles.pasteButtonText}>Paste code instead</Text>
+            <Text style={styles.pasteButtonText}>{t('pair.pasteInstead')}</Text>
           </Pressable>
         </View>
         <PairingPasteSheet
           visible={pasteVisible}
+          title={t('pair.pasteTitle')}
+          message={t('pair.pasteMessage')}
+          placeholder={t('pair.pastePlaceholder')}
           onCancel={() => setPasteVisible(false)}
           onSubmit={(value) => {
             setPasteVisible(false)
@@ -265,9 +157,9 @@ export default function PairScanScreen() {
       </Pressable>
 
       <View style={styles.steps}>
-        <Step number={1} text="Open Synapse desktop" />
-        <Step number={2} text="Go to Settings > Remote" />
-        <Step number={3} text="Scan the QR code" />
+        <Step number={1} text={t('pair.step1')} />
+        <Step number={2} text={t('pair.step2')} />
+        <Step number={3} text={t('pair.step3')} />
       </View>
 
       {status === 'scanning' ? (
@@ -294,32 +186,17 @@ export default function PairScanScreen() {
           )}
           <Pressable style={styles.pasteButton} onPress={() => setPasteVisible(true)}>
             <Clipboard size={16} color={colors.textSecondary} />
-            <Text style={styles.pasteButtonText}>Or paste pairing code</Text>
+            <Text style={styles.pasteButtonText}>{t('pair.orPaste')}</Text>
           </Pressable>
         </>
-      ) : null}
-
-      {status === 'connecting' ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.textSecondary} />
-          <Text style={styles.connectingText}>Connecting to Synapse desktop...</Text>
-          <View style={styles.logSlot}>
-            <ConnectionLog entries={logs} title="Pairing log" />
-          </View>
-        </View>
       ) : null}
 
       {status === 'error' ? (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{errorMessage}</Text>
-          {logs.length > 0 ? (
-            <View style={styles.logSlot}>
-              <ConnectionLog entries={logs} title="Pairing log" />
-            </View>
-          ) : null}
           <View style={styles.errorActions}>
             <Pressable style={styles.primaryButton} onPress={retry}>
-              <Text style={styles.primaryButtonText}>Try Again</Text>
+              <Text style={styles.primaryButtonText}>{t('common.retry')}</Text>
             </Pressable>
             <Pressable
               style={styles.secondaryButton}
@@ -328,7 +205,7 @@ export default function PairScanScreen() {
                 setPasteVisible(true)
               }}
             >
-              <Text style={styles.secondaryButtonText}>Paste code instead</Text>
+              <Text style={styles.secondaryButtonText}>{t('pair.pasteInstead')}</Text>
             </Pressable>
           </View>
         </View>
@@ -336,6 +213,9 @@ export default function PairScanScreen() {
 
       <PairingPasteSheet
         visible={pasteVisible}
+        title={t('pair.pasteTitle')}
+        message={t('pair.pasteMessage')}
+        placeholder={t('pair.pastePlaceholder')}
         onCancel={() => setPasteVisible(false)}
         onSubmit={(value) => {
           setPasteVisible(false)
@@ -348,19 +228,25 @@ export default function PairScanScreen() {
 
 function PairingPasteSheet({
   visible,
+  title,
+  message,
+  placeholder,
   onSubmit,
   onCancel
 }: {
   visible: boolean
+  title: string
+  message: string
+  placeholder: string
   onSubmit: (value: string) => void
   onCancel: () => void
 }) {
   return (
     <TextInputModal
       visible={visible}
-      title="Paste pairing code"
-      message="Copy the code shown under the QR in Synapse desktop."
-      placeholder="synapse://pair?code=... or paste the code"
+      title={title}
+      message={message}
+      placeholder={placeholder}
       onSubmit={onSubmit}
       onCancel={onCancel}
     />

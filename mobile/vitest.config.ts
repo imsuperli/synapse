@@ -36,6 +36,7 @@ export default defineConfig({
       'src/transport/pairing.test.ts',
       'src/transport/rpc-response-shape.test.ts',
       'src/transport/websocket-payload-bytes.test.ts',
+      'src/i18n/**/*.test.ts',
       'src/terminal/terminal-text-input-normalization.test.ts',
       'src/terminal/terminal-webview-engine-error.test.ts',
       'src/terminal/terminal-webview-engine.test.ts',

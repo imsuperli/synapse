@@ -22,6 +22,8 @@
     "src/terminal/**/*.tsx",
     "src/theme/**/*.ts",
     "src/theme/**/*.tsx",
+    "src/i18n/**/*.ts",
+    "src/i18n/**/*.tsx",
     "src/components/BottomDrawer.tsx",
     "src/components/ConnectionLog.tsx",
     "src/components/TextInputModal.tsx",
