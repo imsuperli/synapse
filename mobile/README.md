@@ -11,8 +11,8 @@ Unless a command says otherwise, run mobile app commands from the `mobile/` dire
 
 ## Prerequisites
 
-- Node.js 24+
-- pnpm
+- Node.js 22+
+- npm 11
 - Xcode and/or Android Studio tooling for simulator or device builds
 - Expo Go on your phone, or a development client build when native modules are needed
 - Phone and desktop on the same LAN when testing a physical phone
@@ -22,8 +22,8 @@ Unless a command says otherwise, run mobile app commands from the `mobile/` dire
 From the repository root:
 
 ```bash
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 Confirm the mobile RPC server is listening:
@@ -32,14 +32,14 @@ Confirm the mobile RPC server is listening:
 lsof -nP -iTCP:6768 -sTCP:LISTEN
 ```
 
-Restart `pnpm dev` after changing Electron main-process code. Metro hot reload only applies to the mobile JavaScript bundle.
+Restart `npm run dev` after changing Electron main-process code. Metro hot reload only applies to the mobile JavaScript bundle.
 
 ## Start The Mobile App
 
 ```bash
 cd mobile
-pnpm install
-pnpm start
+npm install
+npm run start
 ```
 
 Scan the Expo QR code with your phone's camera on iOS, or Expo Go on Android.
@@ -47,10 +47,20 @@ Scan the Expo QR code with your phone's camera on iOS, or Expo Go on Android.
 For a native dev-client build:
 
 ```bash
-pnpm exec expo run:android
-pnpm exec expo run:ios
-pnpm start --dev-client
+npm run android
+npm run ios
+npm run start -- --dev-client
 ```
+
+From the repository root, the equivalent commands are:
+
+```bash
+npm run mobile:start
+npm run mobile:android
+npm run mobile:ios
+```
+
+The mobile scripts use the local Expo CLI from `mobile/node_modules`. If `mobile` dependencies are missing, `npm run mobile:start`, `npm run mobile:android`, and `npm run mobile:ios` run `npm ci` in `mobile/` before launching Expo. A global Expo install is not required.
 
 ## Pair With Desktop Synapse
 
@@ -68,14 +78,14 @@ If the phone has a stale host entry, remove it from the app and pair again.
 ### Android Phone
 
 1. Install Expo Go from Google Play
-2. Run `pnpm start`, scan QR with Expo Go
-3. For native modules: `pnpm exec expo run:android`
-4. Run with `pnpm start --dev-client`
+2. Run `npm run start`, scan QR with Expo Go
+3. For native modules: `npm run android`
+4. Run with `npm run start -- --dev-client`
 
 ### iOS Simulator
 
 1. Install Xcode from the App Store
-2. Run `pnpm start --ios` to open in iOS Simulator
+2. Run `npm run start -- --ios` to open in iOS Simulator
 
 ## Physical Phone Debugging
 
@@ -96,15 +106,15 @@ Use this when terminal output does not render on device and you need to split se
 
 ```bash
 cd mobile
-ORCA_MOBILE_WS_URL=ws://127.0.0.1:6768 pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64>
+SYNAPSE_MOBILE_WS_URL=ws://127.0.0.1:6768 npm exec -- tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64>
 ```
 
 You can pass a worktree selector as the third argument:
 
 ```bash
-pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "id:<worktreeId>"
-pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "path:/absolute/worktree/path"
-pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "name:my-worktree"
+npm exec -- tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "id:<worktreeId>"
+npm exec -- tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "path:/absolute/worktree/path"
+npm exec -- tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> "name:my-worktree"
 ```
 
 The expected result includes:
@@ -122,7 +132,7 @@ Use this when terminal colors disappear after switching tabs. Open a Claude Code
 
 ```bash
 cd mobile
-ORCA_MOBILE_WS_URL=ws://127.0.0.1:6768 pnpm exec tsx scripts/repro-terminal-colors.ts \
+SYNAPSE_MOBILE_WS_URL=ws://127.0.0.1:6768 npm exec -- tsx scripts/repro-terminal-colors.ts \
   <deviceToken> <serverPublicKeyB64> "id:<worktreeId>"
 ```
 
@@ -134,10 +144,10 @@ Run these checks before committing mobile terminal changes:
 
 ```bash
 cd mobile
-pnpm exec tsc --noEmit
-pnpm lint
-cd ..
-pnpm typecheck:node
+npm run typecheck
+npm run lint
+npm run test
+npm run verify:identity
 ```
 
 ## Protocol Version Compatibility
@@ -176,7 +186,7 @@ To exercise the block screen locally: set `MIN_COMPATIBLE_DESKTOP_VERSION = 999`
 Develop the mobile app without a running Synapse desktop instance:
 
 ```bash
-pnpm mock-server           # starts mock WebSocket server on port 6768
+npm run mock-server        # starts mock WebSocket server on port 6768
 ```
 
 Connect from the app using endpoint `ws://localhost:6768` and token `mock-device-token`.

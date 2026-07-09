@@ -2,16 +2,15 @@
  * Captures the mobile WebSocket stream during worktree startup.
  *
  * Usage:
- *   pnpm exec tsx mobile/scripts/repro-worktree-startup-stream.ts <repoSelector> <worktreeName> [startupCommand]
+ *   npm exec -- tsx mobile/scripts/repro-worktree-startup-stream.ts <repoSelector> <worktreeName> [startupCommand]
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import nacl from 'tweetnacl'
 import WebSocket from 'ws'
 
-const WS_URL = process.env.ORCA_MOBILE_WS_URL ?? 'ws://127.0.0.1:6768'
-const USER_DATA =
-  process.env.ORCA_USER_DATA ?? `${process.env.HOME}/Library/Application Support/orca-dev`
+const WS_URL = process.env.SYNAPSE_MOBILE_WS_URL ?? 'ws://127.0.0.1:6768'
+const USER_DATA = process.env.SYNAPSE_USER_DATA ?? defaultSynapseUserDataPath()
 const repoSelector = process.argv[2]
 const worktreeName = process.argv[3]
 const startupCommand = process.argv[4] || 'claude'
@@ -45,9 +44,23 @@ type Capture = {
 
 if (!repoSelector || !worktreeName) {
   console.error(
-    'Usage: pnpm exec tsx mobile/scripts/repro-worktree-startup-stream.ts <repoSelector> <worktreeName> [startupCommand]'
+    'Usage: npm exec -- tsx mobile/scripts/repro-worktree-startup-stream.ts <repoSelector> <worktreeName> [startupCommand]'
   )
   process.exit(1)
+}
+
+function defaultSynapseUserDataPath(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE
+  if (!home) {
+    throw new Error('Cannot resolve Synapse user data path without HOME or USERPROFILE')
+  }
+  if (process.platform === 'darwin') {
+    return join(home, 'Library', 'Application Support', 'synapse')
+  }
+  if (process.platform === 'win32') {
+    return join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'synapse')
+  }
+  return join(process.env.XDG_CONFIG_HOME ?? join(home, '.config'), 'synapse')
 }
 
 function readJson<T>(path: string): T {
@@ -57,9 +70,11 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf8')) as T
 }
 
-const devices = readJson<Array<{ token: string }>>(join(USER_DATA, 'orca-devices.json'))
+const devices = readJson<Array<{ token: string }>>(join(USER_DATA, 'synapse-remote-devices.json'))
 const token = devices[0]?.token
-const keypair = readJson<{ publicKeyB64: string }>(join(USER_DATA, 'orca-e2ee-keypair.json'))
+const keypair = readJson<{ publicKeyB64: string }>(
+  join(USER_DATA, 'synapse-remote-e2ee-keypair.json')
+)
 
 if (!token || !keypair.publicKeyB64) {
   throw new Error(`Missing mobile token or E2EE public key in ${USER_DATA}`)

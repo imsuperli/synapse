@@ -2,16 +2,16 @@
  * Lightweight terminal streaming repro for the mobile WebSocket RPC.
  *
  * Usage:
- *   pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> [worktreeSelector]
+ *   npm exec -- tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> [worktreeSelector]
  *
  * Example:
- *   pnpm exec tsx scripts/test-subscribe.ts "$TOKEN" "$SERVER_PUBLIC_KEY" \
+ *   npm exec -- tsx scripts/test-subscribe.ts "$TOKEN" "$SERVER_PUBLIC_KEY" \
  *     "id:repo-id::/path/to/worktree"
  */
 import nacl from 'tweetnacl'
 import WebSocket from 'ws'
 
-const WS_URL = process.env.ORCA_MOBILE_WS_URL ?? 'ws://127.0.0.1:6768'
+const WS_URL = process.env.SYNAPSE_MOBILE_WS_URL ?? 'ws://127.0.0.1:6768'
 const token = process.argv[2]
 const serverPublicKeyB64 = process.argv[3]
 const worktreeSelector = process.argv[4]
@@ -34,7 +34,7 @@ type PendingRequest = {
 
 if (!token || !serverPublicKeyB64) {
   console.error(
-    'Usage: pnpm exec tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> [worktreeSelector]'
+    'Usage: npm exec -- tsx scripts/test-subscribe.ts <deviceToken> <serverPublicKeyB64> [worktreeSelector]'
   )
   process.exit(1)
 }

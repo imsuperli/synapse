@@ -14,9 +14,16 @@ export function getMobileExpoExecutablePath(mobileDir) {
   return expoBinPaths(mobileDir).find((binPath) => existsSync(binPath)) ?? null
 }
 
-function runPnpmInstall(mobileDir) {
+export function getMobileExpoCliScriptPath(mobileDir) {
+  const cliPath = path.join(mobileDir, 'node_modules', 'expo', 'bin', 'cli')
+  return existsSync(cliPath) ? cliPath : null
+}
+
+function runNpmInstall(mobileDir) {
+  const lockfilePath = path.join(mobileDir, 'package-lock.json')
+  const args = existsSync(lockfilePath) ? ['ci'] : ['install']
   return new Promise((resolve, reject) => {
-    const install = spawn('pnpm', ['install', '--frozen-lockfile'], {
+    const install = spawn('npm', args, {
       cwd: mobileDir,
       env: process.env,
       shell: process.platform === 'win32',
@@ -25,33 +32,73 @@ function runPnpmInstall(mobileDir) {
     install.on('error', reject)
     install.on('exit', (code, signal) => {
       if (signal) {
-        reject(new Error(`pnpm install --frozen-lockfile was terminated by ${signal}`))
+        reject(new Error(`npm ${args.join(' ')} was terminated by ${signal}`))
       } else if (code === 0) {
         resolve()
       } else {
-        reject(new Error(`pnpm install --frozen-lockfile exited with code ${code}`))
+        reject(new Error(`npm ${args.join(' ')} exited with code ${code}`))
       }
     })
   })
 }
 
 export async function ensureMobileExpoCli(mobileDir, logger = {}) {
-  if (getMobileExpoExecutablePath(mobileDir)) {
+  if (getMobileExpoCliScriptPath(mobileDir) || getMobileExpoExecutablePath(mobileDir)) {
     return
   }
 
-  const message = 'Mobile dependencies are missing; running pnpm install --frozen-lockfile...'
+  const installCommand = existsSync(path.join(mobileDir, 'package-lock.json'))
+    ? 'npm ci'
+    : 'npm install'
+  const message = `Mobile dependencies are missing; running ${installCommand}...`
   if (logger.logStep) {
     logger.logStep('deps', message)
   } else {
-    console.log(`[start] ${message}`)
+    console.log(`[mobile] ${message}`)
   }
 
-  await runPnpmInstall(mobileDir)
+  await runNpmInstall(mobileDir)
 
-  if (!getMobileExpoExecutablePath(mobileDir)) {
-    throw new Error('pnpm install completed, but node_modules/.bin/expo is still missing.')
+  if (!getMobileExpoCliScriptPath(mobileDir) && !getMobileExpoExecutablePath(mobileDir)) {
+    throw new Error('npm install completed, but the local Expo CLI is still missing.')
   }
 
   logger.logSuccess?.('Mobile dependencies installed')
+}
+
+export async function runMobileExpoCli(mobileDir, args, logger = {}) {
+  await ensureMobileExpoCli(mobileDir, logger)
+
+  const cliScript = getMobileExpoCliScriptPath(mobileDir)
+  if (!cliScript) {
+    const executable = getMobileExpoExecutablePath(mobileDir)
+    if (!executable) {
+      throw new Error('Local Expo CLI was not found after dependency installation.')
+    }
+    return runCommand(executable, args, mobileDir)
+  }
+
+  return runCommand(process.execPath, [cliScript, ...args], mobileDir)
+}
+
+function runCommand(command, args, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      shell: false,
+      stdio: 'inherit'
+    })
+    child.on('error', reject)
+    child.on('exit', (code, signal) => {
+      const commandText = [path.basename(command), ...args].join(' ')
+      if (signal) {
+        reject(new Error(`${commandText} was terminated by ${signal}`))
+      } else if (code === 0) {
+        resolve()
+      } else {
+        reject(new Error(`${commandText} exited with code ${code}`))
+      }
+    })
+  })
 }

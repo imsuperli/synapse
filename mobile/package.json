@@ -5,8 +5,8 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "node scripts/start-expo.mjs",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
+    "android": "node scripts/run-expo.mjs run:android",
+    "ios": "node scripts/run-expo.mjs run:ios",
     "postinstall": "node scripts/build-terminal-webview-engine.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

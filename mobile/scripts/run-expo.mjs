@@ -6,12 +6,9 @@ import { runMobileExpoCli } from './mobile-expo-cli.mjs'
 
 const scriptDir = import.meta.dirname
 const mobileDir = path.resolve(scriptDir, '..')
+const args = process.argv.slice(2)
 
-async function main() {
-  await runMobileExpoCli(mobileDir, ['start', ...process.argv.slice(2)])
-}
-
-main().catch((error) => {
+runMobileExpoCli(mobileDir, args).catch((error) => {
   console.error(`[mobile] ${error.message}`)
   process.exit(1)
 })
