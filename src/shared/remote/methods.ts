@@ -9,7 +9,6 @@ export const REMOTE_METHODS = {
   TERMINAL_SUBSCRIBE: 'terminal.subscribe',
   TERMINAL_UNSUBSCRIBE: 'terminal.unsubscribe',
   TERMINAL_SEND: 'terminal.send',
-  TERMINAL_RESIZE: 'terminal.resize',
   TERMINAL_CLEAR: 'terminal.clear',
   DEVICE_LIST: 'device.list',
   DEVICE_REVOKE: 'device.revoke',
@@ -43,7 +42,6 @@ const MOBILE_READ_METHODS = new Set<string>([
 const MOBILE_CONTROL_METHODS = new Set<string>([
   ...MOBILE_READ_METHODS,
   REMOTE_METHODS.TERMINAL_SEND,
-  REMOTE_METHODS.TERMINAL_RESIZE,
   REMOTE_METHODS.TERMINAL_CLEAR,
 ]);
 

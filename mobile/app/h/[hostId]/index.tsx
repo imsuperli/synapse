@@ -10,7 +10,6 @@ import {
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { RotateCw, Settings, TerminalSquare } from 'lucide-react-native'
-import { ConnectionLog } from '../../../src/components/ConnectionLog'
 import {
   connectToHost,
   loadHostById,
@@ -58,7 +57,6 @@ export default function HostOverviewScreen() {
   const [terminals, setTerminals] = useState<RemoteTerminalSummary[]>([])
   const [windows, setWindows] = useState<RemoteWindowSummary[]>([])
   const [overviewMode, setOverviewMode] = useState<'terminals' | 'windows'>('terminals')
-  const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const clientRef = useRef<RpcClient | null>(null)
@@ -74,7 +72,6 @@ export default function HostOverviewScreen() {
 
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-80)
-    setLogs(logsRef.current)
   }, [])
 
   const closeClient = useCallback(() => {
@@ -88,7 +85,6 @@ export default function HostOverviewScreen() {
     setConnectionState('loading')
     setError(null)
     logsRef.current = []
-    setLogs([])
     setTerminals([])
     setWindows([])
     setOverviewMode('terminals')
@@ -207,8 +203,6 @@ export default function HostOverviewScreen() {
             : renderTerminalItem(item.terminal, hostId, router)
         }
       />
-
-      {logs.length > 0 ? <ConnectionLog entries={logs} title="Connection log" /> : null}
     </View>
   )
 }

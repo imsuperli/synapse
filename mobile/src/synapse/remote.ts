@@ -141,19 +141,6 @@ export async function sendTerminalInput(
   }
 }
 
-export async function resizeTerminal(
-  client: RpcClient,
-  windowId: string,
-  paneId: string,
-  cols: number,
-  rows: number
-): Promise<void> {
-  const response = await client.sendRequest('terminal.resize', { windowId, paneId, cols, rows })
-  if (!response.ok) {
-    throw new Error(response.error.message)
-  }
-}
-
 export async function clearTerminal(
   client: RpcClient,
   windowId: string,

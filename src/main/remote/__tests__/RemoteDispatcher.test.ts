@@ -169,7 +169,7 @@ describe('RemoteDispatcher', () => {
     });
   });
 
-  it('routes terminal send and resize to ProcessManager', async () => {
+  it('routes terminal send to ProcessManager', async () => {
     const harness = createHarness();
 
     await dispatch(harness, REMOTE_METHODS.TERMINAL_SEND, {
@@ -177,15 +177,26 @@ describe('RemoteDispatcher', () => {
       paneId: 'pane-1',
       data: 'ls\r',
     });
-    await dispatch(harness, REMOTE_METHODS.TERMINAL_RESIZE, {
+
+    expect(harness.processManager.writeToPty).toHaveBeenCalledWith(123, 'ls\r');
+    expect(harness.processManager.resizePty).not.toHaveBeenCalled();
+  });
+
+  it('does not support remote terminal resize', async () => {
+    const harness = createHarness();
+
+    const response = await dispatch(harness, 'terminal.resize', {
       windowId: 'win-1',
       paneId: 'pane-1',
       cols: 100,
       rows: 32,
     });
 
-    expect(harness.processManager.writeToPty).toHaveBeenCalledWith(123, 'ls\r');
-    expect(harness.processManager.resizePty).toHaveBeenCalledWith(123, 100, 32);
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: REMOTE_ERROR_CODES.FORBIDDEN },
+    });
+    expect(harness.processManager.resizePty).not.toHaveBeenCalled();
   });
 
   it('clears remote terminal replay history without writing to the PTY', async () => {
@@ -262,6 +273,25 @@ describe('RemoteDispatcher', () => {
         data: 'new',
       },
     });
+    expect(harness.processManager.resizePty).not.toHaveBeenCalled();
+  });
+
+  it('rejects terminal subscription viewport parameters', async () => {
+    const harness = createHarness();
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 5,
+      viewport: { cols: 42, rows: 12 },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: REMOTE_ERROR_CODES.INVALID_PARAMS },
+    });
+    expect(harness.processManager.subscribePtyData).not.toHaveBeenCalled();
+    expect(harness.processManager.resizePty).not.toHaveBeenCalled();
   });
 
   it('replays terminal history after sinceSeq when a subscription activates', async () => {
@@ -513,6 +543,7 @@ describe('RemoteDispatcher', () => {
     });
     expect((readCapabilities as any).result.methods).not.toContain(REMOTE_METHODS.TERMINAL_SEND);
     expect((readCapabilities as any).result.methods).not.toContain(REMOTE_METHODS.WINDOW_LIST);
+    expect((adminCapabilities as any).result.methods).not.toContain('terminal.resize');
     expect(adminCapabilities).toMatchObject({
       ok: true,
       result: {

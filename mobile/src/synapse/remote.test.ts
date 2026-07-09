@@ -18,7 +18,6 @@ import {
   parseTerminalSubscribeResult,
   requestTerminalHistory,
   requestTerminalList,
-  resizeTerminal,
   sendTerminalInput
 } from './remote'
 import type { RpcClient } from '../transport/rpc-client'
@@ -156,7 +155,7 @@ describe('Synapse remote terminal helpers', () => {
     expect(client.sendRequest).toHaveBeenCalledWith('terminal.list')
   })
 
-  it('sends terminal history, input, resize, and clear RPC requests', async () => {
+  it('sends terminal history, input, and clear RPC requests', async () => {
     const client = mockClient({
       id: 'rpc-1',
       ok: true,
@@ -173,7 +172,6 @@ describe('Synapse remote terminal helpers', () => {
 
     await requestTerminalHistory(client, 'w1', 'p1')
     await sendTerminalInput(client, 'w1', 'p1', 'ls\n')
-    await resizeTerminal(client, 'w1', 'p1', 100, 32)
     await clearTerminal(client, 'w1', 'p1')
 
     expect(client.sendRequest).toHaveBeenNthCalledWith(1, 'terminal.history', {
@@ -185,13 +183,7 @@ describe('Synapse remote terminal helpers', () => {
       paneId: 'p1',
       data: 'ls\n'
     })
-    expect(client.sendRequest).toHaveBeenNthCalledWith(3, 'terminal.resize', {
-      windowId: 'w1',
-      paneId: 'p1',
-      cols: 100,
-      rows: 32
-    })
-    expect(client.sendRequest).toHaveBeenNthCalledWith(4, 'terminal.clear', {
+    expect(client.sendRequest).toHaveBeenNthCalledWith(3, 'terminal.clear', {
       windowId: 'w1',
       paneId: 'p1'
     })

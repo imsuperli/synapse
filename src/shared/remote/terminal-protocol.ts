@@ -33,27 +33,16 @@ export type TerminalSubscribeResult = {
 export const TerminalPaneRefSchema = z.object({
   windowId: z.string().min(1),
   paneId: z.string().min(1),
-});
+}).strict();
 
 export const TerminalHistoryParamsSchema = TerminalPaneRefSchema;
 
 export const TerminalSubscribeParamsSchema = TerminalPaneRefSchema.extend({
   sinceSeq: z.number().int().nonnegative().optional(),
-  viewport: z
-    .object({
-      cols: z.number().int().min(1).max(1000),
-      rows: z.number().int().min(1).max(1000),
-    })
-    .optional(),
-});
+}).strict();
 
 export const TerminalSendParamsSchema = TerminalPaneRefSchema.extend({
   data: z.string(),
-});
-
-export const TerminalResizeParamsSchema = TerminalPaneRefSchema.extend({
-  cols: z.number().int().min(1).max(1000),
-  rows: z.number().int().min(1).max(1000),
 });
 
 export const TerminalClearParamsSchema = TerminalPaneRefSchema;

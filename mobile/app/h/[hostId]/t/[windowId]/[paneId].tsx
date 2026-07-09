@@ -1,15 +1,22 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   AppState,
+  Keyboard,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
+  type KeyboardEvent,
   type LayoutChangeEvent
 } from 'react-native'
+import * as Clipboard from 'expo-clipboard'
 import { useFocusEffect, useLocalSearchParams } from 'expo-router'
-import { Eraser, RotateCw } from 'lucide-react-native'
+import { Eraser, Keyboard as KeyboardIcon, RotateCw } from 'lucide-react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { TerminalWebView, type TerminalWebViewHandle } from '../../../../../src/terminal/TerminalWebView'
 import {
   clearTerminal,
@@ -18,13 +25,30 @@ import {
   parseTerminalOutputEvent,
   parseTerminalSubscribeResult,
   requestTerminalHistory,
-  resizeTerminal,
   sendTerminalInput
 } from '../../../../../src/synapse/remote'
+import { MobileTerminalLiveInputStatus } from '../../../../../src/session/MobileTerminalLiveInputStatus'
+import {
+  getDefaultTerminalAccessoryBuiltInIds,
+  getVisibleTerminalAccessoryKeys
+} from '../../../../../src/terminal/terminal-accessory-layout'
+import { createTerminalLiveAccessoryInput } from '../../../../../src/terminal/terminal-live-accessory-input'
+import {
+  clearTerminalLiveInputFocusTimer,
+  focusTerminalLiveInputTarget,
+  isTerminalLiveInputWithinByteLimit,
+  scheduleTerminalLiveInputFocus
+} from '../../../../../src/terminal/terminal-live-input'
+import type { TerminalLiveInputSender } from '../../../../../src/terminal/terminal-live-input-sender'
+import { getTerminalLiveInputKeyboardType } from '../../../../../src/terminal/terminal-keyboard-type'
+import { normalizeTerminalTextInput } from '../../../../../src/terminal/terminal-text-input-normalization'
+import { useTerminalLiveInputCommit } from '../../../../../src/terminal/use-terminal-live-input-commit'
 import type { RpcClient } from '../../../../../src/transport/rpc-client'
 import type { ConnectionLogEntry, ConnectionState, HostProfile } from '../../../../../src/transport/types'
 import type { MobileTerminalTheme } from '../../../../../src/terminal/mobile-terminal-theme'
 import { colors, radii, spacing, typography } from '../../../../../src/theme/mobile-theme'
+
+type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryInput>
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
@@ -88,6 +112,8 @@ export default function RemoteTerminalScreen() {
   const hostId = getParam(params.hostId)
   const windowId = getParam(params.windowId)
   const paneId = getParam(params.paneId)
+  const terminalHandle = `${windowId}:${paneId}`
+  const insets = useSafeAreaInsets()
   const terminalRef = useRef<TerminalWebViewHandle | null>(null)
   const clientRef = useRef<RpcClient | null>(null)
   const unsubscribeRef = useRef<(() => void) | null>(null)
@@ -99,16 +125,46 @@ export default function RemoteTerminalScreen() {
     rows: DEFAULT_ROWS
   })
   const terminalHeightRef = useRef<number | undefined>(undefined)
+  const activeHandleRef = useRef<string | null>(terminalHandle)
+  const activeSessionTabTypeRef = useRef<'terminal' | null>('terminal')
+  const liveInputRef = useRef<TextInput | null>(null)
+  const liveInputFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const repeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const sendLiveTerminalInputRef = useRef<TerminalLiveInputSender>(async () => false)
   const [host, setHost] = useState<HostProfile | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
+  const [liveInputCapture, setLiveInputCapture] = useState('')
+  const [keyboardHeight, setKeyboardHeight] = useState(0)
   const logsRef = useRef<ConnectionLogEntry[]>([])
+  const liveInputTerminalHandles = useMemo(() => new Set([terminalHandle]), [terminalHandle])
+  const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set([terminalHandle]))
+  const accessoryKeys = useMemo(
+    () => getVisibleTerminalAccessoryKeys(getDefaultTerminalAccessoryBuiltInIds()),
+    []
+  )
+
+  activeHandleRef.current = terminalHandle
+  activeSessionTabTypeRef.current = 'terminal'
+  liveInputTerminalHandlesRef.current = liveInputTerminalHandles
 
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-40)
     setLogs(logsRef.current)
+  }, [])
+
+  const stopAccessoryRepeat = useCallback(() => {
+    if (repeatTimeoutRef.current) {
+      clearTimeout(repeatTimeoutRef.current)
+      repeatTimeoutRef.current = null
+    }
+    if (repeatIntervalRef.current) {
+      clearInterval(repeatIntervalRef.current)
+      repeatIntervalRef.current = null
+    }
   }, [])
 
   const cleanup = useCallback(() => {
@@ -118,12 +174,13 @@ export default function RemoteTerminalScreen() {
     unsubscribeRef.current = null
     clientRef.current?.close()
     clientRef.current = null
-  }, [])
+    clearTerminalLiveInputFocusTimer(liveInputFocusTimerRef)
+    stopAccessoryRepeat()
+  }, [stopAccessoryRepeat])
 
-  const measureAndResize = useCallback(async () => {
-    const client = clientRef.current
+  const measureAndFitLocalTerminal = useCallback(async () => {
     const terminal = terminalRef.current
-    if (!client || !terminal) {
+    if (!terminal) {
       return
     }
     const measured = await terminal.measureFitDimensions(terminalHeightRef.current)
@@ -132,10 +189,7 @@ export default function RemoteTerminalScreen() {
     }
     viewportRef.current = measured
     terminal.resize(measured.cols, measured.rows)
-    await resizeTerminal(client, windowId, paneId, measured.cols, measured.rows).catch((err) => {
-      setError(err instanceof Error ? err.message : String(err))
-    })
-  }, [paneId, windowId])
+  }, [])
 
   const loadTerminalHistorySnapshot = useCallback(
     async (client: RpcClient, runId: number) => {
@@ -165,8 +219,7 @@ export default function RemoteTerminalScreen() {
       const subscribeParams = {
         windowId,
         paneId,
-        sinceSeq: lastSeqRef.current,
-        viewport: viewportRef.current
+        sinceSeq: lastSeqRef.current
       }
       unsubscribeRef.current = client.subscribe(
         'terminal.subscribe',
@@ -187,7 +240,7 @@ export default function RemoteTerminalScreen() {
                   if (!history || runIdRef.current !== runId) {
                     return
                   }
-                  await measureAndResize()
+                  await measureAndFitLocalTerminal()
                   if (runIdRef.current !== runId) {
                     return
                   }
@@ -219,7 +272,7 @@ export default function RemoteTerminalScreen() {
         }
       )
     },
-    [loadTerminalHistorySnapshot, measureAndResize, paneId, windowId]
+    [loadTerminalHistorySnapshot, measureAndFitLocalTerminal, paneId, windowId]
   )
 
   const openTerminal = useCallback(async () => {
@@ -250,7 +303,7 @@ export default function RemoteTerminalScreen() {
       if (!history || runIdRef.current !== runId) {
         return
       }
-      await measureAndResize()
+      await measureAndFitLocalTerminal()
       if (runIdRef.current !== runId) {
         return
       }
@@ -269,7 +322,7 @@ export default function RemoteTerminalScreen() {
     cleanup,
     hostId,
     loadTerminalHistorySnapshot,
-    measureAndResize,
+    measureAndFitLocalTerminal,
     startTerminalSubscription
   ])
 
@@ -320,10 +373,129 @@ export default function RemoteTerminalScreen() {
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => {
       terminalHeightRef.current = event.nativeEvent.layout.height
-      void measureAndResize()
+      void measureAndFitLocalTerminal()
     },
-    [measureAndResize]
+    [measureAndFitLocalTerminal]
   )
+
+  const canSend = connectionState === 'connected' && !loading
+
+  const sendLiveTerminalInput = useCallback(
+    async (handle: string, bytes: string): Promise<boolean> => {
+      if (handle !== terminalHandle) {
+        return false
+      }
+      const text = normalizeTerminalTextInput(bytes)
+      if (text.length === 0) {
+        return false
+      }
+      if (!isTerminalLiveInputWithinByteLimit(text)) {
+        setError('Input too large.')
+        return false
+      }
+      const client = clientRef.current
+      if (!client || connectionState !== 'connected') {
+        return false
+      }
+      return sendTerminalInput(client, windowId, paneId, text).then(
+        () => true,
+        (err) => {
+          setError(err instanceof Error ? err.message : String(err))
+          return false
+        }
+      )
+    },
+    [connectionState, paneId, terminalHandle, windowId]
+  )
+  sendLiveTerminalInputRef.current = sendLiveTerminalInput
+
+  const {
+    flushPendingLiveInputBeforeExternalSend,
+    handleLiveInputAccessoryBytes,
+    handleLiveInputChange,
+    handleLiveInputKeyPress,
+    handleLiveInputSubmit
+  } = useTerminalLiveInputCommit({
+    activeHandle: terminalHandle,
+    activeHandleRef,
+    activeSessionTabType: 'terminal',
+    activeSessionTabTypeRef,
+    liveInputRef,
+    liveInputTerminalHandles,
+    liveInputTerminalHandlesRef,
+    sendLiveTerminalInputRef,
+    setLiveInputCapture
+  })
+
+  const focusLiveInput = useCallback(() => {
+    if (!canSend) {
+      return
+    }
+    focusTerminalLiveInputTarget(liveInputRef.current, {
+      keyboardHeight,
+      refocus: () =>
+        scheduleTerminalLiveInputFocus(liveInputFocusTimerRef, () => liveInputRef.current?.focus())
+    })
+  }, [canSend, keyboardHeight])
+
+  const handleAccessoryKey = useCallback(
+    async (input: TerminalLiveAccessoryInput) => {
+      if (!canSend) {
+        return
+      }
+      const accessoryCommit = await handleLiveInputAccessoryBytes(input)
+      if (accessoryCommit.kind !== 'allow-raw') {
+        return
+      }
+      await sendLiveTerminalInput(terminalHandle, input.bytes)
+    },
+    [canSend, handleLiveInputAccessoryBytes, sendLiveTerminalInput, terminalHandle]
+  )
+  const handleAccessoryKeyRef = useRef(handleAccessoryKey)
+  handleAccessoryKeyRef.current = handleAccessoryKey
+
+  const startAccessoryRepeat = useCallback(
+    (input: TerminalLiveAccessoryInput) => {
+      stopAccessoryRepeat()
+      repeatTimeoutRef.current = setTimeout(() => {
+        repeatIntervalRef.current = setInterval(() => {
+          void handleAccessoryKeyRef.current(input)
+        }, 45)
+      }, 400)
+    },
+    [stopAccessoryRepeat]
+  )
+
+  const handlePaste = useCallback(async () => {
+    if (!canSend) {
+      return
+    }
+    const flushed = await flushPendingLiveInputBeforeExternalSend(terminalHandle)
+    if (!flushed) {
+      return
+    }
+    const text = await Clipboard.getStringAsync()
+    if (text.length > 0) {
+      await sendLiveTerminalInput(terminalHandle, text)
+    }
+  }, [canSend, flushPendingLiveInputBeforeExternalSend, sendLiveTerminalInput, terminalHandle])
+
+  useEffect(() => {
+    const updateKeyboardHeight = (event: KeyboardEvent) => {
+      setKeyboardHeight(Math.max(0, event.endCoordinates.height - insets.bottom))
+    }
+    const showSub = Keyboard.addListener('keyboardDidShow', updateKeyboardHeight)
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0))
+    return () => {
+      showSub.remove()
+      hideSub.remove()
+      clearTerminalLiveInputFocusTimer(liveInputFocusTimerRef)
+      stopAccessoryRepeat()
+    }
+  }, [insets.bottom, stopAccessoryRepeat])
+
+  const keyboardLift = keyboardHeight > 0 ? keyboardHeight : 0
+  const passiveDictationState = { isStarting: false, isRecording: false, isProcessing: false }
 
   return (
     <View style={styles.container}>
@@ -350,7 +522,7 @@ export default function RemoteTerminalScreen() {
         <TerminalWebView
           ref={terminalRef}
           terminalTheme={terminalTheme}
-          onWebReady={() => void measureAndResize()}
+          onWebReady={() => void measureAndFitLocalTerminal()}
           onTerminalInput={handleTerminalInput}
           onEngineError={setError}
         />
@@ -367,6 +539,112 @@ export default function RemoteTerminalScreen() {
           <Text style={styles.logText}>{logs[logs.length - 1]?.message}</Text>
         </View>
       ) : null}
+
+      <View
+        style={[
+          styles.commandDock,
+          { paddingBottom: insets.bottom, transform: [{ translateY: -keyboardLift }] }
+        ]}
+      >
+        <View style={styles.accessoryBar}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.accessoryContent}
+            keyboardShouldPersistTaps="always"
+          >
+            <Pressable
+              style={({ pressed }) => [
+                styles.accessoryKey,
+                pressed && styles.accessoryKeyPressed,
+                !canSend && styles.accessoryKeyDisabled
+              ]}
+              disabled={!canSend}
+              onPress={() => void handlePaste()}
+              accessibilityLabel="Paste from clipboard"
+            >
+              <Text style={[styles.accessoryKeyText, !canSend && styles.accessoryKeyTextDisabled]}>
+                Paste
+              </Text>
+            </Pressable>
+            {accessoryKeys.map((key) => (
+              <Pressable
+                key={key.id}
+                style={({ pressed }) => [
+                  styles.accessoryKey,
+                  pressed && styles.accessoryKeyPressed,
+                  !canSend && styles.accessoryKeyDisabled
+                ]}
+                disabled={!canSend}
+                onPressIn={() => {
+                  if (!key.repeatable) {
+                    return
+                  }
+                  const input = createTerminalLiveAccessoryInput(key)
+                  void handleAccessoryKey(input)
+                  startAccessoryRepeat(input)
+                }}
+                onPressOut={() => {
+                  if (key.repeatable) {
+                    stopAccessoryRepeat()
+                  }
+                }}
+                onPress={() => {
+                  if (key.repeatable) {
+                    return
+                  }
+                  void handleAccessoryKey(createTerminalLiveAccessoryInput(key))
+                }}
+                accessibilityLabel={key.accessibilityLabel ?? `Send ${key.label}`}
+              >
+                <Text
+                  style={[styles.accessoryKeyText, !canSend && styles.accessoryKeyTextDisabled]}
+                >
+                  {key.label}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+
+        <View style={styles.liveInputBar}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.liveInputFocusTarget,
+              pressed && styles.liveInputFocusTargetPressed,
+              !canSend && styles.liveInputFocusTargetDisabled
+            ]}
+            disabled={!canSend}
+            onPress={focusLiveInput}
+            accessibilityRole="button"
+            accessibilityLabel="Show keyboard for live terminal input"
+            accessibilityHint="Typed text is sent directly to the active terminal"
+          >
+            <KeyboardIcon size={16} color={colors.textSecondary} strokeWidth={2} />
+            <MobileTerminalLiveInputStatus dictation={passiveDictationState} isAttaching={false} />
+          </Pressable>
+          <TextInput
+            ref={liveInputRef}
+            style={styles.liveInputCapture}
+            value={liveInputCapture}
+            onChangeText={handleLiveInputChange}
+            onKeyPress={handleLiveInputKeyPress}
+            onSubmitEditing={handleLiveInputSubmit}
+            placeholder=""
+            showSoftInputOnFocus
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            smartInsertDelete={false}
+            autoComplete="off"
+            keyboardType={getTerminalLiveInputKeyboardType(Platform.OS)}
+            returnKeyType="default"
+            blurOnSubmit={false}
+            editable={canSend}
+            importantForAutofill="no"
+          />
+        </View>
+      </View>
     </View>
   )
 }
@@ -445,5 +723,76 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontFamily: typography.monoFamily,
     fontSize: typography.metaSize
+  },
+  commandDock: {
+    zIndex: 20
+  },
+  accessoryBar: {
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel
+  },
+  accessoryContent: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: spacing.xs
+  },
+  accessoryKey: {
+    backgroundColor: colors.bgRaised,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.button,
+    minWidth: 36,
+    alignItems: 'center'
+  },
+  accessoryKeyPressed: {
+    backgroundColor: colors.borderSubtle
+  },
+  accessoryKeyDisabled: {
+    opacity: 0.35
+  },
+  accessoryKeyText: {
+    color: colors.textSecondary,
+    fontFamily: typography.monoFamily,
+    fontSize: 12
+  },
+  accessoryKeyTextDisabled: {
+    color: colors.textMuted
+  },
+  liveInputBar: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel
+  },
+  liveInputFocusTarget: {
+    flex: 1,
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.input,
+    paddingHorizontal: spacing.sm + 2
+  },
+  liveInputFocusTargetPressed: {
+    backgroundColor: colors.borderSubtle
+  },
+  liveInputFocusTargetDisabled: {
+    opacity: 0.45
+  },
+  liveInputCapture: {
+    position: 'absolute',
+    opacity: 0,
+    width: 1,
+    height: 1,
+    color: colors.textPrimary
   }
 })

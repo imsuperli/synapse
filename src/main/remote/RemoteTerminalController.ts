@@ -156,11 +156,6 @@ export class RemoteTerminalController {
     this.processManager.writeToPty(pid, data);
   }
 
-  resize(windowId: string, paneId: string, cols: number, rows: number): void {
-    const pid = this.requirePid(windowId, paneId);
-    this.processManager.resizePty(pid, cols, rows);
-  }
-
   clear(windowId: string, paneId: string): TerminalClearResult {
     this.requirePid(windowId, paneId);
     this.processManager.clearPtyHistory(paneId);

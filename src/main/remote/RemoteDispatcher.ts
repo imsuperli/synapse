@@ -15,7 +15,6 @@ import {
 import {
   TerminalClearParamsSchema,
   TerminalHistoryParamsSchema,
-  TerminalResizeParamsSchema,
   TerminalSendParamsSchema,
   TerminalSubscribeParamsSchema,
 } from '../../shared/remote/terminal-protocol';
@@ -202,14 +201,6 @@ export class RemoteDispatcher {
       params: TerminalSubscribeParamsSchema,
       handler: (params, context, emit) => {
         const typed = TerminalSubscribeParamsSchema.parse(params);
-        if (typed.viewport) {
-          this.terminalController.resize(
-            typed.windowId,
-            typed.paneId,
-            typed.viewport.cols,
-            typed.viewport.rows,
-          );
-        }
         let subscriptionId = '';
         const subscription = this.terminalController.subscribe(
           typed.windowId,
@@ -252,15 +243,6 @@ export class RemoteDispatcher {
         const typed = TerminalSendParamsSchema.parse(params);
         this.terminalController.send(typed.windowId, typed.paneId, typed.data);
         return { sent: true };
-      },
-    });
-
-    this.methods.set(REMOTE_METHODS.TERMINAL_RESIZE, {
-      params: TerminalResizeParamsSchema,
-      handler: (params) => {
-        const typed = TerminalResizeParamsSchema.parse(params);
-        this.terminalController.resize(typed.windowId, typed.paneId, typed.cols, typed.rows);
-        return { resized: true };
       },
     });
 

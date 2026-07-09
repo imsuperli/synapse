@@ -7,14 +7,15 @@ const routeSource = readFileSync(
 )
 
 describe('Synapse Mobile terminal route wiring', () => {
-  it('loads terminal history before subscribing to live output', () => {
+  it('loads terminal history before subscribing to live output without resizing the desktop PTY', () => {
     const historyIndex = routeSource.indexOf('requestTerminalHistory(client, windowId, paneId)')
     const subscribeIndex = routeSource.indexOf("client.subscribe(\n        'terminal.subscribe'")
 
     expect(historyIndex).toBeGreaterThanOrEqual(0)
     expect(subscribeIndex).toBeGreaterThan(historyIndex)
     expect(routeSource).toContain('sinceSeq: lastSeqRef.current')
-    expect(routeSource).toContain('viewport: viewportRef.current')
+    expect(routeSource).not.toContain('viewport: viewportRef.current')
+    expect(routeSource).not.toContain('resizeTerminal(client')
     expect(routeSource).toContain('subscribeParams.sinceSeq = lastSeqRef.current')
     expect(routeSource).toContain('parseTerminalOutputEvent(payload)')
     expect(routeSource).toContain('parseTerminalSubscribeResult(payload)')
@@ -32,15 +33,24 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('lastSeqRef.current = Math.max(lastSeqRef.current, event.seq)')
   })
 
-  it('routes user input, resize, and clear through Synapse terminal RPC helpers', () => {
+  it('routes user input and clear through Synapse terminal RPC helpers', () => {
     expect(routeSource).toContain('onTerminalInput={handleTerminalInput}')
     expect(routeSource).toContain('sendTerminalInput(client, windowId, paneId, bytes)')
-    expect(routeSource).toContain(
-      'resizeTerminal(client, windowId, paneId, measured.cols, measured.rows)'
-    )
+    expect(routeSource).toContain('terminal.resize(measured.cols, measured.rows)')
     expect(routeSource).toContain('const result = await clearTerminal(client, windowId, paneId)')
     expect(routeSource).toContain('lastSeqRef.current = Math.max(lastSeqRef.current, result.lastSeq)')
     expect(routeSource).toContain('terminalRef.current?.clear()')
+  })
+
+  it('uses terminal live input wiring for the command dock', () => {
+    expect(routeSource).toContain('useTerminalLiveInputCommit({')
+    expect(routeSource).toContain('MobileTerminalLiveInputStatus')
+    expect(routeSource).toContain('createTerminalLiveAccessoryInput(key)')
+    expect(routeSource).toContain('onPressIn={() => {')
+    expect(routeSource).toContain('startAccessoryRepeat(input)')
+    expect(routeSource).toContain('stopAccessoryRepeat()')
+    expect(routeSource).toContain('flushPendingLiveInputBeforeExternalSend(terminalHandle)')
+    expect(routeSource).toContain('transform: [{ translateY: -keyboardLift }]')
   })
 
   it('cleans up subscriptions and sockets when leaving the terminal screen', () => {
