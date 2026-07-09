@@ -31,7 +31,8 @@ export const messages = {
     'nav.hostSettings': '主机设置',
     'nav.terminal': '终端',
 
-    'home.subtitle': '已配对电脑',
+    'home.welcomeTitle': '欢迎回来',
+    'home.subtitle': '选择一台已配对电脑，或配对新的电脑端 Synapse。',
     'home.pair': '配对',
     'home.emptyTitle': '暂无已配对电脑',
     'home.emptyText': '请在电脑端 Synapse 设置 > 手机远程控制 中生成二维码后配对。',
@@ -160,7 +161,8 @@ export const messages = {
     'nav.hostSettings': 'Host Settings',
     'nav.terminal': 'Terminal',
 
-    'home.subtitle': 'Paired desktop hosts',
+    'home.welcomeTitle': 'Welcome back',
+    'home.subtitle': 'Choose a paired desktop, or pair a new Synapse desktop.',
     'home.pair': 'Pair',
     'home.emptyTitle': 'No paired desktops',
     'home.emptyText': 'Pair from Synapse desktop Settings > Mobile Remote Control.',

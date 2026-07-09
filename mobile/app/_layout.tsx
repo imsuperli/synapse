@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Linking } from 'react-native'
+import { Image, Linking, StyleSheet, Text, View } from 'react-native'
 import { Stack, useRouter } from 'expo-router'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar'
@@ -7,6 +7,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { extractPairingCodeFromUrl } from '../src/transport/pairing'
 import { colors } from '../src/theme/mobile-theme'
 import { MobileI18nProvider, useMobileI18n } from '../src/i18n'
+
+const appIcon = require('../assets/icon.png')
 
 export default function RootLayout() {
   return (
@@ -48,7 +50,10 @@ function RootStack() {
             contentStyle: { backgroundColor: colors.bgBase }
           }}
         >
-          <Stack.Screen name="index" options={{ title: t('nav.home') }} />
+          <Stack.Screen
+            name="index"
+            options={{ headerTitle: () => <AppHeaderTitle title={t('nav.home')} /> }}
+          />
           <Stack.Screen name="pair" options={{ title: t('nav.pair') }} />
           <Stack.Screen name="pair-scan" options={{ title: t('nav.pairDesktop') }} />
           <Stack.Screen name="pair-confirm" options={{ title: t('nav.confirmPairing') }} />
@@ -58,3 +63,30 @@ function RootStack() {
     </GestureHandlerRootView>
   )
 }
+
+function AppHeaderTitle({ title }: { title: string }) {
+  return (
+    <View style={styles.headerTitle}>
+      <Image source={appIcon} style={styles.headerLogo} />
+      <Text style={styles.headerTitleText}>{title}</Text>
+    </View>
+  )
+}
+
+const styles = StyleSheet.create({
+  headerTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  headerLogo: {
+    width: 24,
+    height: 24,
+    borderRadius: 6
+  },
+  headerTitleText: {
+    color: colors.textPrimary,
+    fontSize: 17,
+    fontWeight: '700'
+  }
+})

@@ -36,7 +36,7 @@ export default function HostListScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.title}>Synapse</Text>
+          <Text style={styles.title}>{t('home.welcomeTitle')}</Text>
           <Text style={styles.subtitle}>{t('home.subtitle')}</Text>
         </View>
         <View style={styles.headerActions}>
