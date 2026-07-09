@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/types/electron-api';
 import { CompactSettingRow, CompactSettingsSection } from './CompactSettings';
 import { idePopupActionButtonClassName, idePopupSecondaryButtonClassName } from '../ui/ide-popup';
+import { useI18n } from '../../i18n';
 
 function joinClassNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
@@ -20,6 +21,7 @@ const switchThumbClassName = 'block h-5 w-5 translate-x-0.5 rounded-full bg-[col
 const secondaryButtonClassName = `${idePopupSecondaryButtonClassName} h-9 rounded-lg px-3 text-sm`;
 const primaryButtonClassName = `${idePopupActionButtonClassName('primary')} h-9 min-w-0 rounded-lg px-3 text-sm`;
 const inputClassName = 'h-9 w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--input))] px-3 text-sm text-[rgb(var(--foreground))] outline-none transition-colors placeholder:text-[rgb(var(--muted-foreground))] focus:border-[rgb(var(--ring))]';
+const CUSTOM_ADDRESS_VALUE = '__custom_endpoint__';
 
 const defaultRemoteSettings: RemoteSettings = {
   enabled: false,
@@ -38,11 +40,13 @@ const defaultRemoteStatus: RemoteStatus = {
 };
 
 export function RemoteSettingsTab() {
+  const { language, t } = useI18n();
   const [enabled, setEnabled] = useState(false);
   const [status, setStatus] = useState<RemoteStatus>(defaultRemoteStatus);
   const [interfaces, setInterfaces] = useState<RemoteNetworkInterface[]>([]);
   const [selectedAddress, setSelectedAddress] = useState<string>('');
   const [customEndpoint, setCustomEndpoint] = useState('');
+  const [useCustomEndpoint, setUseCustomEndpoint] = useState(false);
   const [acceptPlainWsNonLocal, setAcceptPlainWsNonLocal] = useState(false);
   const [pairing, setPairing] = useState<RemotePairingQR | null>(null);
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
@@ -54,10 +58,23 @@ export function RemoteSettingsTab() {
     void refreshRemoteState();
   }, []);
 
-  const effectiveAddress = useMemo(() => customEndpoint.trim() || selectedAddress || undefined, [
+  const effectiveAddress = useMemo(() => (
+    useCustomEndpoint ? customEndpoint.trim() : selectedAddress
+  ) || undefined, [
     customEndpoint,
     selectedAddress,
+    useCustomEndpoint,
   ]);
+  const addressSelectValue = useCustomEndpoint ? CUSTOM_ADDRESS_VALUE : selectedAddress;
+  const requiresPlainWsAcknowledgement = useCustomEndpoint && customEndpoint.trim()
+    ? endpointRequiresPlainWsAcknowledgement(customEndpoint)
+    : false;
+  const canGeneratePairing = enabled
+    && Boolean(effectiveAddress)
+    && (!requiresPlainWsAcknowledgement || acceptPlainWsNonLocal);
+  const selectedAddressMissing = !useCustomEndpoint
+    && Boolean(selectedAddress)
+    && !interfaces.some((iface) => iface.address === selectedAddress);
 
   async function refreshRemoteState() {
     setError(null);
@@ -71,6 +88,7 @@ export function RemoteSettingsTab() {
       setStatus(statusResponse.data);
       setEnabled(statusResponse.data.settings.enabled);
       setCustomEndpoint(statusResponse.data.settings.manualEndpoint ?? '');
+      setUseCustomEndpoint(Boolean(statusResponse.data.settings.manualEndpoint));
       setSelectedAddress(statusResponse.data.settings.selectedAddress ?? '');
       setAcceptPlainWsNonLocal(statusResponse.data.settings.acceptedPlainWsNonLocal);
     }
@@ -88,18 +106,32 @@ export function RemoteSettingsTab() {
     }
   }
 
+  async function refreshNetworkInterfaces() {
+    setError(null);
+    try {
+      const response = await window.electronAPI.remoteListNetworkInterfaces();
+      if (!response.success || !response.data) {
+        throw new Error(response.error || t('settings.remote.error.networkRefreshFailed'));
+      }
+      setInterfaces(response.data.interfaces);
+      setSelectedAddress((current) => current || response.data!.interfaces[0]?.address || '');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function toggleRemote(nextEnabled: boolean) {
     setLoading(true);
     setError(null);
     try {
       const response = await window.electronAPI.remoteUpdateSettings({
         enabled: nextEnabled,
-        selectedAddress: selectedAddress || null,
-        manualEndpoint: customEndpoint.trim() || null,
+        selectedAddress: useCustomEndpoint ? null : selectedAddress || null,
+        manualEndpoint: useCustomEndpoint ? customEndpoint.trim() || null : null,
         acceptPlainWsNonLocal,
       });
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to update remote settings');
+        throw new Error(response.error || t('settings.remote.error.updateFailed'));
       }
       setEnabled(response.data.settings.enabled);
       setStatus({
@@ -127,15 +159,15 @@ export function RemoteSettingsTab() {
     setCopied(false);
     try {
       if (!effectiveAddress) {
-        throw new Error('Choose a network address or enter a custom endpoint before generating a mobile QR.');
+        throw new Error(t('settings.remote.error.missingAddress'));
       }
       const settingsResponse = await window.electronAPI.remoteUpdateSettings({
-        selectedAddress: selectedAddress || null,
-        manualEndpoint: customEndpoint.trim() || null,
+        selectedAddress: useCustomEndpoint ? null : selectedAddress || null,
+        manualEndpoint: useCustomEndpoint ? customEndpoint.trim() || null : null,
         acceptPlainWsNonLocal,
       });
       if (!settingsResponse.success || !settingsResponse.data) {
-        throw new Error(settingsResponse.error || 'Failed to save remote settings');
+        throw new Error(settingsResponse.error || t('settings.remote.error.updateFailed'));
       }
       setStatus({
         ready: settingsResponse.data.endpoint !== null,
@@ -146,11 +178,11 @@ export function RemoteSettingsTab() {
         ? await window.electronAPI.remoteRotatePairingQR({ address: effectiveAddress })
         : await window.electronAPI.remoteGetPairingQR({ address: effectiveAddress });
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to generate pairing QR');
+        throw new Error(response.error || t('settings.remote.error.pairingFailed'));
       }
       setPairing(response.data);
       if (!response.data.available) {
-        setError('Remote service is not ready yet.');
+        setError(t('settings.remote.error.notReady'));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -165,7 +197,7 @@ export function RemoteSettingsTab() {
     try {
       const response = await window.electronAPI.remoteRevokeDevice(deviceId);
       if (!response.success || !response.data?.revoked) {
-        throw new Error(response.error || 'Failed to revoke device');
+        throw new Error(response.error || t('settings.remote.error.revokeFailed'));
       }
       await refreshRemoteState();
     } catch (err) {
@@ -186,134 +218,154 @@ export function RemoteSettingsTab() {
   return (
     <div className="mx-auto max-w-4xl space-y-4">
       <CompactSettingsSection
-        title="Remote / Mobile"
-        help="Pair Synapse Mobile with this desktop over LAN, Tailscale, a tunnel, or a future Synapse Relay."
+        title={t('settings.remote.title')}
+        help={t('settings.remote.description')}
         icon={<Wifi size={15} />}
-        actions={
-          <button
-            type="button"
-            className={secondaryButtonClassName}
-            onClick={() => void refreshRemoteState()}
-            disabled={loading}
-          >
-            Refresh
-          </button>
-        }
       >
         <CompactSettingRow
-          label="Remote control"
-          help="Remote control is disabled until you turn it on here."
+          label={t('settings.remote.enableLabel')}
+          help={t('settings.remote.enableDescription')}
+          controlClassName="justify-between"
         >
+          <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+            <span
+              className={joinClassNames(
+                'rounded-full px-2 py-0.5 text-xs font-medium',
+                enabled
+                  ? 'bg-[rgb(var(--success))]/14 text-[rgb(var(--success))]'
+                  : 'bg-[rgb(var(--secondary))] text-[rgb(var(--muted-foreground))]',
+              )}
+            >
+              {enabled ? t('settings.remote.status.enabled') : t('settings.remote.status.disabled')}
+            </span>
+            <span className="min-w-0 max-w-full truncate text-xs text-[rgb(var(--muted-foreground))]">
+              {status.endpoint
+                ? t('settings.remote.serviceRunning', { endpoint: status.endpoint })
+                : t('settings.remote.serviceStopped')}
+            </span>
+          </div>
           <Switch.Root
             checked={enabled}
             onCheckedChange={(checked) => void toggleRemote(checked)}
             disabled={loading}
             className={switchRootClassName}
-            aria-label="Remote control"
+            aria-label={t('settings.remote.enableLabel')}
           >
             <Switch.Thumb className={switchThumbClassName} />
           </Switch.Root>
         </CompactSettingRow>
 
-        <CompactSettingRow label="Service endpoint">
-          <div className="min-w-0 text-right text-sm text-[rgb(var(--muted-foreground))]">
-            {status.endpoint ?? 'Not running'}
+        <CompactSettingRow
+          label={t('settings.remote.addressLabel')}
+          help={t('settings.remote.addressDescription')}
+          disabled={!enabled}
+        >
+          <div className="flex w-full max-w-[520px] flex-col items-stretch gap-2">
+            <div className="flex min-w-0 gap-2">
+              <select
+                aria-label={t('settings.remote.addressLabel')}
+                className={`${inputClassName} min-w-0 flex-1`}
+                value={addressSelectValue}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setPairing(null);
+                  setCopied(false);
+                  if (nextValue === CUSTOM_ADDRESS_VALUE) {
+                    setUseCustomEndpoint(true);
+                    setSelectedAddress('');
+                    return;
+                  }
+                  setUseCustomEndpoint(false);
+                  setSelectedAddress(nextValue);
+                  setCustomEndpoint('');
+                  setAcceptPlainWsNonLocal(false);
+                }}
+                disabled={!enabled || loading}
+              >
+                {interfaces.length === 0 && (
+                  <option value="">{t('settings.remote.addressNoInterfaces')}</option>
+                )}
+                {interfaces.map((iface) => (
+                  <option key={`${iface.name}:${iface.address}`} value={iface.address}>
+                    {iface.address} ({iface.name})
+                  </option>
+                ))}
+                {selectedAddressMissing && (
+                  <option value={selectedAddress}>{selectedAddress}</option>
+                )}
+                <option value={CUSTOM_ADDRESS_VALUE}>{t('settings.remote.addressCustom')}</option>
+              </select>
+              <button
+                type="button"
+                className={`${secondaryButtonClassName} shrink-0`}
+                onClick={() => void refreshNetworkInterfaces()}
+                disabled={!enabled || loading}
+              >
+                <RefreshCw size={14} />
+                {t('settings.remote.refreshNetworks')}
+              </button>
+            </div>
+
+            {useCustomEndpoint && (
+              <input
+                className={inputClassName}
+                value={customEndpoint}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setPairing(null);
+                  setCopied(false);
+                  setCustomEndpoint(nextValue);
+                  if (!endpointRequiresPlainWsAcknowledgement(nextValue)) {
+                    setAcceptPlainWsNonLocal(false);
+                  }
+                }}
+                placeholder={t('settings.remote.customEndpointPlaceholder')}
+                disabled={!enabled || loading}
+              />
+            )}
+
+            {requiresPlainWsAcknowledgement && (
+              <label className="flex items-start gap-2 rounded-lg border border-[rgb(var(--warning))]/40 bg-[rgb(var(--warning))]/10 px-3 py-2 text-xs leading-5 text-[rgb(var(--muted-foreground))]">
+                <input
+                  type="checkbox"
+                  checked={acceptPlainWsNonLocal}
+                  onChange={(event) => setAcceptPlainWsNonLocal(event.target.checked)}
+                  className="mt-1"
+                  disabled={!enabled || loading}
+                />
+                <span>{t('settings.remote.plainWsAcknowledgement')}</span>
+              </label>
+            )}
           </div>
         </CompactSettingRow>
       </CompactSettingsSection>
 
       <CompactSettingsSection
-        title="Pairing"
-        help="The QR code contains a temporary bearer token. Regenerate it if it may have been exposed."
+        title={t('settings.remote.pairingTitle')}
+        help={t('settings.remote.pairingDescription')}
         icon={<QrCode size={15} />}
         actions={
-          <div className="flex flex-wrap justify-end gap-2">
-            <button
-              type="button"
-              className={secondaryButtonClassName}
-              onClick={() => void generatePairing(true)}
-              disabled={!enabled || loading}
-            >
-              <RefreshCw size={14} />
-              Regenerate
-            </button>
-            <button
-              type="button"
-              className={primaryButtonClassName}
-              onClick={() => void generatePairing(false)}
-              disabled={!enabled || loading}
-            >
-              Generate QR
-            </button>
-          </div>
+          <button
+            type="button"
+            className={primaryButtonClassName}
+            onClick={() => void generatePairing(Boolean(pairing?.available))}
+            disabled={!canGeneratePairing || loading}
+          >
+            <QrCode size={14} />
+            {pairing?.available
+              ? t('settings.remote.regenerateQr')
+              : t('settings.remote.generateQr')}
+          </button>
         }
       >
         <div className="space-y-3 px-4 py-3">
-          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <div className="space-y-2">
-              <div className="text-xs font-medium uppercase tracking-wide text-[rgb(var(--muted-foreground))]">
-                Network address
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {interfaces.map((iface) => (
-                  <button
-                    key={`${iface.name}:${iface.address}`}
-                    type="button"
-                    className={joinClassNames(
-                      secondaryButtonClassName,
-                      selectedAddress === iface.address && !customEndpoint.trim()
-                        && 'border-[rgb(var(--primary))] text-[rgb(var(--primary))]',
-                    )}
-                    onClick={() => {
-                      setSelectedAddress(iface.address);
-                      setCustomEndpoint('');
-                    }}
-                  >
-                    {iface.address} ({iface.name})
-                  </button>
-                ))}
-                {interfaces.length === 0 && (
-                  <div className="text-sm text-[rgb(var(--muted-foreground))]">
-                    No network interfaces found.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <label className="space-y-2">
-              <span className="block text-xs font-medium uppercase tracking-wide text-[rgb(var(--muted-foreground))]">
-                Custom endpoint
-              </span>
-              <input
-                className={inputClassName}
-                value={customEndpoint}
-                onChange={(event) => setCustomEndpoint(event.target.value)}
-                placeholder="wss://example.com or 100.64.1.20"
-              />
-            </label>
-          </div>
-
-          <label className="flex items-start gap-2 rounded-lg border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_32%,transparent)] px-3 py-2 text-sm text-[rgb(var(--muted-foreground))]">
-            <input
-              type="checkbox"
-              checked={acceptPlainWsNonLocal}
-              onChange={(event) => setAcceptPlainWsNonLocal(event.target.checked)}
-              className="mt-1"
-            />
-            <span>
-              I understand that public-looking plain <span className="font-mono">ws://</span>{' '}
-              endpoints should only be used when the network path is otherwise trusted. Use{' '}
-              <span className="font-mono">wss://</span> for public internet access.
-            </span>
-          </label>
-
-          {pairing?.available && (
+          {pairing?.available ? (
             <div className="grid gap-4 rounded-[14px] border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_42%,transparent)] p-4 md:grid-cols-[minmax(0,384px)_minmax(0,1fr)]">
               {pairing.qrDataUrl && (
                 <div className="mx-auto flex w-full max-w-96 items-center justify-center rounded-xl bg-white p-3 shadow-sm md:mx-0">
                   <img
                     src={pairing.qrDataUrl}
-                    alt="Synapse Mobile pairing QR"
+                    alt={t('settings.remote.qrAlt')}
                     className="block aspect-square w-full max-w-full"
                     style={{ imageRendering: 'crisp-edges' }}
                   />
@@ -322,17 +374,12 @@ export function RemoteSettingsTab() {
               <div className="min-w-0 space-y-3">
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-[rgb(var(--muted-foreground))]">
-                    Advertised endpoint
+                    {t('settings.remote.mobileConnectsTo')}
                   </div>
                   <div className="break-all text-sm text-[rgb(var(--foreground))]">
                     {pairing.endpoint}
                   </div>
                 </div>
-                <textarea
-                  readOnly
-                  value={pairing.pairingUrl ?? ''}
-                  className="h-24 w-full resize-none rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--input))] p-2 text-xs text-[rgb(var(--foreground))]"
-                />
                 <button
                   type="button"
                   className={secondaryButtonClassName}
@@ -340,29 +387,33 @@ export function RemoteSettingsTab() {
                   disabled={!pairing.pairingUrl}
                 >
                   <Copy size={14} />
-                  {copied ? 'Copied' : 'Copy pairing code'}
+                  {copied ? t('settings.remote.copied') : t('settings.remote.copyPairingCode')}
                 </button>
               </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-[rgb(var(--border))] px-4 py-5 text-sm text-[rgb(var(--muted-foreground))]">
+              {enabled
+                ? t('settings.remote.pairingEmpty')
+                : t('settings.remote.pairingDisabled')}
             </div>
           )}
         </div>
       </CompactSettingsSection>
 
-      <CompactSettingsSection title="Paired devices" icon={<Wifi size={15} />}>
+      <CompactSettingsSection title={t('settings.remote.devicesTitle')} icon={<Wifi size={15} />}>
         {devices.length === 0 ? (
           <div className="px-4 py-6 text-sm text-[rgb(var(--muted-foreground))]">
-            No paired mobile devices.
+            {t('settings.remote.devicesEmpty')}
           </div>
         ) : (
           devices.map((device) => (
-            <CompactSettingRow
-              key={device.deviceId}
-              label={device.name}
-              help={`Scope: ${device.scope}`}
-            >
+            <CompactSettingRow key={device.deviceId} label={device.name}>
               <div className="flex min-w-0 items-center justify-end gap-3">
                 <div className="min-w-0 text-right text-xs text-[rgb(var(--muted-foreground))]">
-                  Last seen {formatDeviceTime(device.lastSeenAt)}
+                  {t('settings.remote.deviceLastSeen', {
+                    time: formatDeviceTime(device.lastSeenAt, language, t('settings.remote.deviceNeverSeen')),
+                  })}
                 </div>
                 <button
                   type="button"
@@ -371,7 +422,7 @@ export function RemoteSettingsTab() {
                   disabled={loading}
                 >
                   <Trash2 size={14} />
-                  Revoke
+                  {t('settings.remote.revokeDevice')}
                 </button>
               </div>
             </CompactSettingRow>
@@ -388,13 +439,67 @@ export function RemoteSettingsTab() {
   );
 }
 
-function formatDeviceTime(timestamp: number): string {
+function formatDeviceTime(timestamp: number, language: string, neverText: string): string {
   if (!timestamp) {
-    return 'never';
+    return neverText;
   }
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) {
-    return 'unknown';
+    return neverText;
   }
-  return date.toLocaleString();
+  return date.toLocaleString(language);
+}
+
+function endpointRequiresPlainWsAcknowledgement(endpoint: string): boolean {
+  const trimmed = endpoint.trim();
+  if (!trimmed || trimmed.toLowerCase().startsWith('wss://')) {
+    return false;
+  }
+  const host = extractEndpointHost(trimmed);
+  return host !== null && !isLocalOrPrivateHost(host);
+}
+
+function extractEndpointHost(endpoint: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint)) {
+    try {
+      return new URL(endpoint).hostname;
+    } catch {
+      return null;
+    }
+  }
+  if (endpoint.startsWith('[')) {
+    const end = endpoint.indexOf(']');
+    return end > 0 ? endpoint.slice(1, end) : endpoint;
+  }
+  const [host] = endpoint.split(':', 1);
+  return host || null;
+}
+
+function isLocalOrPrivateHost(host: string): boolean {
+  const normalized = host.replace(/^\[|\]$/g, '').toLowerCase();
+  if (
+    normalized === 'localhost'
+    || normalized.endsWith('.localhost')
+    || normalized.endsWith('.local')
+    || normalized.endsWith('.ts.net')
+  ) {
+    return true;
+  }
+  if (normalized === '::1') {
+    return true;
+  }
+  if (normalized.includes(':')) {
+    return normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:');
+  }
+  const parts = normalized.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = parts;
+  return a === 10
+    || a === 127
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 169 && b === 254)
+    || (a === 100 && b >= 64 && b <= 127);
 }

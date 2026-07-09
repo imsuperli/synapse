@@ -1108,7 +1108,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
     },
     {
       value: 'remote' as SettingsTab,
-      label: 'Remote',
+      label: t('settings.tab.remote'),
       icon: Smartphone,
     },
     {
