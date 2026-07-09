@@ -8,8 +8,9 @@
     "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "dev:main": "node scripts/watch-dev-main.js",
     "dev:electron": "wait-on tcp:127.0.0.1:5173 file:dist/.dev-main-ready && cross-env NODE_ENV=development VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
-    "build": "npm run build:main && npm run build:renderer:typecheck && npm run build:statusline && vite build",
+    "build": "npm run build:main && npm run build:relay && npm run build:renderer:typecheck && npm run build:statusline && vite build",
     "build:main": "tsc -p tsconfig.json",
+    "build:relay": "tsc -p tsconfig.relay.json",
     "build:plugin-marketplace": "node scripts/build-plugin-marketplace.mjs",
     "build:plugin-marketplace:release": "node scripts/build-plugin-marketplace-release.mjs",
     "build:renderer:typecheck": "tsc -p tsconfig.renderer.json --noEmit",
@@ -28,6 +29,8 @@
     "mobile:test": "npm --prefix mobile run test",
     "mobile:typecheck": "npm --prefix mobile run typecheck",
     "mobile:verify:identity": "npm --prefix mobile run verify:identity",
+    "relay:dev": "tsx src/relay/server.ts",
+    "relay:start": "node dist/relay/server.js",
     "prepare": "git config core.hooksPath .githooks"
   },
   "keywords": [
