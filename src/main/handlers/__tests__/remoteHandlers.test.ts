@@ -104,7 +104,11 @@ describe('registerRemoteHandlers', () => {
       rotate: undefined,
       scope: 'mobile.control',
     });
-    expect(mockQrToDataUrl).toHaveBeenCalledWith('synapse://pair?code=abc', expect.any(Object));
+    expect(mockQrToDataUrl).toHaveBeenCalledWith('synapse://pair?code=abc', {
+      errorCorrectionLevel: 'M',
+      margin: 4,
+      width: 512,
+    });
     expect(response).toEqual({
       success: true,
       data: {

@@ -5,6 +5,9 @@ import type { RemoteSettingsPatch } from '../remote/RemoteSettingsStore';
 import { HandlerContext } from './HandlerContext';
 import { successResponse, errorResponse } from './HandlerResponse';
 
+const REMOTE_PAIRING_QR_WIDTH = 512;
+const REMOTE_PAIRING_QR_MARGIN = 4;
+
 export type RemoteNetworkInterface = {
   name: string;
   address: string;
@@ -64,8 +67,8 @@ export function registerRemoteHandlers(ctx: HandlerContext) {
         }
         const qrDataUrl = await QRCode.toDataURL(offer.pairingUrl, {
           errorCorrectionLevel: 'M',
-          margin: 2,
-          width: 256,
+          margin: REMOTE_PAIRING_QR_MARGIN,
+          width: REMOTE_PAIRING_QR_WIDTH,
         });
         return successResponse({
           available: true as const,
@@ -96,8 +99,8 @@ export function registerRemoteHandlers(ctx: HandlerContext) {
       }
       const qrDataUrl = await QRCode.toDataURL(offer.pairingUrl, {
         errorCorrectionLevel: 'M',
-        margin: 2,
-        width: 256,
+        margin: REMOTE_PAIRING_QR_MARGIN,
+        width: REMOTE_PAIRING_QR_WIDTH,
       });
       return successResponse({
         available: true as const,

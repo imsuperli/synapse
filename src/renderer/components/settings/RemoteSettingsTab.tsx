@@ -308,13 +308,16 @@ export function RemoteSettingsTab() {
           </label>
 
           {pairing?.available && (
-            <div className="grid gap-4 rounded-[14px] border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_42%,transparent)] p-4 md:grid-cols-[256px_minmax(0,1fr)]">
+            <div className="grid gap-4 rounded-[14px] border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_42%,transparent)] p-4 md:grid-cols-[minmax(0,384px)_minmax(0,1fr)]">
               {pairing.qrDataUrl && (
-                <img
-                  src={pairing.qrDataUrl}
-                  alt="Synapse Mobile pairing QR"
-                  className="h-64 w-64 rounded-lg bg-white p-2"
-                />
+                <div className="mx-auto flex w-full max-w-96 items-center justify-center rounded-xl bg-white p-3 shadow-sm md:mx-0">
+                  <img
+                    src={pairing.qrDataUrl}
+                    alt="Synapse Mobile pairing QR"
+                    className="block aspect-square w-full max-w-full"
+                    style={{ imageRendering: 'crisp-edges' }}
+                  />
+                </div>
               )}
               <div className="min-w-0 space-y-3">
                 <div>
