@@ -23,7 +23,7 @@ export const messages = {
     'common.terminal': '终端',
     'common.starting': '正在启动',
 
-    'nav.home': 'Synapse Mobile',
+    'nav.home': 'Synapse',
     'nav.pair': '配对',
     'nav.pairDesktop': '配对电脑',
     'nav.confirmPairing': '确认配对',
@@ -125,7 +125,7 @@ export const messages = {
     'hostSettings.renameSubmit': '重命名',
     'hostSettings.relayTitle': '中转地址',
     'hostSettings.language': '界面语言',
-    'hostSettings.languageMeta': '切换 Synapse Mobile 的显示语言。',
+    'hostSettings.languageMeta': '切换 Synapse 的显示语言。',
 
     'liveInput.listening': '正在听写',
     'liveInput.processing': '处理中',
@@ -152,7 +152,7 @@ export const messages = {
     'common.terminal': 'Terminal',
     'common.starting': 'Starting',
 
-    'nav.home': 'Synapse Mobile',
+    'nav.home': 'Synapse',
     'nav.pair': 'Pair',
     'nav.pairDesktop': 'Pair Desktop',
     'nav.confirmPairing': 'Confirm Pairing',
@@ -254,7 +254,7 @@ export const messages = {
     'hostSettings.renameSubmit': 'Rename',
     'hostSettings.relayTitle': 'Relay Address',
     'hostSettings.language': 'Language',
-    'hostSettings.languageMeta': 'Change the display language for Synapse Mobile.',
+    'hostSettings.languageMeta': 'Change the display language for Synapse.',
 
     'liveInput.listening': 'Listening',
     'liveInput.processing': 'Processing',

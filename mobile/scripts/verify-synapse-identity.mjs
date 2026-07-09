@@ -34,7 +34,7 @@ const ignoredFiles = new Set([
 ])
 
 const requiredAppConfig = {
-  name: 'Synapse Mobile',
+  name: 'Synapse',
   scheme: 'synapse',
   androidPackage: 'com.lchpersonal.synapse.mobile',
   iosBundleIdentifier: 'com.lchpersonal.synapse.mobile'
