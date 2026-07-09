@@ -7,6 +7,7 @@
     "start": "node scripts/start-expo.mjs",
     "android": "node scripts/run-expo.mjs run:android",
     "ios": "node scripts/run-expo.mjs run:ios",
+    "build:android-apk": "node scripts/build-android-apk.mjs",
     "postinstall": "node scripts/build-terminal-webview-engine.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
