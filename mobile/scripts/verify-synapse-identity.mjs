@@ -41,8 +41,8 @@ const requiredAppConfig = {
 }
 
 const requiredAssetHashes = {
-  'assets/icon.png': '90d25c13fd819cf4b02104a6b6d33d13e3b2ffc887f0dedfb6a1130efcc32e28',
-  'assets/adaptive-icon.png': '5c5a7144b7a32fccd988d4a520f64c53d6d82fb6776e13dab90db88858d78fa5',
+  'assets/icon.png': '7f1dd035c4bbb3ec5fc2a26e7e69382c26758d2f52cea88de7f02a282da0d081',
+  'assets/adaptive-icon.png': '7f1dd035c4bbb3ec5fc2a26e7e69382c26758d2f52cea88de7f02a282da0d081',
   'assets/splash-icon.png': '74e61b217fc2e3a76e350ef57085c89891421f2325dd905331e37525d4bcdc0c',
   'assets/favicon.png': 'befef86c836ec1e4960024ce853f09096c42bcf0698c7250229c83e823aba1ab'
 }
