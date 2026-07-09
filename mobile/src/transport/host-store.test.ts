@@ -34,7 +34,7 @@ vi.mock('expo-secure-store', () => ({
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as SecureStore from 'expo-secure-store'
-import { loadHosts, removeHost, saveHost } from './host-store'
+import { loadHosts, removeHost, saveHost, updateHostRelayEndpoint } from './host-store'
 
 const HOSTS_KEY = 'synapse:hosts'
 
@@ -52,7 +52,9 @@ describe('host-store token storage boundary', () => {
       endpoint: 'ws://192.168.1.10:6868',
       deviceToken: 'token-secret',
       publicKeyB64: 'desktop-public-key',
+      relayEndpoint: 'wss://relay.example.com/v1/relay',
       relaySessionId: 'relay-1',
+      relayClientToken: 'relay-client-secret',
       lastConnected: 100
     })
 
@@ -64,12 +66,17 @@ describe('host-store token storage boundary', () => {
         name: 'Laptop',
         endpoint: 'ws://192.168.1.10:6868',
         publicKeyB64: 'desktop-public-key',
+        relayEndpoint: 'wss://relay.example.com/v1/relay',
         relaySessionId: 'relay-1',
         lastConnected: 100
       }
     ])
     expect(rawMetadata).not.toContain('token-secret')
+    expect(rawMetadata).not.toContain('relay-client-secret')
     expect(storage.secureStorage.get('synapse.host-token.host-secure-1')).toBe('token-secret')
+    expect(storage.secureStorage.get('synapse.relay-client-token.host-secure-1')).toBe(
+      'relay-client-secret'
+    )
     expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
       'synapse.host-token.host-secure-1',
       'token-secret',
@@ -86,11 +93,17 @@ describe('host-store token storage boundary', () => {
           name: 'Workstation',
           endpoint: 'wss://desktop.example.com',
           publicKeyB64: 'desktop-public-key',
+          relayEndpoint: 'wss://relay.example.com/v1/relay',
+          relaySessionId: 'relay-load-1',
           lastConnected: 200
         }
       ])
     )
     storage.secureStorage.set('synapse.host-token.host-load-1', 'loaded-token')
+    storage.secureStorage.set(
+      'synapse.relay-client-token.host-load-1',
+      'loaded-relay-client-token'
+    )
 
     await expect(loadHosts()).resolves.toEqual([
       {
@@ -99,6 +112,9 @@ describe('host-store token storage boundary', () => {
         endpoint: 'wss://desktop.example.com',
         deviceToken: 'loaded-token',
         publicKeyB64: 'desktop-public-key',
+        relayEndpoint: 'wss://relay.example.com/v1/relay',
+        relaySessionId: 'relay-load-1',
+        relayClientToken: 'loaded-relay-client-token',
         lastConnected: 200
       }
     ])
@@ -140,9 +156,34 @@ describe('host-store token storage boundary', () => {
 
     expect(JSON.parse(storage.asyncStorage.get(HOSTS_KEY) ?? '[]')).toEqual([])
     expect(storage.secureStorage.has('synapse.host-token.host-remove-1')).toBe(false)
+    expect(storage.secureStorage.has('synapse.relay-client-token.host-remove-1')).toBe(false)
     expect(AsyncStorage.setItem).toHaveBeenCalledWith(HOSTS_KEY, '[]')
     expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('synapse.host-token.host-remove-1', {
       keychainAccessible: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY'
     })
+  })
+
+  it('updates the saved relay endpoint without touching the relay token', async () => {
+    await saveHost({
+      id: 'host-relay-update',
+      name: 'Relay Host',
+      endpoint: 'ws://127.0.0.1:6868',
+      deviceToken: 'device-token',
+      publicKeyB64: 'desktop-public-key',
+      relayEndpoint: 'wss://old-relay.example.com/v1/relay',
+      relaySessionId: 'relay-session',
+      relayClientToken: 'relay-client-token',
+      lastConnected: 0
+    })
+
+    await updateHostRelayEndpoint('host-relay-update', 'wss://new-relay.example.com')
+
+    expect(JSON.parse(storage.asyncStorage.get(HOSTS_KEY) ?? '[]')[0]).toMatchObject({
+      relayEndpoint: 'wss://new-relay.example.com/v1/relay',
+      relaySessionId: 'relay-session'
+    })
+    expect(storage.secureStorage.get('synapse.relay-client-token.host-relay-update')).toBe(
+      'relay-client-token'
+    )
   })
 })

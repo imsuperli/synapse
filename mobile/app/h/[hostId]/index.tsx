@@ -9,10 +9,12 @@ import {
   View
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { RotateCw, Settings, TerminalSquare } from 'lucide-react-native'
+import { Layers, Play, RotateCw, Settings, TerminalSquare } from 'lucide-react-native'
 import {
   connectToHost,
   loadHostById,
+  startRemoteWindow,
+  type RemotePaneSummary,
   type RemoteTerminalSummary,
   type RemoteWindowSummary
 } from '../../../src/synapse/remote'
@@ -48,6 +50,76 @@ type OverviewItem =
   | { type: 'window'; window: RemoteWindowSummary }
   | { type: 'terminal'; terminal: RemoteTerminalSummary }
 
+function paneTitle(pane: RemotePaneSummary): string {
+  return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || 'Terminal'
+}
+
+function paneMeta(pane: RemotePaneSummary): string {
+  const backend = pane.backend ?? 'local'
+  const cwd = pane.cwd || 'unknown cwd'
+  return pane.running ? `${backend} - pid ${pane.pid ?? '-'} - ${cwd}` : `${backend} - ${cwd}`
+}
+
+function statusLabel(status: string, running: boolean): string {
+  if (running) {
+    return 'Running'
+  }
+  switch (status) {
+    case 'waiting':
+      return 'Waiting'
+    case 'error':
+      return 'Error'
+    case 'restoring':
+      return 'Starting'
+    case 'paused':
+      return 'Stopped'
+    case 'completed':
+    default:
+      return 'Stopped'
+  }
+}
+
+function statusColor(status: string, running: boolean): string {
+  if (running || status === 'running' || status === 'waiting') {
+    return colors.statusGreen
+  }
+  if (status === 'restoring') {
+    return colors.statusAmber
+  }
+  if (status === 'error') {
+    return colors.statusRed
+  }
+  return colors.borderSubtle
+}
+
+function getActiveTerminalPane(window: RemoteWindowSummary): RemotePaneSummary | null {
+  return (
+    window.panes.find((pane) => pane.paneId === window.activePaneId && pane.kind === 'terminal') ??
+    window.panes.find((pane) => pane.kind === 'terminal') ??
+    null
+  )
+}
+
+function isStartableLocalPane(pane: RemotePaneSummary): boolean {
+  return pane.kind === 'terminal' && !pane.running && (pane.backend ?? 'local') === 'local'
+}
+
+function windowTopBorderColor(window: RemoteWindowSummary): string {
+  const runningPane = window.panes.find((pane) => pane.running)
+  if (runningPane) {
+    return statusColor(runningPane.status, true)
+  }
+  const errorPane = window.panes.find((pane) => pane.status === 'error')
+  if (errorPane) {
+    return colors.statusRed
+  }
+  const restoringPane = window.panes.find((pane) => pane.status === 'restoring')
+  if (restoringPane) {
+    return colors.statusAmber
+  }
+  return colors.borderSubtle
+}
+
 export default function HostOverviewScreen() {
   const params = useLocalSearchParams<{ hostId?: string }>()
   const hostId = getParam(params.hostId)
@@ -59,6 +131,7 @@ export default function HostOverviewScreen() {
   const [overviewMode, setOverviewMode] = useState<'terminals' | 'windows'>('terminals')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [startingPaneKey, setStartingPaneKey] = useState<string | null>(null)
   const clientRef = useRef<RpcClient | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
 
@@ -88,6 +161,7 @@ export default function HostOverviewScreen() {
     setTerminals([])
     setWindows([])
     setOverviewMode('terminals')
+    setStartingPaneKey(null)
     try {
       const loadedHost = await loadHostById(hostId)
       if (!loadedHost) {
@@ -105,11 +179,8 @@ export default function HostOverviewScreen() {
       const overview = await loadHostOverviewData(client)
       setOverviewMode(overview.mode)
       setWindows(overview.windows)
-      const nextTerminals = overview.terminals
       setTerminals(
-        nextTerminals.filter(
-          (terminal) => terminal.windowId && terminal.paneId && terminal.status === 'alive'
-        )
+        overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -123,6 +194,68 @@ export default function HostOverviewScreen() {
       void loadAndConnect()
       return () => closeClient()
     }, [closeClient, loadAndConnect])
+  )
+
+  const openPane = useCallback(
+    async (pane: RemotePaneSummary) => {
+      if (pane.kind !== 'terminal') {
+        return
+      }
+      const paneKey = `${pane.windowId}:${pane.paneId}`
+      try {
+        setError(null)
+        if (!pane.running) {
+          if (!isStartableLocalPane(pane)) {
+            setError('Only stopped local terminal panes can be started from mobile right now.')
+            return
+          }
+          const client = clientRef.current
+          if (!client) {
+            setError('Not connected to Synapse desktop.')
+            return
+          }
+          setStartingPaneKey(paneKey)
+          const result = await startRemoteWindow(client, pane.windowId, pane.paneId)
+          const nextPane = result.pane ?? result.startedPanes[0] ?? pane
+          setWindows((current) =>
+            current.map((window) =>
+              window.windowId === result.window.windowId ? result.window : window
+            )
+          )
+          router.push(
+            `/h/${hostId}/t/${encodeURIComponent(nextPane.windowId)}/${encodeURIComponent(nextPane.paneId)}`
+          )
+          return
+        }
+        router.push(
+          `/h/${hostId}/t/${encodeURIComponent(pane.windowId)}/${encodeURIComponent(pane.paneId)}`
+        )
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setStartingPaneKey(null)
+      }
+    },
+    [hostId, router]
+  )
+
+  const openWindow = useCallback(
+    async (window: RemoteWindowSummary) => {
+      const pane = getActiveTerminalPane(window)
+      if (pane) {
+        await openPane(pane)
+      }
+    },
+    [openPane]
+  )
+
+  const openTerminal = useCallback(
+    (terminal: RemoteTerminalSummary) => {
+      router.push(
+        `/h/${hostId}/t/${encodeURIComponent(terminal.windowId ?? '')}/${encodeURIComponent(terminal.paneId ?? '')}`
+      )
+    },
+    [hostId, router]
   )
 
   return (
@@ -161,7 +294,7 @@ export default function HostOverviewScreen() {
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <Text style={styles.sectionTitle}>
-        {overviewMode === 'windows' ? 'Windows and Panes' : 'Running Terminals'}
+        {overviewMode === 'windows' ? 'Terminal Windows' : 'Terminals'}
       </Text>
       <FlatList
         data={overviewItems}
@@ -188,7 +321,7 @@ export default function HostOverviewScreen() {
                 ? 'Loading terminals'
                 : overviewMode === 'windows'
                   ? 'No terminal panes'
-                  : 'No running terminal panes'}
+                  : 'No terminal panes'}
             </Text>
             <Text style={styles.emptyText}>
               {overviewMode === 'windows'
@@ -199,75 +332,131 @@ export default function HostOverviewScreen() {
         }
         renderItem={({ item }) =>
           item.type === 'window'
-            ? renderWindowItem(item.window, hostId, router)
-            : renderTerminalItem(item.terminal, hostId, router)
+            ? renderWindowItem(item.window, startingPaneKey, openWindow, openPane)
+            : renderTerminalItem(item.terminal, openTerminal)
         }
       />
     </View>
   )
 }
 
-type HostRouter = ReturnType<typeof useRouter>
-
-function renderTerminalItem(
-  item: RemoteTerminalSummary,
-  hostId: string,
-  router: HostRouter
-) {
+function renderTerminalItem(item: RemoteTerminalSummary, onOpen: (terminal: RemoteTerminalSummary) => void) {
   return (
     <TerminalListRow
       terminal={item}
       disabled={item.status !== 'alive'}
-      onPress={() =>
-        router.push(
-          `/h/${hostId}/t/${encodeURIComponent(item.windowId ?? '')}/${encodeURIComponent(item.paneId ?? '')}`
-        )
-      }
+      onPress={() => onOpen(item)}
     />
+  )
+}
+
+function PaneCardRow({
+  pane,
+  active,
+  disabled,
+  starting,
+  onPress
+}: {
+  pane: RemotePaneSummary
+  active: boolean
+  disabled: boolean
+  starting: boolean
+  onPress: () => void
+}) {
+  return (
+    <Pressable
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.paneRow,
+        active && styles.activePaneRow,
+        disabled && styles.disabledRow,
+        pressed && styles.pressed
+      ]}
+      onPress={onPress}
+    >
+      <View style={[styles.paneRail, { backgroundColor: statusColor(pane.status, pane.running) }]} />
+      <View style={styles.paneMain}>
+        <View style={styles.terminalTitleRow}>
+          <Text style={styles.terminalTitle} numberOfLines={1}>
+            {paneTitle(pane)}
+          </Text>
+          <Text style={styles.badge}>
+            {starting ? 'Starting' : statusLabel(pane.status, pane.running)}
+          </Text>
+        </View>
+        <Text style={styles.terminalMeta} numberOfLines={1}>
+          {paneMeta(pane)}
+        </Text>
+      </View>
+      {!pane.running && isStartableLocalPane(pane) ? (
+        <View style={styles.startIcon}>
+          <Play size={13} color={colors.accentBlue} fill={colors.accentBlue} />
+        </View>
+      ) : null}
+    </Pressable>
   )
 }
 
 function renderWindowItem(
   item: RemoteWindowSummary,
-  hostId: string,
-  router: HostRouter
+  startingPaneKey: string | null,
+  onOpenWindow: (window: RemoteWindowSummary) => void | Promise<void>,
+  onOpenPane: (pane: RemotePaneSummary) => void | Promise<void>
 ) {
+  const activePane = getActiveTerminalPane(item)
   return (
-    <View style={styles.windowGroup}>
+    <Pressable
+      style={({ pressed }) => [
+        styles.windowCard,
+        { borderTopColor: windowTopBorderColor(item) },
+        pressed && styles.pressed
+      ]}
+      onPress={() => void onOpenWindow(item)}
+      disabled={!activePane}
+    >
       <View style={styles.windowHeader}>
-        <Text style={styles.windowTitle} numberOfLines={1}>
-          {item.name}
-        </Text>
-        <Text style={styles.windowMeta}>
-          {item.terminalPaneCount} terminal {item.terminalPaneCount === 1 ? 'pane' : 'panes'}
-        </Text>
+        <View style={styles.windowTitleGroup}>
+          <View style={styles.windowIcon}>
+            {item.terminalPaneCount > 1 ? (
+              <Layers size={18} color={colors.textPrimary} />
+            ) : (
+              <TerminalSquare size={18} color={colors.textPrimary} />
+            )}
+          </View>
+          <View style={styles.windowTitleText}>
+            <Text style={styles.windowTitle} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <Text style={styles.windowMeta}>
+              {item.terminalPaneCount} terminal {item.terminalPaneCount === 1 ? 'pane' : 'panes'}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.statusDots}>
+          {item.panes.map((pane) => (
+            <View
+              key={`${pane.windowId}:${pane.paneId}:dot`}
+              style={[styles.paneStatusDot, { backgroundColor: statusColor(pane.status, pane.running) }]}
+            />
+          ))}
+        </View>
       </View>
       {item.panes.map((pane) => {
-        const terminal: RemoteTerminalSummary = {
-          windowId: pane.windowId,
-          paneId: pane.paneId,
-          sessionId: pane.sessionId ?? `${pane.windowId}:${pane.paneId}`,
-          pid: pane.pid ?? 0,
-          backend: pane.backend ?? 'local',
-          status: pane.running ? 'alive' : 'exited',
-          workingDirectory: pane.cwd ?? '',
-          command: pane.command ?? pane.title
-        }
+        const paneKey = `${pane.windowId}:${pane.paneId}`
+        const starting = startingPaneKey === paneKey
+        const canOpen = pane.running || isStartableLocalPane(pane)
         return (
-          <TerminalListRow
+          <PaneCardRow
             key={`${pane.windowId}:${pane.paneId}`}
-            terminal={terminal}
-            disabled={!pane.running}
-            badge={pane.running ? 'running' : pane.status}
-            onPress={() =>
-              router.push(
-                `/h/${hostId}/t/${encodeURIComponent(pane.windowId)}/${encodeURIComponent(pane.paneId)}`
-              )
-            }
+            pane={pane}
+            active={pane.paneId === item.activePaneId}
+            disabled={!canOpen || starting}
+            starting={starting}
+            onPress={() => void onOpenPane(pane)}
           />
         )
       })}
-    </View>
+    </Pressable>
   )
 }
 
@@ -386,31 +575,59 @@ const styles = StyleSheet.create({
   list: {
     gap: spacing.sm
   },
-  windowGroup: {
+  windowCard: {
     gap: spacing.sm,
     borderWidth: 1,
+    borderTopWidth: 2,
     borderColor: colors.borderSubtle,
     backgroundColor: colors.bgPanel,
     borderRadius: radii.row,
-    padding: spacing.sm
+    padding: spacing.md
   },
   windowHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.md,
-    paddingHorizontal: spacing.xs
+    gap: spacing.md
   },
-  windowTitle: {
+  windowTitleGroup: {
     flex: 1,
     minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm
+  },
+  windowIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgRaised,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  windowTitleText: {
+    flex: 1,
+    minWidth: 0
+  },
+  windowTitle: {
     color: colors.textPrimary,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700'
   },
   windowMeta: {
     color: colors.textMuted,
-    fontSize: typography.metaSize
+    fontSize: typography.metaSize,
+    marginTop: 2
+  },
+  statusDots: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    alignItems: 'center'
+  },
+  paneStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4
   },
   emptyList: {
     flexGrow: 1,
@@ -474,6 +691,39 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: typography.metaSize,
     marginTop: 2
+  },
+  paneRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bgRaised,
+    borderRadius: radii.button,
+    paddingVertical: spacing.sm,
+    paddingRight: spacing.sm,
+    overflow: 'hidden'
+  },
+  activePaneRow: {
+    borderColor: colors.accentBlue
+  },
+  paneRail: {
+    alignSelf: 'stretch',
+    width: 3,
+    borderRadius: 2
+  },
+  paneMain: {
+    flex: 1,
+    minWidth: 0
+  },
+  startIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: radii.button,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(59,130,246,0.12)'
   },
   pressed: {
     opacity: 0.74

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as Switch from '@radix-ui/react-switch';
-import { Copy, QrCode, RefreshCw, Trash2, Wifi } from 'lucide-react';
+import { Cloud, Copy, QrCode, RefreshCw, Trash2, Wifi } from 'lucide-react';
 import type {
   RemoteDevice,
   RemoteNetworkInterface,
@@ -31,6 +31,8 @@ const defaultRemoteSettings: RemoteSettings = {
   manualEndpoint: null,
   acceptedPlainWsNonLocal: false,
   startOnLaunch: false,
+  relayEnabled: false,
+  relayEndpoint: null,
 };
 
 const defaultRemoteStatus: RemoteStatus = {
@@ -47,6 +49,8 @@ export function RemoteSettingsTab() {
   const [selectedAddress, setSelectedAddress] = useState<string>('');
   const [customEndpoint, setCustomEndpoint] = useState('');
   const [useCustomEndpoint, setUseCustomEndpoint] = useState(false);
+  const [relayEnabled, setRelayEnabled] = useState(false);
+  const [relayEndpoint, setRelayEndpoint] = useState('');
   const [acceptPlainWsNonLocal, setAcceptPlainWsNonLocal] = useState(false);
   const [pairing, setPairing] = useState<RemotePairingQR | null>(null);
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
@@ -69,9 +73,13 @@ export function RemoteSettingsTab() {
   const requiresPlainWsAcknowledgement = useCustomEndpoint && customEndpoint.trim()
     ? endpointRequiresPlainWsAcknowledgement(customEndpoint)
     : false;
+  const relayRequiresPlainWsAcknowledgement = relayEnabled && relayEndpoint.trim()
+    ? endpointRequiresPlainWsAcknowledgement(relayEndpoint)
+    : false;
   const canGeneratePairing = enabled
-    && Boolean(effectiveAddress)
-    && (!requiresPlainWsAcknowledgement || acceptPlainWsNonLocal);
+    && (relayEnabled ? Boolean(relayEndpoint.trim()) : Boolean(effectiveAddress))
+    && (!requiresPlainWsAcknowledgement || acceptPlainWsNonLocal)
+    && (!relayRequiresPlainWsAcknowledgement || acceptPlainWsNonLocal);
   const selectedAddressMissing = !useCustomEndpoint
     && Boolean(selectedAddress)
     && !interfaces.some((iface) => iface.address === selectedAddress);
@@ -90,6 +98,8 @@ export function RemoteSettingsTab() {
       setCustomEndpoint(statusResponse.data.settings.manualEndpoint ?? '');
       setUseCustomEndpoint(Boolean(statusResponse.data.settings.manualEndpoint));
       setSelectedAddress(statusResponse.data.settings.selectedAddress ?? '');
+      setRelayEnabled(statusResponse.data.settings.relayEnabled);
+      setRelayEndpoint(statusResponse.data.settings.relayEndpoint ?? '');
       setAcceptPlainWsNonLocal(statusResponse.data.settings.acceptedPlainWsNonLocal);
     }
     if (interfacesResponse.success && interfacesResponse.data) {
@@ -128,6 +138,8 @@ export function RemoteSettingsTab() {
         enabled: nextEnabled,
         selectedAddress: useCustomEndpoint ? null : selectedAddress || null,
         manualEndpoint: useCustomEndpoint ? customEndpoint.trim() || null : null,
+        relayEnabled,
+        relayEndpoint: relayEndpoint.trim() || null,
         acceptPlainWsNonLocal,
       });
       if (!response.success || !response.data) {
@@ -158,12 +170,17 @@ export function RemoteSettingsTab() {
     setError(null);
     setCopied(false);
     try {
-      if (!effectiveAddress) {
+      if (!relayEnabled && !effectiveAddress) {
         throw new Error(t('settings.remote.error.missingAddress'));
+      }
+      if (relayEnabled && !relayEndpoint.trim()) {
+        throw new Error(t('settings.remote.error.missingRelayEndpoint'));
       }
       const settingsResponse = await window.electronAPI.remoteUpdateSettings({
         selectedAddress: useCustomEndpoint ? null : selectedAddress || null,
         manualEndpoint: useCustomEndpoint ? customEndpoint.trim() || null : null,
+        relayEnabled,
+        relayEndpoint: relayEndpoint.trim() || null,
         acceptPlainWsNonLocal,
       });
       if (!settingsResponse.success || !settingsResponse.data) {
@@ -338,6 +355,70 @@ export function RemoteSettingsTab() {
             )}
           </div>
         </CompactSettingRow>
+
+        <CompactSettingRow
+          label={t('settings.remote.relayLabel')}
+          help={t('settings.remote.relayDescription')}
+          disabled={!enabled}
+          controlClassName="justify-between"
+        >
+          <div className="flex w-full max-w-[520px] flex-col items-stretch gap-2">
+            <div className="flex min-w-0 items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Cloud size={15} className="shrink-0 text-[rgb(var(--muted-foreground))]" />
+                <span className="truncate text-sm text-[rgb(var(--foreground))]">
+                  {relayEnabled
+                    ? t('settings.remote.relayStatus.enabled')
+                    : t('settings.remote.relayStatus.disabled')}
+                </span>
+              </div>
+              <Switch.Root
+                checked={relayEnabled}
+                onCheckedChange={(checked) => {
+                  setRelayEnabled(checked);
+                  setPairing(null);
+                  setCopied(false);
+                }}
+                disabled={!enabled || loading}
+                className={switchRootClassName}
+                aria-label={t('settings.remote.relayLabel')}
+              >
+                <Switch.Thumb className={switchThumbClassName} />
+              </Switch.Root>
+            </div>
+
+            {relayEnabled && (
+              <input
+                className={inputClassName}
+                value={relayEndpoint}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setPairing(null);
+                  setCopied(false);
+                  setRelayEndpoint(nextValue);
+                  if (!endpointRequiresPlainWsAcknowledgement(nextValue)) {
+                    setAcceptPlainWsNonLocal(false);
+                  }
+                }}
+                placeholder={t('settings.remote.relayEndpointPlaceholder')}
+                disabled={!enabled || loading}
+              />
+            )}
+
+            {relayRequiresPlainWsAcknowledgement && (
+              <label className="flex items-start gap-2 rounded-lg border border-[rgb(var(--warning))]/40 bg-[rgb(var(--warning))]/10 px-3 py-2 text-xs leading-5 text-[rgb(var(--muted-foreground))]">
+                <input
+                  type="checkbox"
+                  checked={acceptPlainWsNonLocal}
+                  onChange={(event) => setAcceptPlainWsNonLocal(event.target.checked)}
+                  className="mt-1"
+                  disabled={!enabled || loading}
+                />
+                <span>{t('settings.remote.plainWsAcknowledgement')}</span>
+              </label>
+            )}
+          </div>
+        </CompactSettingRow>
       </CompactSettingsSection>
 
       <CompactSettingsSection
@@ -377,8 +458,13 @@ export function RemoteSettingsTab() {
                     {t('settings.remote.mobileConnectsTo')}
                   </div>
                   <div className="break-all text-sm text-[rgb(var(--foreground))]">
-                    {pairing.endpoint}
+                    {pairing.relayEndpoint ?? pairing.endpoint}
                   </div>
+                  {pairing.relayEndpoint && pairing.endpoint && !isLoopbackEndpoint(pairing.endpoint) && (
+                    <div className="mt-1 break-all text-xs text-[rgb(var(--muted-foreground))]">
+                      {t('settings.remote.directFallback', { endpoint: pairing.endpoint })}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -473,6 +559,15 @@ function extractEndpointHost(endpoint: string): string | null {
   }
   const [host] = endpoint.split(':', 1);
   return host || null;
+}
+
+function isLoopbackEndpoint(endpoint: string): boolean {
+  const host = extractEndpointHost(endpoint);
+  if (!host) {
+    return false;
+  }
+  const normalized = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
 
 function isLocalOrPrivateHost(host: string): boolean {

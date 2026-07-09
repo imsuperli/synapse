@@ -2,6 +2,7 @@ import { join } from 'path';
 import { z } from 'zod';
 import { DEFAULT_REMOTE_WS_PORT } from './RemoteWebSocketTransport';
 import { readJsonFileIfPresent, writeSecureJsonFile } from './RemoteSecureFile';
+import { normalizeRelayEndpoint } from '../../shared/remote/relay';
 
 export const REMOTE_SETTINGS_FILENAME = 'synapse-remote-settings.json';
 
@@ -15,6 +16,8 @@ export type RemoteSettings = {
   manualEndpoint: string | null;
   acceptedPlainWsNonLocal: boolean;
   startOnLaunch: boolean;
+  relayEnabled: boolean;
+  relayEndpoint: string | null;
 };
 
 export type RemoteSettingsPatch = Partial<RemoteSettings> & {
@@ -34,6 +37,8 @@ export const DEFAULT_REMOTE_SETTINGS: RemoteSettings = {
   manualEndpoint: null,
   acceptedPlainWsNonLocal: false,
   startOnLaunch: false,
+  relayEnabled: false,
+  relayEndpoint: null,
 };
 
 const RemoteSettingsSchema = z.object({
@@ -44,6 +49,8 @@ const RemoteSettingsSchema = z.object({
   manualEndpoint: z.string().min(1).nullable().catch(DEFAULT_REMOTE_SETTINGS.manualEndpoint),
   acceptedPlainWsNonLocal: z.boolean().catch(DEFAULT_REMOTE_SETTINGS.acceptedPlainWsNonLocal),
   startOnLaunch: z.boolean().catch(DEFAULT_REMOTE_SETTINGS.startOnLaunch),
+  relayEnabled: z.boolean().catch(DEFAULT_REMOTE_SETTINGS.relayEnabled),
+  relayEndpoint: z.string().min(1).nullable().catch(DEFAULT_REMOTE_SETTINGS.relayEndpoint),
 });
 
 const RemoteSettingsPatchSchema = z.object({
@@ -55,6 +62,8 @@ const RemoteSettingsPatchSchema = z.object({
   acceptedPlainWsNonLocal: z.boolean().optional(),
   acceptPlainWsNonLocal: z.boolean().optional(),
   startOnLaunch: z.boolean().optional(),
+  relayEnabled: z.boolean().optional(),
+  relayEndpoint: z.string().trim().nullable().optional(),
 }).strict();
 
 export class RemoteSettingsStore {
@@ -113,6 +122,10 @@ export function validateRemoteSettings(settings: RemoteSettings): void {
   validatePort(settings.preferredPort);
   validateEndpointOverride(settings.manualEndpoint, settings.acceptedPlainWsNonLocal);
   validateEndpointOverride(settings.selectedAddress, settings.acceptedPlainWsNonLocal);
+  validateRelayEndpoint(settings.relayEndpoint, settings.acceptedPlainWsNonLocal);
+  if (settings.relayEnabled && !settings.relayEndpoint) {
+    throw new Error('Relay endpoint is required when relay is enabled');
+  }
 }
 
 export function validateEndpointOverride(
@@ -161,12 +174,30 @@ export function isLocalOrPrivateRemoteHost(host: string): boolean {
   return isPrivateIPv4(normalized);
 }
 
+export function validateRelayEndpoint(
+  endpoint: string | null | undefined,
+  acceptedPlainWsNonLocal = false,
+): RemoteEndpointValidationResult {
+  const trimmed = endpoint?.trim();
+  if (!trimmed) {
+    return { requiresAcknowledgement: false, reason: null };
+  }
+
+  const normalized = normalizeRelayEndpoint(trimmed);
+  const parsed = parseEndpointUrl(normalized);
+  if (parsed.protocol === 'wss:') {
+    return { requiresAcknowledgement: false, reason: null };
+  }
+  return validatePlainWsHost(parsed.hostname, acceptedPlainWsNonLocal);
+}
+
 function normalizeSettings(input: unknown): RemoteSettings {
   const parsed = RemoteSettingsSchema.parse(input);
   return {
     ...parsed,
     selectedAddress: normalizeNullableString(parsed.selectedAddress),
     manualEndpoint: normalizeNullableString(parsed.manualEndpoint),
+    relayEndpoint: normalizeNullableRelayEndpoint(parsed.relayEndpoint),
   };
 }
 
@@ -179,6 +210,9 @@ function normalizeSettingsPatch(patch: RemoteSettingsPatch) {
   if ('manualEndpoint' in parsed) {
     normalized.manualEndpoint = normalizeNullableString(parsed.manualEndpoint);
   }
+  if ('relayEndpoint' in parsed) {
+    normalized.relayEndpoint = normalizeNullableRelayEndpoint(parsed.relayEndpoint);
+  }
   return normalized;
 }
 
@@ -188,6 +222,11 @@ function normalizeNullableString(value: string | null | undefined): string | nul
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeNullableRelayEndpoint(value: string | null | undefined): string | null {
+  const normalized = normalizeNullableString(value);
+  return normalized ? normalizeRelayEndpoint(normalized) : normalized;
 }
 
 function validateBindHost(host: string): void {

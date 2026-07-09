@@ -8,6 +8,7 @@ import {
   type StoredHostProfile
 } from './types'
 import { getNextHostNameFromHosts } from './host-names'
+import { normalizeRelayEndpoint } from '../../../src/shared/remote/relay'
 
 const STORAGE_KEY = 'synapse:hosts'
 // Why: SecureStore keys must match [A-Za-z0-9._-]; colons are rejected.
@@ -15,6 +16,8 @@ const STORAGE_KEY = 'synapse:hosts'
 // satisfying the validator.
 const TOKEN_KEY_PREFIX = 'synapse.host-token.'
 const WEB_TOKEN_KEY_PREFIX = 'synapse:web-host-token:'
+const RELAY_TOKEN_KEY_PREFIX = 'synapse.relay-client-token.'
+const WEB_RELAY_TOKEN_KEY_PREFIX = 'synapse:web-relay-client-token:'
 
 // Why: WHEN_UNLOCKED_THIS_DEVICE_ONLY keeps the pairing token off
 // iCloud Keychain and out of iCloud/iTunes backup restores onto a
@@ -30,6 +33,14 @@ function tokenKey(hostId: string): string {
 
 function webTokenKey(hostId: string): string {
   return `${WEB_TOKEN_KEY_PREFIX}${hostId}`
+}
+
+function relayTokenKey(hostId: string): string {
+  return `${RELAY_TOKEN_KEY_PREFIX}${hostId}`
+}
+
+function webRelayTokenKey(hostId: string): string {
+  return `${WEB_RELAY_TOKEN_KEY_PREFIX}${hostId}`
 }
 
 async function readDeviceToken(hostId: string): Promise<string | null> {
@@ -49,6 +60,29 @@ async function writeDeviceToken(hostId: string, token: string): Promise<void> {
   await SecureStore.setItemAsync(tokenKey(hostId), token, KEYCHAIN_OPTIONS)
 }
 
+async function readRelayClientToken(hostId: string): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    return AsyncStorage.getItem(webRelayTokenKey(hostId))
+  }
+  return SecureStore.getItemAsync(relayTokenKey(hostId), KEYCHAIN_OPTIONS)
+}
+
+async function writeRelayClientToken(hostId: string, token: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    await AsyncStorage.setItem(webRelayTokenKey(hostId), token)
+    return
+  }
+  await SecureStore.setItemAsync(relayTokenKey(hostId), token, KEYCHAIN_OPTIONS)
+}
+
+async function deleteRelayClientToken(hostId: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    await AsyncStorage.removeItem(webRelayTokenKey(hostId))
+    return
+  }
+  await SecureStore.deleteItemAsync(relayTokenKey(hostId), KEYCHAIN_OPTIONS)
+}
+
 async function deleteDeviceToken(hostId: string): Promise<void> {
   if (Platform.OS === 'web') {
     await AsyncStorage.removeItem(webTokenKey(hostId))
@@ -65,6 +99,7 @@ async function deleteDeviceToken(hostId: string): Promise<void> {
 // for the JS-runtime lifetime, which matches AsyncStorage semantics
 // (cleared on app uninstall, persisted across foreground/background).
 const tokenCache = new Map<string, string>()
+const relayTokenCache = new Map<string, string>()
 let inflightLoad: Promise<HostProfile[]> | null = null
 
 export async function loadHosts(): Promise<HostProfile[]> {
@@ -129,7 +164,39 @@ async function doLoadHosts(): Promise<HostProfile[]> {
       token = fetched
       tokenCache.set(stored.data.id, token)
     }
-    out.push({ ...stored.data, deviceToken: token })
+
+    let relayClientToken: string | undefined
+    if (stored.data.relayEndpoint && stored.data.relaySessionId) {
+      relayClientToken = relayTokenCache.get(stored.data.id)
+      if (!relayClientToken) {
+        let fetchedRelayToken: string | null
+        try {
+          fetchedRelayToken = await readRelayClientToken(stored.data.id)
+        } catch {
+          fetchedRelayToken = null
+        }
+        if (fetchedRelayToken) {
+          relayClientToken = fetchedRelayToken
+          relayTokenCache.set(stored.data.id, relayClientToken)
+        }
+      }
+    }
+
+    out.push({
+      id: stored.data.id,
+      name: stored.data.name,
+      endpoint: stored.data.endpoint,
+      publicKeyB64: stored.data.publicKeyB64,
+      lastConnected: stored.data.lastConnected,
+      ...(relayClientToken && stored.data.relayEndpoint && stored.data.relaySessionId
+        ? {
+            relayEndpoint: stored.data.relayEndpoint,
+            relaySessionId: stored.data.relaySessionId,
+            relayClientToken
+          }
+        : {}),
+      deviceToken: token
+    })
   }
   return out
 }
@@ -164,6 +231,7 @@ function toStored(host: HostProfile): StoredHostProfile {
     name: host.name,
     endpoint: host.endpoint,
     publicKeyB64: host.publicKeyB64,
+    relayEndpoint: host.relayEndpoint,
     relaySessionId: host.relaySessionId,
     lastConnected: host.lastConnected
   }
@@ -186,6 +254,13 @@ export async function saveHost(host: HostProfile): Promise<void> {
   // from current metadata.
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
   await writeDeviceToken(stored.id, validated.deviceToken)
+  if (validated.relayClientToken) {
+    await writeRelayClientToken(stored.id, validated.relayClientToken)
+    relayTokenCache.set(stored.id, validated.relayClientToken)
+  } else {
+    await deleteRelayClientToken(stored.id)
+    relayTokenCache.delete(stored.id)
+  }
   tokenCache.set(stored.id, validated.deviceToken)
 }
 
@@ -194,7 +269,9 @@ export async function removeHost(hostId: string): Promise<void> {
   const filtered = hosts.filter((h) => h.id !== hostId)
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(filtered))
   await deleteDeviceToken(hostId)
+  await deleteRelayClientToken(hostId)
   tokenCache.delete(hostId)
+  relayTokenCache.delete(hostId)
 }
 
 export async function renameHost(hostId: string, newName: string): Promise<void> {
@@ -204,6 +281,20 @@ export async function renameHost(hostId: string, newName: string): Promise<void>
     host.name = newName
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
   }
+}
+
+export async function updateHostRelayEndpoint(hostId: string, endpoint: string): Promise<void> {
+  const normalizedEndpoint = normalizeRelayEndpoint(endpoint)
+  const hosts = await loadStoredHosts()
+  const host = hosts.find((h) => h.id === hostId)
+  if (!host) {
+    throw new Error('Host not found')
+  }
+  if (!host.relaySessionId) {
+    throw new Error('This host was not paired with relay support')
+  }
+  host.relayEndpoint = normalizedEndpoint
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
 }
 
 export async function getNextHostName(): Promise<string> {

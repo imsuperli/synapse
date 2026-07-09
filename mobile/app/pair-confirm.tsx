@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Check, X } from 'lucide-react-native'
 import { ConnectionLog } from '../src/components/ConnectionLog'
@@ -12,6 +12,7 @@ import {
 import { connect } from '../src/transport/rpc-client'
 import type { ConnectionLogEntry, PairingOffer, RpcResponse } from '../src/transport/types'
 import { colors, radii, spacing, typography } from '../src/theme/mobile-theme'
+import { normalizeRelayEndpoint } from '../../src/shared/remote/relay'
 
 const PAIRING_OVERALL_TIMEOUT_MS = 25_000
 
@@ -21,12 +22,14 @@ export default function PairConfirmScreen() {
   const state = resolvePairConfirmRouteState(
     Array.isArray(params.code) ? params.code[0] : params.code
   )
+  const initialOffer = state.kind === 'ready' ? state.offer : null
   const [status, setStatus] = useState<'ready' | 'connecting' | 'error'>(
     state.kind === 'ready' ? 'ready' : 'error'
   )
   const [errorMessage, setErrorMessage] = useState(
     state.kind === 'error' ? state.errorMessage : ''
   )
+  const [relayEndpointInput, setRelayEndpointInput] = useState(initialOffer?.relayEndpoint ?? '')
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const activeAttemptRef = useRef<PairingConnectionAttempt | null>(null)
@@ -61,9 +64,11 @@ export default function PairConfirmScreen() {
       })
       activeAttemptRef.current = attempt
 
+      const relay = createRelayConnectConfig(offer, relayEndpointInput)
       let response: RpcResponse
       try {
         client = connect(offer.endpoint, offer.deviceToken, offer.publicKeyB64, {
+          relay,
           onLog: (entry) => {
             if (mountedRef.current && activeAttemptRef.current === attempt) {
               appendLog(entry)
@@ -117,7 +122,13 @@ export default function PairConfirmScreen() {
           endpoint: offer.endpoint,
           deviceToken: offer.deviceToken,
           publicKeyB64: offer.publicKeyB64,
-          relaySessionId: offer.relaySessionId,
+          ...(offer.relaySessionId && offer.relayClientToken && relay
+            ? {
+                relayEndpoint: relay.endpoint,
+                relaySessionId: offer.relaySessionId,
+                relayClientToken: offer.relayClientToken
+              }
+            : {}),
           lastConnected: Date.now()
         })
         router.replace(`/h/${hostId}`)
@@ -128,7 +139,7 @@ export default function PairConfirmScreen() {
         )
       }
     },
-    [appendLog, router]
+    [appendLog, relayEndpointInput, router]
   )
 
   const offer = state.kind === 'ready' ? state.offer : null
@@ -143,6 +154,21 @@ export default function PairConfirmScreen() {
             <Text style={styles.endpoint} numberOfLines={2}>
               {offer.endpoint}
             </Text>
+            {offer.relayEndpoint && offer.relaySessionId && offer.relayClientToken ? (
+              <>
+                <Text style={styles.label}>Relay endpoint</Text>
+                <TextInput
+                  value={relayEndpointInput}
+                  onChangeText={setRelayEndpointInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  style={styles.input}
+                  placeholder="wss://relay.example.com/v1/relay"
+                  placeholderTextColor={colors.textMuted}
+                />
+              </>
+            ) : null}
             {offer.hostName ? <Text style={styles.hostName}>{offer.hostName}</Text> : null}
           </>
         ) : null}
@@ -257,5 +283,27 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.45
+  },
+  input: {
+    color: colors.textPrimary,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel,
+    borderRadius: radii.button,
+    fontFamily: typography.monoFamily,
+    fontSize: typography.metaSize,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm
   }
 })
+
+function createRelayConnectConfig(offer: PairingOffer, relayEndpointInput: string) {
+  if (!offer.relayEndpoint || !offer.relaySessionId || !offer.relayClientToken) {
+    return undefined
+  }
+  return {
+    endpoint: normalizeRelayEndpoint(relayEndpointInput || offer.relayEndpoint),
+    sessionId: offer.relaySessionId,
+    clientToken: offer.relayClientToken
+  }
+}

@@ -1,10 +1,10 @@
 import { useCallback, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Pencil, Trash2 } from 'lucide-react-native'
+import { Cloud, Pencil, Trash2 } from 'lucide-react-native'
 import { TextInputModal } from '../../../src/components/TextInputModal'
 import { loadHostById } from '../../../src/synapse/remote'
-import { removeHost, renameHost } from '../../../src/transport/host-store'
+import { removeHost, renameHost, updateHostRelayEndpoint } from '../../../src/transport/host-store'
 import type { HostProfile } from '../../../src/transport/types'
 import { colors, radii, spacing, typography } from '../../../src/theme/mobile-theme'
 
@@ -18,6 +18,7 @@ export default function HostSettingsScreen() {
   const hostId = getParam(params.hostId)
   const [host, setHost] = useState<HostProfile | null>(null)
   const [renameVisible, setRenameVisible] = useState(false)
+  const [relayVisible, setRelayVisible] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -47,6 +48,11 @@ export default function HostSettingsScreen() {
         <Text style={styles.endpoint} numberOfLines={2}>
           {host?.endpoint ?? hostId}
         </Text>
+        {host?.relayEndpoint ? (
+          <Text style={styles.relayEndpoint} numberOfLines={2}>
+            Relay {host.relayEndpoint}
+          </Text>
+        ) : null}
       </View>
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -59,6 +65,16 @@ export default function HostSettingsScreen() {
             <Text style={styles.actionMeta}>Change the saved display name on this phone.</Text>
           </View>
         </Pressable>
+
+        {host?.relayEndpoint && host.relaySessionId && host.relayClientToken ? (
+          <Pressable style={styles.actionRow} onPress={() => setRelayVisible(true)}>
+            <Cloud size={18} color={colors.textPrimary} />
+            <View style={styles.actionText}>
+              <Text style={styles.actionTitle}>Relay address</Text>
+              <Text style={styles.actionMeta}>Change the relay service this phone uses.</Text>
+            </View>
+          </Pressable>
+        ) : null}
 
         <Pressable style={styles.actionRow} onPress={() => void handleRemove()}>
           <Trash2 size={18} color={colors.statusRed} />
@@ -85,6 +101,20 @@ export default function HostSettingsScreen() {
           void renameHost(hostId, value).then(refresh)
         }}
       />
+
+      <TextInputModal
+        visible={relayVisible}
+        title="Relay Address"
+        defaultValue={host?.relayEndpoint ?? ''}
+        submitLabel="Save"
+        onCancel={() => setRelayVisible(false)}
+        onSubmit={(value) => {
+          setRelayVisible(false)
+          void updateHostRelayEndpoint(hostId, value).then(refresh).catch((err) => {
+            setError(err instanceof Error ? err.message : String(err))
+          })
+        }}
+      />
     </View>
   )
 }
@@ -102,6 +132,13 @@ const styles = StyleSheet.create({
     fontWeight: '700'
   },
   endpoint: {
+    color: colors.textSecondary,
+    fontFamily: typography.monoFamily,
+    fontSize: typography.metaSize,
+    lineHeight: 18,
+    marginTop: 4
+  },
+  relayEndpoint: {
     color: colors.textSecondary,
     fontFamily: typography.monoFamily,
     fontSize: typography.metaSize,

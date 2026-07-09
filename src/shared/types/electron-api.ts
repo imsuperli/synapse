@@ -1672,6 +1672,7 @@ export interface RemotePairingQR {
   qrDataUrl?: string;
   pairingUrl?: string;
   endpoint?: string;
+  relayEndpoint?: string;
   deviceId?: string;
   expiresAt?: number | null;
 }
@@ -1692,6 +1693,8 @@ export interface RemoteSettings {
   manualEndpoint: string | null;
   acceptedPlainWsNonLocal: boolean;
   startOnLaunch: boolean;
+  relayEnabled: boolean;
+  relayEndpoint: string | null;
 }
 
 export interface RemoteSettingsUpdate {
@@ -1703,6 +1706,8 @@ export interface RemoteSettingsUpdate {
   acceptedPlainWsNonLocal?: boolean;
   acceptPlainWsNonLocal?: boolean;
   startOnLaunch?: boolean;
+  relayEnabled?: boolean;
+  relayEndpoint?: string | null;
 }
 
 export type ElectronEventHandler<T> = (event: unknown, payload: T) => void;

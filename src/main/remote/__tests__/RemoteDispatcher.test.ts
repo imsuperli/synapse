@@ -38,6 +38,7 @@ describe('RemoteDispatcher', () => {
       stateProvider?: {
         listWindows: ReturnType<typeof vi.fn>;
         listPanes: ReturnType<typeof vi.fn>;
+        startWindow?: ReturnType<typeof vi.fn>;
       };
     } = {},
   ) {
@@ -462,6 +463,7 @@ describe('RemoteDispatcher', () => {
           },
         ],
       })),
+      startWindow: vi.fn(),
     };
     const harness = createHarness('mobile.window-control', { stateProvider });
 
@@ -503,6 +505,47 @@ describe('RemoteDispatcher', () => {
     });
   });
 
+  it('starts a window through the state provider for window-control devices', async () => {
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      startWindow: vi.fn(() => ({
+        window: {
+          windowId: 'win-1',
+          name: 'Project',
+          panes: [],
+        },
+        pane: {
+          windowId: 'win-1',
+          paneId: 'pane-1',
+          kind: 'terminal',
+          running: true,
+        },
+        startedPanes: [],
+      })),
+    };
+    const harness = createHarness('mobile.window-control', { stateProvider });
+
+    const response = await dispatch(harness, REMOTE_METHODS.WINDOW_START, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        pane: {
+          windowId: 'win-1',
+          paneId: 'pane-1',
+        },
+      },
+    });
+    expect(stateProvider.startWindow).toHaveBeenCalledWith({
+      windowId: 'win-1',
+      paneId: 'pane-1',
+    });
+  });
+
   it('does not advertise window methods when no state provider is registered', async () => {
     const harness = createHarness('mobile.window-control');
 
@@ -525,6 +568,7 @@ describe('RemoteDispatcher', () => {
     const stateProvider = {
       listWindows: vi.fn(() => ({ windows: [] })),
       listPanes: vi.fn(() => ({ panes: [] })),
+      startWindow: vi.fn(),
     };
     const readHarness = createHarness('mobile.read', { stateProvider });
     const adminHarness = createHarness('mobile.admin', { stateProvider });
@@ -549,6 +593,7 @@ describe('RemoteDispatcher', () => {
       result: {
         methods: expect.arrayContaining([
           REMOTE_METHODS.WINDOW_LIST,
+          REMOTE_METHODS.WINDOW_START,
           REMOTE_METHODS.DEVICE_REVOKE,
         ]),
       },

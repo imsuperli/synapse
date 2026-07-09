@@ -14,7 +14,7 @@ import {
   type LayoutChangeEvent
 } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
-import { useFocusEffect, useLocalSearchParams } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { Eraser, Keyboard as KeyboardIcon, RotateCw } from 'lucide-react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { TerminalWebView, type TerminalWebViewHandle } from '../../../../../src/terminal/TerminalWebView'
@@ -25,7 +25,10 @@ import {
   parseTerminalOutputEvent,
   parseTerminalSubscribeResult,
   requestTerminalHistory,
-  sendTerminalInput
+  requestWindowList,
+  sendTerminalInput,
+  startRemoteWindow,
+  type RemotePaneSummary
 } from '../../../../../src/synapse/remote'
 import { MobileTerminalLiveInputStatus } from '../../../../../src/session/MobileTerminalLiveInputStatus'
 import {
@@ -52,6 +55,27 @@ type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryI
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
+
+function terminalPaneLabel(pane: RemotePaneSummary): string {
+  return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || 'Terminal'
+}
+
+function terminalPaneStatusColor(pane: RemotePaneSummary): string {
+  if (pane.running || pane.status === 'running' || pane.status === 'waiting') {
+    return colors.statusGreen
+  }
+  if (pane.status === 'restoring') {
+    return colors.statusAmber
+  }
+  if (pane.status === 'error') {
+    return colors.statusRed
+  }
+  return colors.borderSubtle
+}
+
+function isStartableLocalPane(pane: RemotePaneSummary): boolean {
+  return pane.kind === 'terminal' && !pane.running && (pane.backend ?? 'local') === 'local'
+}
 
 const terminalTheme: MobileTerminalTheme = {
   theme: {
@@ -113,6 +137,7 @@ export default function RemoteTerminalScreen() {
   const windowId = getParam(params.windowId)
   const paneId = getParam(params.paneId)
   const terminalHandle = `${windowId}:${paneId}`
+  const router = useRouter()
   const insets = useSafeAreaInsets()
   const terminalRef = useRef<TerminalWebViewHandle | null>(null)
   const clientRef = useRef<RpcClient | null>(null)
@@ -139,6 +164,8 @@ export default function RemoteTerminalScreen() {
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
   const [liveInputCapture, setLiveInputCapture] = useState('')
   const [keyboardHeight, setKeyboardHeight] = useState(0)
+  const [windowPanes, setWindowPanes] = useState<RemotePaneSummary[]>([])
+  const [startingTabPaneKey, setStartingTabPaneKey] = useState<string | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const liveInputTerminalHandles = useMemo(() => new Set([terminalHandle]), [terminalHandle])
   const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set([terminalHandle]))
@@ -190,6 +217,19 @@ export default function RemoteTerminalScreen() {
     viewportRef.current = measured
     terminal.resize(measured.cols, measured.rows)
   }, [])
+
+  const loadWindowPaneTabs = useCallback(
+    async (client: RpcClient) => {
+      try {
+        const windows = await requestWindowList(client)
+        const currentWindow = windows.find((window) => window.windowId === windowId)
+        setWindowPanes(currentWindow?.panes.filter((pane) => pane.kind === 'terminal') ?? [])
+      } catch {
+        setWindowPanes([])
+      }
+    },
+    [windowId]
+  )
 
   const loadTerminalHistorySnapshot = useCallback(
     async (client: RpcClient, runId: number) => {
@@ -283,6 +323,8 @@ export default function RemoteTerminalScreen() {
     setConnectionState('loading')
     logsRef.current = []
     setLogs([])
+    setWindowPanes([])
+    setStartingTabPaneKey(null)
 
     try {
       const loadedHost = await loadHostById(hostId)
@@ -298,6 +340,7 @@ export default function RemoteTerminalScreen() {
         onLog: appendLog
       })
       clientRef.current = client
+      void loadWindowPaneTabs(client)
 
       const history = await loadTerminalHistorySnapshot(client, runId)
       if (!history || runIdRef.current !== runId) {
@@ -321,6 +364,7 @@ export default function RemoteTerminalScreen() {
     appendLog,
     cleanup,
     hostId,
+    loadWindowPaneTabs,
     loadTerminalHistorySnapshot,
     measureAndFitLocalTerminal,
     startTerminalSubscription
@@ -369,6 +413,41 @@ export default function RemoteTerminalScreen() {
       setError(err instanceof Error ? err.message : String(err))
     }
   }, [paneId, windowId])
+
+  const handlePaneTabPress = useCallback(
+    async (pane: RemotePaneSummary) => {
+      if (pane.paneId === paneId) {
+        return
+      }
+      const targetPath = `/h/${hostId}/t/${encodeURIComponent(pane.windowId)}/${encodeURIComponent(pane.paneId)}`
+      if (pane.running) {
+        router.replace(targetPath)
+        return
+      }
+      if (!isStartableLocalPane(pane)) {
+        setError('Only stopped local terminal panes can be started from mobile right now.')
+        return
+      }
+      const client = clientRef.current
+      if (!client) {
+        setError('Not connected to Synapse desktop.')
+        return
+      }
+      const paneKey = `${pane.windowId}:${pane.paneId}`
+      setStartingTabPaneKey(paneKey)
+      setError(null)
+      try {
+        await startRemoteWindow(client, pane.windowId, pane.paneId)
+        await loadWindowPaneTabs(client)
+        router.replace(targetPath)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setStartingTabPaneKey(null)
+      }
+    },
+    [hostId, loadWindowPaneTabs, paneId, router]
+  )
 
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => {
@@ -515,6 +594,49 @@ export default function RemoteTerminalScreen() {
           </Pressable>
         </View>
       </View>
+
+      {windowPanes.length > 1 ? (
+        <View style={styles.paneTabs}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.paneTabContent}
+          >
+            {windowPanes.map((pane, index) => {
+              const active = pane.paneId === paneId
+              const paneKey = `${pane.windowId}:${pane.paneId}`
+              const starting = startingTabPaneKey === paneKey
+              const disabled = !active && !pane.running && !isStartableLocalPane(pane)
+              return (
+                <Pressable
+                  key={paneKey}
+                  disabled={disabled || starting}
+                  style={({ pressed }) => [
+                    styles.paneTab,
+                    active && styles.paneTabActive,
+                    disabled && styles.paneTabDisabled,
+                    pressed && styles.paneTabPressed
+                  ]}
+                  onPress={() => void handlePaneTabPress(pane)}
+                >
+                  <View
+                    style={[
+                      styles.paneTabDot,
+                      { backgroundColor: terminalPaneStatusColor(pane) }
+                    ]}
+                  />
+                  <Text
+                    style={[styles.paneTabText, active && styles.paneTabTextActive]}
+                    numberOfLines={1}
+                  >
+                    {starting ? 'Starting' : terminalPaneLabel(pane) || `Pane ${index + 1}`}
+                  </Text>
+                </Pressable>
+              )
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -690,6 +812,51 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgRaised,
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  paneTabs: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel
+  },
+  paneTabContent: {
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm
+  },
+  paneTab: {
+    maxWidth: 180,
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgRaised,
+    paddingHorizontal: spacing.sm
+  },
+  paneTabActive: {
+    borderColor: colors.accentBlue
+  },
+  paneTabDisabled: {
+    opacity: 0.45
+  },
+  paneTabPressed: {
+    backgroundColor: colors.borderSubtle
+  },
+  paneTabDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4
+  },
+  paneTabText: {
+    maxWidth: 140,
+    color: colors.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: '700'
+  },
+  paneTabTextActive: {
+    color: colors.textPrimary
   },
   errorText: {
     color: colors.statusRed,

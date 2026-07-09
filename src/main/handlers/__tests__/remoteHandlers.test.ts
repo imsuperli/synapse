@@ -102,7 +102,7 @@ describe('registerRemoteHandlers', () => {
     expect(gateway.createPairingOffer).toHaveBeenCalledWith({
       address: '100.64.1.20',
       rotate: undefined,
-      scope: 'mobile.control',
+      scope: 'mobile.window-control',
     });
     expect(mockQrToDataUrl).toHaveBeenCalledWith('synapse://pair?code=abc', {
       errorCorrectionLevel: 'M',
@@ -167,4 +167,6 @@ const defaultSettings = {
   manualEndpoint: null,
   acceptedPlainWsNonLocal: false,
   startOnLaunch: false,
+  relayEnabled: false,
+  relayEndpoint: null,
 };

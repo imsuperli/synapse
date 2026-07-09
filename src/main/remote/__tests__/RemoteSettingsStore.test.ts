@@ -34,6 +34,8 @@ describe('RemoteSettingsStore', () => {
       manualEndpoint: null,
       acceptedPlainWsNonLocal: false,
       startOnLaunch: false,
+      relayEnabled: false,
+      relayEndpoint: null,
     });
   });
 
@@ -43,15 +45,24 @@ describe('RemoteSettingsStore', () => {
     store.update({
       selectedAddress: '100.64.1.20',
       manualEndpoint: 'wss://synapse.example.com',
+      relayEndpoint: 'wss://relay.example.com',
     });
-    store.update({ enabled: true });
+    store.update({ enabled: true, relayEnabled: true });
 
     const reloaded = new RemoteSettingsStore(tempDir!);
     expect(reloaded.getSettings()).toMatchObject({
       enabled: true,
       selectedAddress: '100.64.1.20',
       manualEndpoint: 'wss://synapse.example.com',
+      relayEnabled: true,
+      relayEndpoint: 'wss://relay.example.com/v1/relay',
     });
+  });
+
+  it('requires a relay endpoint when relay mode is enabled', () => {
+    const store = createStore();
+
+    expect(() => store.update({ relayEnabled: true })).toThrow(/Relay endpoint is required/);
   });
 
   it('rejects public-looking plain ws endpoints without acknowledgement', () => {

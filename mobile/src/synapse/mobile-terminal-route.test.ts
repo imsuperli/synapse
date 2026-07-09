@@ -53,6 +53,15 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('transform: [{ translateY: -keyboardLift }]')
   })
 
+  it('renders same-window terminal pane tabs without changing desktop layout', () => {
+    expect(routeSource).toContain('requestWindowList(client)')
+    expect(routeSource).toContain('windowPanes.length > 1')
+    expect(routeSource).toContain('router.replace(targetPath)')
+    expect(routeSource).toContain('startRemoteWindow(client, pane.windowId, pane.paneId)')
+    expect(routeSource).not.toContain('pane.focus')
+    expect(routeSource).not.toContain('window.activate')
+  })
+
   it('cleans up subscriptions and sockets when leaving the terminal screen', () => {
     expect(routeSource).toContain('unsubscribeRef.current?.()')
     expect(routeSource).toContain('clientRef.current?.close()')

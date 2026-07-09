@@ -16,6 +16,15 @@ export type RemoteDeviceEntry = {
   pairedAt: number;
   lastSeenAt: number;
   pendingExpiresAt: number | null;
+  relaySessionId?: string;
+  relayHostToken?: string;
+  relayClientTokenHash?: string;
+};
+
+export type RemoteDeviceRelaySession = {
+  sessionId: string;
+  hostToken: string;
+  clientTokenHash: string;
 };
 
 type RemoteDeviceRegistryOptions = {
@@ -105,6 +114,30 @@ export class RemoteDeviceRegistry {
     return removed;
   }
 
+  setRelaySession(
+    deviceId: string,
+    relay: RemoteDeviceRelaySession | null,
+  ): RemoteDeviceEntry | null {
+    const device = this.devices.find((candidate) => candidate.deviceId === deviceId);
+    if (!device) {
+      return null;
+    }
+
+    if (!relay) {
+      delete device.relaySessionId;
+      delete device.relayHostToken;
+      delete device.relayClientTokenHash;
+      this.save();
+      return device;
+    }
+
+    device.relaySessionId = relay.sessionId;
+    device.relayHostToken = relay.hostToken;
+    device.relayClientTokenHash = relay.clientTokenHash;
+    this.save();
+    return device;
+  }
+
   getDevice(deviceId: string): RemoteDeviceEntry | null {
     this.removeExpiredPendingDevices();
     return this.devices.find((device) => device.deviceId === deviceId) ?? null;
@@ -170,6 +203,18 @@ function normalizeDevice(device: RemoteDeviceEntry): RemoteDeviceEntry[] {
         device.pendingExpiresAt === null || Number.isFinite(device.pendingExpiresAt)
           ? device.pendingExpiresAt
           : null,
+      relaySessionId:
+        typeof device.relaySessionId === 'string' && device.relaySessionId
+          ? device.relaySessionId
+          : undefined,
+      relayHostToken:
+        typeof device.relayHostToken === 'string' && device.relayHostToken
+          ? device.relayHostToken
+          : undefined,
+      relayClientTokenHash:
+        typeof device.relayClientTokenHash === 'string' && device.relayClientTokenHash
+          ? device.relayClientTokenHash
+          : undefined,
     },
   ];
 }

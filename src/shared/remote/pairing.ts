@@ -16,7 +16,24 @@ export const PairingOfferSchema = z.object({
   publicKeyB64: z.string().min(1),
   scope: PairingScopeSchema,
   hostName: z.string().min(1).optional(),
+  relayEndpoint: z.string().min(1).optional(),
   relaySessionId: z.string().min(1).optional(),
+  relayClientToken: z.string().min(1).optional(),
+}).superRefine((offer, ctx) => {
+  const relayFields = [
+    offer.relayEndpoint,
+    offer.relaySessionId,
+    offer.relayClientToken,
+  ];
+  const hasRelayField = relayFields.some((value) => value !== undefined);
+  const hasAllRelayFields = relayFields.every((value) => value !== undefined);
+  if (hasRelayField && !hasAllRelayFields) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Relay pairing fields must be provided together',
+      path: ['relayEndpoint'],
+    });
+  }
 });
 
 export type PairingOffer = z.infer<typeof PairingOfferSchema>;
@@ -58,7 +75,9 @@ export function createPairingOfferPayload(args: {
   publicKeyB64: string;
   scope?: RemoteDeviceScope;
   hostName?: string;
+  relayEndpoint?: string;
   relaySessionId?: string;
+  relayClientToken?: string;
 }): PairingOffer {
   return PairingOfferSchema.parse({
     v: REMOTE_PROTOCOL_VERSION,
@@ -67,7 +86,9 @@ export function createPairingOfferPayload(args: {
     publicKeyB64: args.publicKeyB64,
     scope: args.scope ?? 'mobile.control',
     hostName: args.hostName,
+    relayEndpoint: args.relayEndpoint,
     relaySessionId: args.relaySessionId,
+    relayClientToken: args.relayClientToken,
   });
 }
 

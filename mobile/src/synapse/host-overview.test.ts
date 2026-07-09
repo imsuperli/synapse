@@ -11,7 +11,7 @@ vi.mock('../transport/rpc-client', () => ({
 
 import {
   canUseWindowList,
-  flattenRunningTerminals,
+  flattenTerminalPanes,
   loadHostOverviewData
 } from './host-overview'
 import type { RpcClient } from '../transport/rpc-client'
@@ -141,9 +141,9 @@ describe('Synapse Mobile host overview data', () => {
     expect(canUseWindowList('mobile.admin', ['window.list'])).toBe(true)
   })
 
-  it('flattens only running terminal panes into terminal routes', () => {
+  it('flattens running and stopped terminal panes into terminal routes', () => {
     expect(
-      flattenRunningTerminals([
+      flattenTerminalPanes([
         {
           windowId: 'w1',
           name: 'Workspace',
@@ -207,6 +207,16 @@ describe('Synapse Mobile host overview data', () => {
         status: 'alive',
         workingDirectory: '/repo',
         command: 'zsh'
+      },
+      {
+        windowId: 'w1',
+        paneId: 'p2',
+        sessionId: 'w1:p2',
+        pid: 0,
+        backend: 'local',
+        status: 'exited',
+        workingDirectory: '/tmp',
+        command: 'bash'
       }
     ])
   })

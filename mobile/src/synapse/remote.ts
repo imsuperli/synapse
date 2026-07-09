@@ -4,14 +4,16 @@ import type { ConnectionLogEntry, ConnectionState, HostProfile, RpcResponse } fr
 import type { RemoteDeviceScope } from '../../../src/shared/remote/methods'
 import type {
   RemotePaneSummary,
-  RemoteWindowSummary
+  RemoteWindowSummary,
+  WindowStartResult
 } from '../../../src/shared/remote/window-protocol'
 import { WindowStatus, type PaneBackend, type PaneKind, type WindowKind } from '../../../src/shared/types/window'
 
 export type {
   RemoteDeviceScope,
   RemotePaneSummary,
-  RemoteWindowSummary
+  RemoteWindowSummary,
+  WindowStartResult
 }
 
 export type RemoteTerminalSummary = {
@@ -80,7 +82,17 @@ export function connectToHost(
     onLog?: (entry: ConnectionLogEntry) => void
   } = {}
 ): RpcClient {
-  const client = connect(host.endpoint, host.deviceToken, host.publicKeyB64, options)
+  const relay = host.relayEndpoint && host.relaySessionId && host.relayClientToken
+    ? {
+        endpoint: host.relayEndpoint,
+        sessionId: host.relaySessionId,
+        clientToken: host.relayClientToken
+      }
+    : undefined
+  const client = connect(host.endpoint, host.deviceToken, host.publicKeyB64, {
+    ...options,
+    relay
+  })
   void updateLastConnected(host.id).catch(() => undefined)
   return client
 }
@@ -115,6 +127,21 @@ export async function requestWindowList(client: RpcClient): Promise<RemoteWindow
     throw new Error(response.error.message)
   }
   return parseWindowList(response.result)
+}
+
+export async function startRemoteWindow(
+  client: RpcClient,
+  windowId: string,
+  paneId?: string
+): Promise<WindowStartResult> {
+  const response = await client.sendRequest('window.start', {
+    windowId,
+    ...(paneId ? { paneId } : {})
+  })
+  if (!response.ok) {
+    throw new Error(response.error.message)
+  }
+  return parseWindowStartResult(response.result)
 }
 
 export async function requestTerminalHistory(
@@ -256,6 +283,26 @@ export function parseWindowList(value: unknown): RemoteWindowSummary[] {
       }
     ]
   })
+}
+
+export function parseWindowStartResult(value: unknown): WindowStartResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid window start response')
+  }
+  const result = value as Record<string, unknown>
+  const windows = parseWindowList({ windows: [result.window] })
+  if (windows.length === 0) {
+    throw new Error('Invalid window start response')
+  }
+  const pane = parseRemotePaneSummary(result.pane)[0] ?? null
+  const startedPanes = Array.isArray(result.startedPanes)
+    ? result.startedPanes.flatMap((item) => parseRemotePaneSummary(item))
+    : []
+  return {
+    window: windows[0]!,
+    pane,
+    startedPanes
+  }
 }
 
 function parseRemotePaneSummary(value: unknown): RemotePaneSummary[] {

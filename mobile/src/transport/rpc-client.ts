@@ -29,6 +29,7 @@ import {
 import { describeSocketEvent } from './socket-event-debug'
 import { isRpcResponse } from './rpc-response-shape'
 import { websocketPayloadToUint8 } from './websocket-payload-bytes'
+import { buildRelayClientUrl } from '../../../src/shared/remote/relay'
 
 type PendingRequest = {
   resolve: (response: RpcResponse) => void
@@ -141,6 +142,11 @@ export type ConnectOptions = {
   // detailed connection log. Useful when 'Connecting…' hangs forever
   // (e.g. broken Tailscale route) and you need to see *where* it's stuck.
   onLog?: ConnectionLogSink
+  relay?: {
+    endpoint: string
+    sessionId: string
+    clientToken: string
+  }
 }
 
 export function connect(
@@ -156,6 +162,16 @@ export function connect(
       : (optionsOrLegacy ?? {})
   const onStateChange = options.onStateChange
   const onLog = options.onLog
+  const socketEndpoint = options.relay
+    ? buildRelayClientUrl(options.relay.endpoint, {
+        sessionId: options.relay.sessionId,
+        clientToken: options.relay.clientToken
+      })
+    : endpoint
+  const diagnosticEndpoint = options.relay?.endpoint ?? endpoint
+  const connectionDetail = options.relay
+    ? `Relay ${options.relay.endpoint}`
+    : endpoint
   let logCounter = 0
   function emitLog(level: ConnectionLogLevel, message: string, detail?: string) {
     if (!onLog) {
@@ -240,7 +256,7 @@ export function connect(
       to: next,
       dweltMs: dwelt,
       attempt: reconnectAttempt,
-      endpoint: redactedEndpoint(endpoint)
+      endpoint: redactedEndpoint(diagnosticEndpoint)
     })
     if (next === 'connected') {
       lastConnectedAt = Date.now()
@@ -319,7 +335,7 @@ export function connect(
     wsConstructionCounter++
     console.log('[net] openConnection', {
       attempt: reconnectAttempt,
-      endpoint: redactedEndpoint(endpoint),
+      endpoint: redactedEndpoint(diagnosticEndpoint),
       // Why: process-poisoning diagnostic. If wsCount is high (e.g. >50)
       // and every recent open fails with 1006, suspect RN/OkHttp internal
       // pool corruption that only force-quit clears. Compare msSinceLast*
@@ -337,10 +353,10 @@ export function connect(
     emitLog(
       'info',
       reconnectAttempt > 0 ? `Reconnecting (attempt ${reconnectAttempt + 1})` : 'Opening WebSocket',
-      endpoint
+      connectionDetail
     )
 
-    ws = new WebSocket(endpoint)
+    ws = new WebSocket(socketEndpoint)
     const openingWs = ws
     const ignoreStaleSocketEvent = (eventName: string): boolean => {
       if (ws === openingWs) {
@@ -675,7 +691,7 @@ export function connect(
         state,
         attempt: reconnectAttempt,
         intentionallyClosed,
-        endpoint: redactedEndpoint(endpoint),
+        endpoint: redactedEndpoint(diagnosticEndpoint),
         constructToCloseMs,
         aliveMs,
         inboundIdleMs,
@@ -756,7 +772,7 @@ export function connect(
       console.log('[net] auth rejected — retrying handshake', {
         attempt: authRejectionCount,
         budget: AUTH_RETRY_BUDGET,
-        endpoint: redactedEndpoint(endpoint)
+        endpoint: redactedEndpoint(diagnosticEndpoint)
       })
       emitLog(
         'warn',
@@ -781,7 +797,7 @@ export function connect(
     }
     console.log('[net] auth rejected — budget exhausted, latching auth-failed', {
       attempt: authRejectionCount,
-      endpoint: redactedEndpoint(endpoint)
+      endpoint: redactedEndpoint(diagnosticEndpoint)
     })
     intentionallyClosed = true
     ws?.close()
@@ -803,7 +819,7 @@ export function connect(
       console.log('[net] reconnect-paused', {
         attempt: reconnectAttempt,
         reason: 'give-up-cap',
-        endpoint: redactedEndpoint(endpoint)
+        endpoint: redactedEndpoint(diagnosticEndpoint)
       })
       rejectConnectWaiters('Connection retry limit reached')
       return

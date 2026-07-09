@@ -153,6 +153,22 @@ describe('mobile rpc-client connection timeout', () => {
     client.close()
   })
 
+  it('opens the WebSocket through relay when relay options are present', () => {
+    const client = connect('ws://desktop.invalid', 'token', 'server-key', {
+      relay: {
+        endpoint: 'wss://relay.example.com',
+        sessionId: 'relay-session',
+        clientToken: 'relay-client-token'
+      }
+    })
+
+    expect(mockSockets[0]!.endpoint).toBe(
+      'wss://relay.example.com/v1/relay?role=client&sessionId=relay-session&clientToken=relay-client-token'
+    )
+
+    client.close()
+  })
+
   it('ignores stale socket opens after reconnect swaps in a new socket', () => {
     const client = connect('ws://desktop.invalid', 'token', 'server-key')
     const firstSocket = mockSockets[0]!

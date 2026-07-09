@@ -135,6 +135,76 @@ describe('RemoteStateProvider', () => {
     expect(provider.listWindows()).toEqual({ windows: [] });
     expect(provider.listPanes()).toEqual({ panes: [] });
   });
+
+  it('starts a stopped local terminal pane and updates workspace state', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createTerminalWindow('win-local', 'Local'));
+    const processes: Array<{
+      windowId: string;
+      paneId: string;
+      pid: number;
+      sessionId: string;
+      status: ProcessStatus;
+    }> = [];
+    const startLocalTerminalPane = vi.fn(async (params) => {
+      processes.push({
+        windowId: params.windowId,
+        paneId: params.paneId,
+        pid: 222,
+        sessionId: 'session-222',
+        status: ProcessStatus.Alive,
+      });
+      return {
+        pid: 222,
+        sessionId: 'session-222',
+        status: WindowStatus.WaitingForInput,
+      };
+    });
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => processes) } as any,
+      startLocalTerminalPane,
+    });
+
+    const result = await provider.startWindow({ windowId: 'win-local' });
+
+    expect(startLocalTerminalPane).toHaveBeenCalledWith(
+      expect.objectContaining({
+        windowId: 'win-local',
+        paneId: 'win-local-pane',
+        workingDirectory: '/archived',
+        command: 'bash',
+      }),
+    );
+    expect(result.pane).toMatchObject({
+      windowId: 'win-local',
+      paneId: 'win-local-pane',
+      running: true,
+      pid: 222,
+      sessionId: 'session-222',
+      status: WindowStatus.WaitingForInput,
+    });
+    expect(workspace.windows.find((window) => window.id === 'win-local')?.layout).toMatchObject({
+      pane: {
+        pid: 222,
+        sessionId: 'session-222',
+        status: WindowStatus.WaitingForInput,
+      },
+    });
+  });
+
+  it('rejects starting stopped SSH panes from the mobile remote path', async () => {
+    const workspace = createWorkspace();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      startLocalTerminalPane: vi.fn(),
+    });
+
+    await expect(
+      provider.startWindow({ windowId: 'win-1', paneId: 'pane-terminal' }),
+    ).rejects.toThrow('remote_start_ssh_not_supported');
+  });
 });
 
 function createWorkspace(): Workspace {

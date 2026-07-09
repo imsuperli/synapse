@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../transport/host-store', () => ({
   loadHosts: vi.fn(),
-  updateLastConnected: vi.fn()
+  updateLastConnected: vi.fn(() => Promise.resolve())
 }))
 
 vi.mock('../transport/rpc-client', () => ({
@@ -11,6 +11,7 @@ vi.mock('../transport/rpc-client', () => ({
 
 import {
   clearTerminal,
+  connectToHost,
   parseTerminalClearResult,
   parseTerminalHistory,
   parseTerminalList,
@@ -18,10 +19,12 @@ import {
   parseTerminalSubscribeResult,
   requestTerminalHistory,
   requestTerminalList,
-  sendTerminalInput
+  sendTerminalInput,
+  startRemoteWindow
 } from './remote'
 import type { RpcClient } from '../transport/rpc-client'
 import type { RpcResponse } from '../transport/types'
+import { connect } from '../transport/rpc-client'
 
 function mockClient(response: RpcResponse): RpcClient {
   return {
@@ -38,6 +41,37 @@ function mockClient(response: RpcResponse): RpcClient {
 }
 
 describe('Synapse remote terminal helpers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('passes saved relay settings into the RPC client', () => {
+    connectToHost({
+      id: 'host-1',
+      name: 'Desktop',
+      endpoint: 'ws://127.0.0.1:6868',
+      deviceToken: 'device-token',
+      publicKeyB64: 'server-key',
+      relayEndpoint: 'wss://relay.example.com/v1/relay',
+      relaySessionId: 'relay-session',
+      relayClientToken: 'relay-client-token',
+      lastConnected: 0
+    })
+
+    expect(connect).toHaveBeenCalledWith(
+      'ws://127.0.0.1:6868',
+      'device-token',
+      'server-key',
+      {
+        relay: {
+          endpoint: 'wss://relay.example.com/v1/relay',
+          sessionId: 'relay-session',
+          clientToken: 'relay-client-token'
+        }
+      }
+    )
+  })
+
   it('parses only controllable terminal list entries', () => {
     expect(
       parseTerminalList({
@@ -184,6 +218,57 @@ describe('Synapse remote terminal helpers', () => {
       data: 'ls\n'
     })
     expect(client.sendRequest).toHaveBeenNthCalledWith(3, 'terminal.clear', {
+      windowId: 'w1',
+      paneId: 'p1'
+    })
+  })
+
+  it('starts a remote window pane through the window.start RPC', async () => {
+    const client = mockClient({
+      id: 'rpc-1',
+      ok: true,
+      result: {
+        window: {
+          windowId: 'w1',
+          name: 'Workspace',
+          activePaneId: 'p1',
+          paneCount: 1,
+          terminalPaneCount: 1,
+          panes: [
+            {
+              windowId: 'w1',
+              paneId: 'p1',
+              kind: 'terminal',
+              backend: 'local',
+              status: 'waiting',
+              running: true,
+              pid: 42,
+              sessionId: 's1',
+              cwd: '/repo',
+              command: 'bash'
+            }
+          ]
+        },
+        pane: {
+          windowId: 'w1',
+          paneId: 'p1',
+          kind: 'terminal',
+          backend: 'local',
+          status: 'waiting',
+          running: true,
+          pid: 42,
+          sessionId: 's1',
+          cwd: '/repo',
+          command: 'bash'
+        },
+        startedPanes: []
+      }
+    })
+
+    await expect(startRemoteWindow(client, 'w1', 'p1')).resolves.toMatchObject({
+      pane: { windowId: 'w1', paneId: 'p1', running: true }
+    })
+    expect(client.sendRequest).toHaveBeenCalledWith('window.start', {
       windowId: 'w1',
       paneId: 'p1'
     })

@@ -21,6 +21,7 @@ import {
 import {
   PaneListParamsSchema,
   WindowListParamsSchema,
+  WindowStartParamsSchema,
 } from '../../shared/remote/window-protocol';
 
 type DispatchContext = {
@@ -261,6 +262,14 @@ export class RemoteDispatcher {
         handler: (params) => {
           const typed = WindowListParamsSchema.parse(params);
           return stateProvider.listWindows(typed);
+        },
+      });
+
+      this.methods.set(REMOTE_METHODS.WINDOW_START, {
+        params: WindowStartParamsSchema,
+        handler: (params) => {
+          const typed = WindowStartParamsSchema.parse(params);
+          return stateProvider.startWindow(typed);
         },
       });
 

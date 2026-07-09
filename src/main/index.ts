@@ -589,6 +589,25 @@ if (hasSingleInstanceLock) {
       hostName: APP_DISPLAY_NAME,
       appVersion: app.getVersion(),
       getCurrentWorkspace: () => currentWorkspace,
+      onPaneProcessStarted: ({ windowId, paneId, pid }) => {
+        statusPoller?.addPane(windowId, paneId, pid);
+      },
+      onPaneData: ({ windowId, paneId, data, seq }) => {
+        forwardPtyData({ windowId, paneId, data, seq });
+      },
+      onPanePtySubscription: (paneId, unsubscribe) => {
+        ptySubscriptionManager?.add(paneId, unsubscribe);
+      },
+      onLocalPaneStarted: async ({ windowId, workingDirectory }) => {
+        await projectConfigWatcher.startWatching(windowId, workingDirectory, (updatedConfig) => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('project-config-updated', {
+              windowId,
+              projectConfig: updatedConfig,
+            });
+          }
+        });
+      },
     });
     await remoteGateway.startFromSavedSettings().catch((error) => {
       console.error('[Main] Failed to restore remote gateway:', error);

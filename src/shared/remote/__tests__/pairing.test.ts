@@ -35,6 +35,34 @@ describe('remote pairing', () => {
     expect(parsePairingCode(code!)).toEqual(offer);
   });
 
+  it('encodes relay pairing fields together', () => {
+    const offer = createPairingOfferPayload({
+      endpoint: 'ws://127.0.0.1:6868',
+      deviceToken: 'token-relay',
+      publicKeyB64: Buffer.alloc(32, 4).toString('base64'),
+      relayEndpoint: 'wss://relay.example.com/v1/relay',
+      relaySessionId: 'relay-session-1',
+      relayClientToken: 'relay-client-token',
+    });
+
+    expect(decodePairingOffer(encodePairingOffer(offer))).toMatchObject({
+      relayEndpoint: 'wss://relay.example.com/v1/relay',
+      relaySessionId: 'relay-session-1',
+      relayClientToken: 'relay-client-token',
+    });
+  });
+
+  it('rejects partial relay pairing fields', () => {
+    expect(() =>
+      createPairingOfferPayload({
+        endpoint: 'ws://127.0.0.1:6868',
+        deviceToken: 'token-relay',
+        publicKeyB64: Buffer.alloc(32, 5).toString('base64'),
+        relayEndpoint: 'wss://relay.example.com/v1/relay',
+      }),
+    ).toThrow(/Relay pairing fields/);
+  });
+
   it('rejects Orca pairing URLs', () => {
     expect(parsePairingCode('orca://pair?code=abc')).toBeNull();
   });

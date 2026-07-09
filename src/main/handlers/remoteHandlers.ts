@@ -60,7 +60,7 @@ export function registerRemoteHandlers(ctx: HandlerContext) {
         const offer = remoteGateway.createPairingOffer({
           address: args?.address,
           rotate: args?.rotate,
-          scope: 'mobile.control',
+          scope: 'mobile.window-control',
         });
         if (!offer.available) {
           return successResponse({ available: false as const });
@@ -75,6 +75,7 @@ export function registerRemoteHandlers(ctx: HandlerContext) {
           qrDataUrl,
           pairingUrl: offer.pairingUrl,
           endpoint: offer.endpoint,
+          ...(offer.relayEndpoint ? { relayEndpoint: offer.relayEndpoint } : {}),
           deviceId: offer.deviceId,
           expiresAt: offer.expiresAt,
         });
@@ -92,7 +93,7 @@ export function registerRemoteHandlers(ctx: HandlerContext) {
       const offer = remoteGateway.createPairingOffer({
         address: args?.address,
         rotate: true,
-        scope: 'mobile.control',
+        scope: 'mobile.window-control',
       });
       if (!offer.available) {
         return successResponse({ available: false as const });
@@ -105,11 +106,12 @@ export function registerRemoteHandlers(ctx: HandlerContext) {
       return successResponse({
         available: true as const,
         qrDataUrl,
-        pairingUrl: offer.pairingUrl,
-        endpoint: offer.endpoint,
-        deviceId: offer.deviceId,
-        expiresAt: offer.expiresAt,
-      });
+          pairingUrl: offer.pairingUrl,
+          endpoint: offer.endpoint,
+          ...(offer.relayEndpoint ? { relayEndpoint: offer.relayEndpoint } : {}),
+          deviceId: offer.deviceId,
+          expiresAt: offer.expiresAt,
+        });
     } catch (error) {
       return errorResponse(error);
     }

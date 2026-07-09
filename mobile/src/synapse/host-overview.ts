@@ -36,7 +36,7 @@ export async function loadHostOverviewData(client: RpcClient): Promise<HostOverv
       mode: 'windows',
       deviceScope: status.deviceScope,
       windows,
-      terminals: flattenRunningTerminals(windows)
+      terminals: flattenTerminalPanes(windows)
     }
   }
 
@@ -53,10 +53,10 @@ export function canUseWindowList(scope: RemoteDeviceScope, methods: string[]): b
   return WINDOW_LIST_SCOPES.has(scope) && methods.includes('window.list')
 }
 
-export function flattenRunningTerminals(windows: RemoteWindowSummary[]): RemoteTerminalSummary[] {
+export function flattenTerminalPanes(windows: RemoteWindowSummary[]): RemoteTerminalSummary[] {
   return windows.flatMap((window) =>
     window.panes.flatMap((pane) => {
-      if (pane.kind !== 'terminal' || !pane.running) {
+      if (pane.kind !== 'terminal') {
         return []
       }
       return [
@@ -66,7 +66,7 @@ export function flattenRunningTerminals(windows: RemoteWindowSummary[]): RemoteT
           sessionId: pane.sessionId ?? `${pane.windowId}:${pane.paneId}`,
           pid: pane.pid ?? 0,
           backend: pane.backend ?? 'local',
-          status: 'alive',
+          status: pane.running ? 'alive' : 'exited',
           workingDirectory: pane.cwd ?? '',
           command: pane.command ?? undefined
         } satisfies RemoteTerminalSummary

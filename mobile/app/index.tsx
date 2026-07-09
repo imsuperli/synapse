@@ -75,7 +75,7 @@ export default function HostListScreen() {
             <View style={styles.hostMain}>
               <Text style={styles.hostName}>{item.name}</Text>
               <Text style={styles.hostEndpoint} numberOfLines={1}>
-                {item.endpoint}
+                {item.relayEndpoint ? `Relay ${item.relayEndpoint}` : item.endpoint}
               </Text>
             </View>
           </Pressable>

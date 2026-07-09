@@ -37,13 +37,26 @@ export type PaneListResult = {
   panes: RemotePaneSummary[];
 };
 
+export type WindowStartResult = {
+  window: RemoteWindowSummary;
+  pane: RemotePaneSummary | null;
+  startedPanes: RemotePaneSummary[];
+};
+
 export const WindowListParamsSchema = z.object({
   includeArchived: z.boolean().optional(),
   terminalOnly: z.boolean().optional(),
-});
+}).strict();
 
 export const PaneListParamsSchema = z.object({
   windowId: z.string().min(1).optional(),
   includeArchived: z.boolean().optional(),
   terminalOnly: z.boolean().optional(),
-});
+}).strict();
+
+export const WindowStartParamsSchema = z.object({
+  windowId: z.string().min(1),
+  paneId: z.string().min(1).optional(),
+  initialCols: z.number().int().min(1).max(1000).optional(),
+  initialRows: z.number().int().min(1).max(1000).optional(),
+}).strict();
