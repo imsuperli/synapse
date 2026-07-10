@@ -242,6 +242,7 @@ window.onerror = function(msg) {
   var TEXT_SCALE_PRESETS = ${JSON.stringify([...TERMINAL_TEXT_SCALES])};
   var MIN_TEXT_SCALE = TEXT_SCALE_PRESETS[0];
   var MAX_TEXT_SCALE = TEXT_SCALE_PRESETS[TEXT_SCALE_PRESETS.length - 1];
+  var preserveGridOnTextScale = false;
   function snapToTextScalePreset(value) {
     var best = TEXT_SCALE_PRESETS[0], bestDelta = Infinity;
     for (var i = 0; i < TEXT_SCALE_PRESETS.length; i++) {
@@ -274,6 +275,10 @@ window.onerror = function(msg) {
     term.options.fontSize = px;
     requestAnimationFrame(function() {
       if (!term) return;
+      if (preserveGridOnTextScale) {
+        applyFitScale('text-scale-preserve-grid');
+        return;
+      }
       var cellW = getCellWidth();
       var cellH = getCellHeight();
       if (cellW > 0 && cellH > 0) {
@@ -679,7 +684,8 @@ window.onerror = function(msg) {
     pumpWrites(terminalGeneration);
   }
 
-  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks) {
+  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextPreserveGridOnTextScale) {
+    preserveGridOnTextScale = nextPreserveGridOnTextScale === true;
     if (typeof nextFontScale === 'number' && nextFontScale > 0) currentTextScale = nextFontScale;
     // Why: a width-reflow re-stream rewraps the same content at new cols.
     // Distance-from-bottom (rows) is the only stable anchor across reflow,
@@ -937,8 +943,9 @@ window.onerror = function(msg) {
       if (handledMessageIds.length > 256) handledMessageIds.shift();
     }
     if (msg.type === 'init') {
-      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks);
+      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks, msg.preserveGridOnTextScale);
     } else if (msg.type === 'set-font-scale') {
+      preserveGridOnTextScale = msg.preserveGridOnTextScale === true;
       // Why: ignore RN echoing back the value a pinch just set (msg.fontScale ===
       // currentTextScale) so the post-pinch state isn't reset; only apply changes.
       if (typeof msg.fontScale === 'number' && msg.fontScale > 0 && msg.fontScale !== currentTextScale) {

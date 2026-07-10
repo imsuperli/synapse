@@ -32,6 +32,7 @@ type Props = {
   // Why: baseline zoom multiplier ("text size") applied on top of the fit-to-width
   // scale; raw xterm fontSize can't drive apparent size because the fit cancels it.
   textScale?: number
+  preserveGridOnTextScale?: boolean
   onWebReady?: () => void
   onEngineError?: (message: string) => void
 } & TerminalSelectionEvents
@@ -41,6 +42,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     style,
     terminalTheme,
     textScale = 1,
+    preserveGridOnTextScale = false,
     onWebReady,
     onEngineError,
     onSelectionMode,
@@ -247,8 +249,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
   // Why: live-apply text-size changes to an already-mounted terminal (the pane
   // stays alive while the user visits Settings), so no terminal reload is needed.
   useEffect(() => {
-    postMessage({ type: 'set-font-scale', fontScale: textScale })
-  }, [postMessage, textScale])
+    postMessage({ type: 'set-font-scale', fontScale: textScale, preserveGridOnTextScale })
+  }, [postMessage, preserveGridOnTextScale, textScale])
 
   useImperativeHandle(
     ref,
@@ -287,6 +289,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
           oscLinks,
           terminalTheme,
           fontScale: textScale,
+          preserveGridOnTextScale,
           preserveScroll
         })
       },
@@ -363,7 +366,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         })
       }
     }),
-    [postMessage, sendToWebView, terminalTheme, textScale]
+    [postMessage, preserveGridOnTextScale, sendToWebView, terminalTheme, textScale]
   )
 
   return (

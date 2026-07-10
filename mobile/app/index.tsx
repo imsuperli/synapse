@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react'
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { Link, useFocusEffect, useRouter } from 'expo-router'
-import { Languages, Plus, Server } from 'lucide-react-native'
-import { loadHosts } from '../src/transport/host-store'
+import { Languages, Plus, Server, Trash2 } from 'lucide-react-native'
+import { loadHosts, removeHost } from '../src/transport/host-store'
 import type { HostProfile } from '../src/transport/types'
 import { colors, radii, spacing, typography } from '../src/theme/mobile-theme'
 import { useMobileI18n } from '../src/i18n'
@@ -13,6 +13,7 @@ export default function HostListScreen() {
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [removingHostId, setRemovingHostId] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
@@ -30,6 +31,33 @@ export default function HostListScreen() {
     useCallback(() => {
       void refresh()
     }, [refresh])
+  )
+
+  const removePairedHost = useCallback(async (hostId: string) => {
+    setRemovingHostId(hostId)
+    setError(null)
+    try {
+      await removeHost(hostId)
+      setHosts((current) => current.filter((host) => host.id !== hostId))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRemovingHostId(null)
+    }
+  }, [])
+
+  const confirmRemoveHost = useCallback(
+    (host: HostProfile) => {
+      Alert.alert(t('home.removeHostTitle'), t('home.removeHostMessage'), [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('home.removeHost'),
+          style: 'destructive',
+          onPress: () => void removePairedHost(host.id)
+        }
+      ])
+    },
+    [removePairedHost, t]
   )
 
   return (
@@ -90,6 +118,21 @@ export default function HostListScreen() {
                 {item.relayEndpoint ? `${t('common.relay')} ${item.relayEndpoint}` : item.endpoint}
               </Text>
             </View>
+            <Pressable
+              disabled={removingHostId === item.id}
+              style={[styles.deleteHostButton, removingHostId === item.id && styles.deleteHostButtonDisabled]}
+              onPress={(event) => {
+                event.stopPropagation()
+                confirmRemoveHost(item)
+              }}
+              accessibilityLabel={t('home.removeHost')}
+            >
+              {removingHostId === item.id ? (
+                <ActivityIndicator color={colors.statusRed} />
+              ) : (
+                <Trash2 size={17} color={colors.statusRed} />
+              )}
+            </Pressable>
           </Pressable>
         )}
       />
@@ -224,6 +267,19 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: typography.metaSize,
     marginTop: 2
+  },
+  deleteHostButton: {
+    width: 34,
+    height: 34,
+    borderRadius: radii.button,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle
+  },
+  deleteHostButtonDisabled: {
+    opacity: 0.52
   },
   pressed: {
     opacity: 0.74

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -10,7 +11,7 @@ import {
   View
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Layers, Play, Plus, RotateCw, Search, Settings, Square, TerminalSquare } from 'lucide-react-native'
+import { Check, Layers, Play, Plus, RotateCw, Search, Settings, Square, TerminalSquare, X } from 'lucide-react-native'
 import {
   connectToHost,
   createRemoteWindow,
@@ -190,6 +191,7 @@ export default function HostOverviewScreen() {
   const [overviewMode, setOverviewMode] = useState<'terminals' | 'windows'>('terminals')
   const [canCreateWindow, setCanCreateWindow] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchVisible, setSearchVisible] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [creatingWindow, setCreatingWindow] = useState(false)
@@ -198,6 +200,7 @@ export default function HostOverviewScreen() {
   const [stoppingPaneKey, setStoppingPaneKey] = useState<string | null>(null)
   const [deletingWindowId, setDeletingWindowId] = useState<string | null>(null)
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null)
+  const [groupSelectionMode, setGroupSelectionMode] = useState(false)
   const [selectedGroupWindowIds, setSelectedGroupWindowIds] = useState<string[]>([])
   const clientRef = useRef<RpcClient | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
@@ -258,6 +261,9 @@ export default function HostOverviewScreen() {
     [overviewMode, visibleGroups, visibleTerminals, visibleWindows]
   )
   const hasSearchQuery = normalizedSearchQuery.length > 0
+  const hostEndpointLabel = host?.relayEndpoint
+    ? `${t('common.relay')} ${host.relayEndpoint}`
+    : host?.endpoint ?? hostId
 
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-80)
@@ -281,6 +287,8 @@ export default function HostOverviewScreen() {
     setCanCreateWindow(false)
     setStartingPaneKey(null)
     setStoppingPaneKey(null)
+    setGroupSelectionMode(false)
+    setSelectedGroupWindowIds([])
     try {
       const loadedHost = await loadHostById(hostId)
       if (!loadedHost) {
@@ -473,6 +481,7 @@ export default function HostOverviewScreen() {
         ...current.filter((group) => group.groupId !== result.group.groupId)
       ])
       setSelectedGroupWindowIds([])
+      setGroupSelectionMode(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -480,46 +489,84 @@ export default function HostOverviewScreen() {
     }
   }, [selectedGroupWindowIds, t])
 
-  const handleDeleteWindow = useCallback(
-    async (windowId: string) => {
-      const client = clientRef.current
-      if (!client) {
-        setError(t('overview.notConnected'))
-        return
-      }
-      setDeletingWindowId(windowId)
+  const handleGroupAction = useCallback(async () => {
+    if (!groupSelectionMode) {
+      setGroupSelectionMode(true)
+      setSelectedGroupWindowIds([])
       setError(null)
-      try {
-        const result = await deleteRemoteWindow(client, windowId)
-        setWindows((current) => current.filter((window) => window.windowId !== result.windowId))
-        setGroups(result.groups)
-        setSelectedGroupWindowIds((current) => current.filter((id) => id !== result.windowId))
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
-      } finally {
-        setDeletingWindowId(null)
+      return
+    }
+    await handleCreateGroup()
+  }, [groupSelectionMode, handleCreateGroup])
+
+  const cancelGroupSelection = useCallback(() => {
+    setGroupSelectionMode(false)
+    setSelectedGroupWindowIds([])
+    setError(null)
+  }, [])
+
+  const handleDeleteWindow = useCallback(
+    (windowId: string) => {
+      const deleteWindow = async () => {
+        const client = clientRef.current
+        if (!client) {
+          setError(t('overview.notConnected'))
+          return
+        }
+        setDeletingWindowId(windowId)
+        setError(null)
+        try {
+          const result = await deleteRemoteWindow(client, windowId)
+          setWindows((current) => current.filter((window) => window.windowId !== result.windowId))
+          setGroups(result.groups)
+          setSelectedGroupWindowIds((current) => current.filter((id) => id !== result.windowId))
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setDeletingWindowId(null)
+        }
       }
+
+      Alert.alert(t('overview.deleteWindowTitle'), t('overview.deleteWindowMessage'), [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('overview.deleteWindow'),
+          style: 'destructive',
+          onPress: () => void deleteWindow()
+        }
+      ])
     },
     [t]
   )
 
   const handleDeleteGroup = useCallback(
-    async (groupId: string) => {
-      const client = clientRef.current
-      if (!client) {
-        setError(t('overview.notConnected'))
-        return
+    (groupId: string) => {
+      const deleteGroup = async () => {
+        const client = clientRef.current
+        if (!client) {
+          setError(t('overview.notConnected'))
+          return
+        }
+        setDeletingGroupId(groupId)
+        setError(null)
+        try {
+          const result = await deleteRemoteGroup(client, groupId)
+          setGroups((current) => current.filter((group) => group.groupId !== result.groupId))
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setDeletingGroupId(null)
+        }
       }
-      setDeletingGroupId(groupId)
-      setError(null)
-      try {
-        const result = await deleteRemoteGroup(client, groupId)
-        setGroups((current) => current.filter((group) => group.groupId !== result.groupId))
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
-      } finally {
-        setDeletingGroupId(null)
-      }
+
+      Alert.alert(t('overview.deleteGroupTitle'), t('overview.deleteGroupMessage'), [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('overview.deleteGroup'),
+          style: 'destructive',
+          onPress: () => void deleteGroup()
+        }
+      ])
     },
     [t]
   )
@@ -599,15 +646,30 @@ export default function HostOverviewScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.hostTitleBlock}>
-          <Text style={styles.title}>{host?.name ?? t('overview.hostFallback')}</Text>
-          <Text style={styles.endpoint} numberOfLines={1}>
-            {host?.endpoint ?? hostId}
-          </Text>
+          <View style={styles.hostTitleLine}>
+            <Text style={styles.title}>{t('nav.desktop')}</Text>
+            <View style={styles.connectionPill}>
+              <View
+                style={[
+                  styles.statusDot,
+                  connectionState === 'connected'
+                    ? styles.statusGreen
+                    : connectionState === 'auth-failed'
+                      ? styles.statusRed
+                      : styles.statusAmber
+                ]}
+              />
+              <Text style={styles.statusText}>{connectionLabel(connectionState, t)}</Text>
+              <Text style={styles.endpoint} numberOfLines={1}>
+                {hostEndpointLabel}
+              </Text>
+            </View>
+          </View>
         </View>
         <View style={styles.headerActions}>
           <Pressable
             style={[
-              styles.iconButton,
+              styles.newTerminalButton,
               (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
             ]}
             disabled={!canCreateWindow || creatingWindow}
@@ -617,26 +679,47 @@ export default function HostOverviewScreen() {
             {creatingWindow ? (
               <ActivityIndicator color={colors.textPrimary} />
             ) : (
-              <Plus size={18} color={colors.textPrimary} />
+              <>
+                <Plus size={17} color={colors.textPrimary} />
+                <Text style={styles.newTerminalButtonText}>{t('overview.newTerminalShort')}</Text>
+              </>
             )}
           </Pressable>
           <Pressable
             style={[
               styles.iconButton,
-              (selectedGroupWindowIds.length < 2 || creatingGroup) && styles.iconButtonDisabled
+              ((groupSelectionMode && selectedGroupWindowIds.length < 2) || creatingGroup) && styles.iconButtonDisabled
             ]}
-            disabled={selectedGroupWindowIds.length < 2 || creatingGroup}
-            onPress={() => void handleCreateGroup()}
-            accessibilityLabel={t('overview.createGroup')}
+            disabled={(groupSelectionMode && selectedGroupWindowIds.length < 2) || creatingGroup}
+            onPress={() => void handleGroupAction()}
+            accessibilityLabel={groupSelectionMode ? t('overview.confirmCreateGroup') : t('overview.groupSelection')}
           >
             {creatingGroup ? (
               <ActivityIndicator color={colors.textPrimary} />
+            ) : groupSelectionMode ? (
+              <Check size={18} color={colors.textPrimary} />
             ) : (
               <Layers size={18} color={colors.textPrimary} />
             )}
           </Pressable>
+          {groupSelectionMode ? (
+            <Pressable
+              style={styles.iconButton}
+              onPress={cancelGroupSelection}
+              accessibilityLabel={t('overview.cancelGroupSelection')}
+            >
+              <X size={18} color={colors.textPrimary} />
+            </Pressable>
+          ) : null}
           <Pressable style={styles.iconButton} onPress={() => void loadAndConnect()}>
             <RotateCw size={18} color={colors.textPrimary} />
+          </Pressable>
+          <Pressable
+            style={[styles.iconButton, (searchVisible || hasSearchQuery) && styles.iconButtonActive]}
+            onPress={() => setSearchVisible((visible) => !visible)}
+            accessibilityLabel={t('overview.searchPlaceholder')}
+          >
+            <Search size={18} color={colors.textPrimary} />
           </Pressable>
           <Pressable style={styles.iconButton} onPress={() => router.push(`/h/${hostId}/settings`)}>
             <Settings size={18} color={colors.textPrimary} />
@@ -644,47 +727,45 @@ export default function HostOverviewScreen() {
         </View>
       </View>
 
-      <View style={styles.statusRow}>
-        <View
-          style={[
-            styles.statusDot,
-            connectionState === 'connected'
-              ? styles.statusGreen
-              : connectionState === 'auth-failed'
-                ? styles.statusRed
-                : styles.statusAmber
-          ]}
-        />
-        <Text style={styles.statusText}>{connectionLabel(connectionState, t)}</Text>
-      </View>
-
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <Text style={styles.sectionTitle}>
         {overviewMode === 'windows' ? t('overview.windowsTitle') : t('overview.terminalsTitle')}
       </Text>
-      {overviewMode === 'windows' ? (
+      {overviewMode === 'windows' && groupSelectionMode ? (
         <Text style={styles.selectionHint}>
           {selectedGroupWindowIds.length >= 2
             ? t('overview.groupSelectionReady', { count: selectedGroupWindowIds.length })
             : t('overview.groupSelectionHint')}
         </Text>
       ) : null}
-      <View style={styles.searchBox}>
-        <Search size={16} color={colors.textMuted} />
-        <TextInput
-          style={styles.searchInput}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder={t('overview.searchPlaceholder')}
-          placeholderTextColor={colors.textMuted}
-          autoCapitalize="none"
-          autoCorrect={false}
-          returnKeyType="search"
-          clearButtonMode="while-editing"
-          selectionColor={colors.accentBlue}
-        />
-      </View>
+      {searchVisible || hasSearchQuery ? (
+        <View style={styles.searchBox}>
+          <Search size={16} color={colors.textMuted} />
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder={t('overview.searchPlaceholder')}
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+            selectionColor={colors.accentBlue}
+          />
+          <Pressable
+            style={styles.searchCloseButton}
+            onPress={() => {
+              setSearchQuery('')
+              setSearchVisible(false)
+            }}
+            accessibilityLabel={t('common.cancel')}
+          >
+            <X size={16} color={colors.textSecondary} />
+          </Pressable>
+        </View>
+      ) : null}
       <FlatList
         data={overviewItems}
         keyExtractor={(item) =>
@@ -739,6 +820,7 @@ export default function HostOverviewScreen() {
                 startingPaneKey,
                 stoppingPaneKey,
                 deletingWindowId,
+                groupSelectionMode,
                 selectedGroupWindowIds,
                 openWindow,
                 openPane,
@@ -799,7 +881,6 @@ function PaneCardRow({
       ]}
       onPress={onPress}
     >
-      <View style={[styles.paneRail, { backgroundColor: statusColor(pane.status, pane.running) }]} />
       <View style={styles.paneMain}>
         <View style={styles.terminalTitleRow}>
           <Text style={styles.terminalTitle} numberOfLines={1}>
@@ -813,6 +894,12 @@ function PaneCardRow({
           {paneMeta(pane, t)}
         </Text>
       </View>
+      <View
+        style={[
+          styles.paneInlineStatusDot,
+          { backgroundColor: statusColor(pane.status, pane.running) }
+        ]}
+      />
       {pane.running ? (
         <Pressable
           disabled={stopping}
@@ -839,6 +926,7 @@ function renderWindowItem(
   startingPaneKey: string | null,
   stoppingPaneKey: string | null,
   deletingWindowId: string | null,
+  groupSelectionMode: boolean,
   selectedGroupWindowIds: string[],
   onOpenWindow: (window: RemoteWindowSummary) => void | Promise<void>,
   onOpenPane: (pane: RemotePaneSummary) => void | Promise<void>,
@@ -880,18 +968,20 @@ function renderWindowItem(
           </View>
         </View>
         <View style={styles.windowActions}>
-          <Pressable
-            style={[styles.selectButton, selectedForGroup && styles.selectButtonActive]}
-            onPress={(event) => {
-              event.stopPropagation()
-              onToggleGroupSelection(item.windowId)
-            }}
-            accessibilityLabel={t('overview.selectForGroup')}
-          >
-            <Text style={[styles.selectButtonText, selectedForGroup && styles.selectButtonTextActive]}>
-              {selectedForGroup ? '✓' : '+'}
-            </Text>
-          </Pressable>
+          {groupSelectionMode ? (
+            <Pressable
+              style={[styles.selectButton, selectedForGroup && styles.selectButtonActive]}
+              onPress={(event) => {
+                event.stopPropagation()
+                onToggleGroupSelection(item.windowId)
+              }}
+              accessibilityLabel={t('overview.selectForGroup')}
+            >
+              <Text style={[styles.selectButtonText, selectedForGroup && styles.selectButtonTextActive]}>
+                {selectedForGroup ? '✓' : ''}
+              </Text>
+            </Pressable>
+          ) : null}
           <Pressable
             style={[styles.deleteButton, deleting && styles.iconButtonDisabled]}
             disabled={deleting}
@@ -904,14 +994,6 @@ function renderWindowItem(
             <Text style={styles.deleteButtonText}>×</Text>
           </Pressable>
         </View>
-      </View>
-      <View style={styles.statusDots}>
-        {item.panes.map((pane) => (
-          <View
-            key={`${pane.windowId}:${pane.paneId}:dot`}
-            style={[styles.paneStatusDot, { backgroundColor: statusColor(pane.status, pane.running) }]}
-          />
-        ))}
       </View>
       {item.panes.map((pane) => {
         const paneKey = `${pane.windowId}:${pane.paneId}`
@@ -1070,16 +1152,23 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0
   },
+  hostTitleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minWidth: 0
+  },
   title: {
     color: colors.textPrimary,
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '700'
   },
   endpoint: {
+    flex: 1,
+    minWidth: 0,
     color: colors.textSecondary,
     fontFamily: typography.monoFamily,
-    fontSize: typography.metaSize,
-    marginTop: 3
+    fontSize: typography.metaSize
   },
   headerActions: {
     flexDirection: 'row',
@@ -1095,13 +1184,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
+  newTerminalButton: {
+    minWidth: 64,
+    height: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgRaised,
+    paddingHorizontal: spacing.sm
+  },
+  newTerminalButtonText: {
+    color: colors.textPrimary,
+    fontSize: typography.metaSize,
+    fontWeight: '700'
+  },
+  iconButtonActive: {
+    borderWidth: 1,
+    borderColor: colors.accentBlue
+  },
   iconButtonDisabled: {
     opacity: 0.52
   },
-  statusRow: {
+  connectionPill: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm
+    gap: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgPanel,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs
   },
   statusDot: {
     width: 8,
@@ -1119,7 +1236,8 @@ const styles = StyleSheet.create({
   },
   statusText: {
     color: colors.textSecondary,
-    fontSize: typography.bodySize
+    fontSize: typography.metaSize,
+    fontWeight: '700'
   },
   errorText: {
     color: colors.statusRed,
@@ -1153,6 +1271,13 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: typography.bodySize,
     paddingVertical: spacing.sm
+  },
+  searchCloseButton: {
+    width: 28,
+    height: 28,
+    borderRadius: radii.button,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   list: {
     gap: spacing.md,
@@ -1231,11 +1356,6 @@ const styles = StyleSheet.create({
     fontSize: typography.metaSize,
     marginTop: 2
   },
-  statusDots: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-    alignItems: 'center'
-  },
   windowActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1252,7 +1372,8 @@ const styles = StyleSheet.create({
     borderColor: colors.borderSubtle
   },
   selectButtonActive: {
-    borderColor: colors.accentBlue
+    borderColor: colors.accentBlue,
+    backgroundColor: 'rgba(59,130,246,0.16)'
   },
   selectButtonText: {
     color: colors.textSecondary,
@@ -1277,11 +1398,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     lineHeight: 20,
     fontWeight: '700'
-  },
-  paneStatusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4
   },
   groupWindows: {
     gap: spacing.sm
@@ -1389,16 +1505,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgInset,
     borderRadius: radii.button,
     paddingVertical: spacing.sm,
+    paddingLeft: spacing.sm,
     paddingRight: spacing.sm,
     overflow: 'hidden'
   },
   activePaneRow: {
     borderColor: colors.accentBlue
   },
-  paneRail: {
-    alignSelf: 'stretch',
-    width: 3,
-    borderRadius: 2
+  paneInlineStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4
   },
   paneMain: {
     flex: 1,

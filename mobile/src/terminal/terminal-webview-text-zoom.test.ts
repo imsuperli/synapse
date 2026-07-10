@@ -197,4 +197,13 @@ describe('TerminalWebView text zoom', () => {
     const tailFrom = (family: string) => family.slice(family.indexOf('"Menlo"'))
     expect(tailFrom(androidFontFamily)).toBe(tailFrom(iosFontFamily))
   })
+
+  it('can preserve the replay grid while changing text scale for remote terminal snapshots', () => {
+    expect(terminalWebViewSource).toContain('preserveGridOnTextScale?: boolean')
+    expect(terminalWebViewSource).toContain('preserveGridOnTextScale,')
+    expect(terminalHtmlSource).toContain('var preserveGridOnTextScale = false')
+    expect(terminalHtmlSource).toContain('if (preserveGridOnTextScale) {')
+    expect(terminalHtmlSource).toContain("applyFitScale('text-scale-preserve-grid')")
+    expect(terminalHtmlSource).toContain('preserveGridOnTextScale = msg.preserveGridOnTextScale === true')
+  })
 })

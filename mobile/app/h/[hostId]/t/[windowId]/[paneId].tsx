@@ -48,7 +48,7 @@ import { getTerminalLiveInputKeyboardType } from '../../../../../src/terminal/te
 import { normalizeTerminalTextInput } from '../../../../../src/terminal/terminal-text-input-normalization'
 import { useTerminalLiveInputCommit } from '../../../../../src/terminal/use-terminal-live-input-commit'
 import type { RpcClient } from '../../../../../src/transport/rpc-client'
-import type { ConnectionLogEntry, ConnectionState, HostProfile } from '../../../../../src/transport/types'
+import type { ConnectionLogEntry, ConnectionState } from '../../../../../src/transport/types'
 import type { MobileTerminalTheme } from '../../../../../src/terminal/mobile-terminal-theme'
 import { colors, radii, spacing, typography } from '../../../../../src/theme/mobile-theme'
 import { useMobileI18n, type MobileTranslate } from '../../../../../src/i18n'
@@ -153,25 +153,6 @@ function getParam(value: string | string[] | undefined): string {
   }
 }
 
-function connectionLabel(state: ConnectionState | 'loading', t: MobileTranslate): string {
-  switch (state) {
-    case 'connected':
-      return t('common.connected')
-    case 'connecting':
-      return t('common.connecting')
-    case 'handshaking':
-      return t('common.handshaking')
-    case 'reconnecting':
-      return t('common.reconnecting')
-    case 'auth-failed':
-      return t('common.authFailed')
-    case 'disconnected':
-      return t('common.disconnected')
-    case 'loading':
-      return t('common.loading')
-  }
-}
-
 export default function RemoteTerminalScreen() {
   const params = useLocalSearchParams<{ hostId?: string; windowId?: string; paneId?: string }>()
   const hostId = getParam(params.hostId)
@@ -199,7 +180,6 @@ export default function RemoteTerminalScreen() {
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sendLiveTerminalInputRef = useRef<TerminalLiveInputSender>(async () => false)
   const currentPaneRuntimeKeyRef = useRef<string | null>(null)
-  const [host, setHost] = useState<HostProfile | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -517,7 +497,6 @@ export default function RemoteTerminalScreen() {
       if (runIdRef.current !== runId) {
         return
       }
-      setHost(loadedHost)
       const client = connectToHost(loadedHost, {
         onStateChange: setConnectionState,
         onLog: appendLog
@@ -842,10 +821,7 @@ export default function RemoteTerminalScreen() {
     <View style={styles.container}>
       <View style={styles.toolbar}>
         <View style={styles.titleBlock}>
-          <Text style={styles.title}>{host?.name ?? t('common.terminal')}</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {windowId}:{paneId} - {connectionLabel(connectionState, t)}
-          </Text>
+          <Text style={styles.title}>{t('common.terminal')}</Text>
         </View>
         <View style={styles.toolbarActions}>
           <Pressable style={styles.iconButton} onPress={() => void openTerminal()}>
@@ -958,6 +934,7 @@ export default function RemoteTerminalScreen() {
         <TerminalWebView
           ref={terminalRef}
           terminalTheme={terminalTheme}
+          preserveGridOnTextScale
           onWebReady={refitTerminalToPhone}
           onTerminalInput={handleTerminalInput}
           onEngineError={setError}
@@ -1106,14 +1083,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.textPrimary,
-    fontSize: typography.bodySize,
+    fontSize: 16,
     fontWeight: '700'
-  },
-  subtitle: {
-    color: colors.textSecondary,
-    fontFamily: typography.monoFamily,
-    fontSize: typography.metaSize,
-    marginTop: 2
   },
   toolbarActions: {
     flexDirection: 'row',

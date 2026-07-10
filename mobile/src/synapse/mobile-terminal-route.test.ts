@@ -67,6 +67,12 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('transform: [{ translateY: -keyboardLift }]')
   })
 
+  it('keeps the remote terminal toolbar compact and preserves the replay grid while zooming text', () => {
+    expect(routeSource).toContain("<Text style={styles.title}>{t('common.terminal')}</Text>")
+    expect(routeSource).not.toContain('{windowId}:{paneId}')
+    expect(routeSource).toContain('preserveGridOnTextScale')
+  })
+
   it('renders same-window terminal pane tabs without changing desktop layout', () => {
     expect(routeSource).toContain('requestWindowList(client)')
     expect(routeSource).toContain('windowPanes.length > 1')

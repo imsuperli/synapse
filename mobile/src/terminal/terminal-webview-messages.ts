@@ -12,11 +12,12 @@ export type TerminalWebViewCommand =
       oscLinks?: TerminalOscLinkRange[]
       terminalTheme?: MobileTerminalTheme
       fontScale?: number
+      preserveGridOnTextScale?: boolean
       // Why: width-reflow re-streams replay the same content rewrapped at new
       // cols; preserve the reader's scroll position instead of jumping to bottom.
       preserveScroll?: boolean
     }
-  | { type: 'set-font-scale'; id?: number; fontScale: number }
+  | { type: 'set-font-scale'; id?: number; fontScale: number; preserveGridOnTextScale?: boolean }
   | { type: 'resize'; id?: number; cols: number; rows: number }
   | { type: 'reflow'; id?: number; cols: number; rows: number }
   | { type: 'clear'; id?: number }

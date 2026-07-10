@@ -44,4 +44,22 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(clearIndex).toBeGreaterThan(syncIndex)
     expect(clearIndex).toBeLessThan(catchIndex)
   })
+
+  it('uses explicit search and group-selection modes instead of always showing card plus buttons', () => {
+    expect(routeSource).toContain('const [searchVisible, setSearchVisible] = useState(false)')
+    expect(routeSource).toContain('setSearchVisible((visible) => !visible)')
+    expect(routeSource).toContain('searchVisible || hasSearchQuery ?')
+    expect(routeSource).toContain('const [groupSelectionMode, setGroupSelectionMode] = useState(false)')
+    expect(routeSource).toContain('if (!groupSelectionMode) {')
+    expect(routeSource).toContain('groupSelectionMode ? (')
+    expect(routeSource).not.toContain("{selectedForGroup ? '✓' : '+'}")
+  })
+
+  it('confirms destructive window and group deletes before sending RPC requests', () => {
+    expect(routeSource).toContain("import {\n  ActivityIndicator,\n  Alert,")
+    expect(routeSource).toContain("Alert.alert(t('overview.deleteWindowTitle'), t('overview.deleteWindowMessage')")
+    expect(routeSource).toContain("Alert.alert(t('overview.deleteGroupTitle'), t('overview.deleteGroupMessage')")
+    expect(routeSource).toContain('deleteRemoteWindow(client, windowId)')
+    expect(routeSource).toContain('deleteRemoteGroup(client, groupId)')
+  })
 })
