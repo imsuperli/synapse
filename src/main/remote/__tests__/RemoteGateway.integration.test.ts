@@ -221,6 +221,7 @@ function createProcessManager() {
     listProcesses: vi.fn(() => []),
     getPidByPane: vi.fn(() => null),
     getPtyHistory: vi.fn(),
+    getPaneTerminalDimensions: vi.fn(() => ({})),
     getLatestPaneOutputSeq: vi.fn(() => 0),
     getPtyHistoryEntriesSince: vi.fn(() => ({
       entries: [],

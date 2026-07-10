@@ -11,7 +11,6 @@ import {
   TextInput,
   View,
   type KeyboardEvent,
-  type LayoutChangeEvent
 } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
@@ -57,9 +56,14 @@ import { useMobileI18n, type MobileTranslate } from '../../../../../src/i18n'
 type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryInput>
 
 const DEFAULT_COLS = 80
-const DEFAULT_ROWS = 24
+const DEFAULT_ROWS = 30
 const TERMINAL_INCREMENTAL_SYNC_MS = 1500
 const TERMINAL_PANE_STATUS_SYNC_MS = 3000
+
+type TerminalViewport = {
+  cols: number
+  rows: number
+}
 
 function terminalPaneLabel(pane: RemotePaneSummary, t: MobileTranslate): string {
   return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || t('common.terminal')
@@ -95,6 +99,23 @@ function terminalPaneRuntimeKey(pane: RemotePaneSummary | null): string | null {
   const session = pane.sessionId ?? ''
   const pid = pane.pid == null ? '' : String(pane.pid)
   return session || pid ? `${session}:${pid}` : null
+}
+
+function normalizeTerminalViewport(
+  viewport: { cols?: number; rows?: number } | null | undefined,
+  fallback: TerminalViewport
+): TerminalViewport {
+  const cols = typeof viewport?.cols === 'number' && viewport.cols > 0
+    ? Math.floor(viewport.cols)
+    : fallback.cols
+  const rows = typeof viewport?.rows === 'number' && viewport.rows > 0
+    ? Math.floor(viewport.rows)
+    : fallback.rows
+  return { cols, rows }
+}
+
+function sameTerminalViewport(a: TerminalViewport, b: TerminalViewport): boolean {
+  return a.cols === b.cols && a.rows === b.rows
 }
 
 const terminalTheme: MobileTerminalTheme = {
@@ -166,11 +187,10 @@ export default function RemoteTerminalScreen() {
   const runIdRef = useRef(0)
   const lastSeqRef = useRef(0)
   const resyncingRef = useRef(false)
-  const viewportRef = useRef<{ cols: number; rows: number }>({
+  const viewportRef = useRef<TerminalViewport>({
     cols: DEFAULT_COLS,
     rows: DEFAULT_ROWS
   })
-  const terminalHeightRef = useRef<number | undefined>(undefined)
   const activeHandleRef = useRef<string | null>(terminalHandle)
   const activeSessionTabTypeRef = useRef<'terminal' | null>('terminal')
   const liveInputRef = useRef<TextInput | null>(null)
@@ -230,17 +250,8 @@ export default function RemoteTerminalScreen() {
     stopAccessoryRepeat()
   }, [stopAccessoryRepeat])
 
-  const measureAndFitLocalTerminal = useCallback(async () => {
-    const terminal = terminalRef.current
-    if (!terminal) {
-      return
-    }
-    const measured = await terminal.measureFitDimensions(terminalHeightRef.current)
-    if (!measured) {
-      return
-    }
-    viewportRef.current = measured
-    terminal.resize(measured.cols, measured.rows)
+  const refitTerminalToPhone = useCallback(() => {
+    terminalRef.current?.resetZoom()
   }, [])
 
   const loadWindowPaneTabs = useCallback(
@@ -270,9 +281,11 @@ export default function RemoteTerminalScreen() {
         return null
       }
       lastSeqRef.current = history.lastSeq
+      const viewport = normalizeTerminalViewport(history, viewportRef.current)
+      viewportRef.current = viewport
       terminalRef.current?.init(
-        viewportRef.current.cols,
-        viewportRef.current.rows,
+        viewport.cols,
+        viewport.rows,
         history.chunks.join(''),
         false
       )
@@ -314,10 +327,6 @@ export default function RemoteTerminalScreen() {
                   if (!history || runIdRef.current !== runId) {
                     return
                   }
-                  await measureAndFitLocalTerminal()
-                  if (runIdRef.current !== runId) {
-                    return
-                  }
                   startTerminalSubscription(client, runId)
                   setLoading(false)
                 } catch (err) {
@@ -346,7 +355,7 @@ export default function RemoteTerminalScreen() {
         }
       )
     },
-    [loadTerminalHistorySnapshot, measureAndFitLocalTerminal, paneId, windowId]
+    [loadTerminalHistorySnapshot, paneId, windowId]
   )
 
   const syncTerminalIncrement = useCallback(async () => {
@@ -354,9 +363,23 @@ export default function RemoteTerminalScreen() {
     if (!client || loading || resyncingRef.current) {
       return
     }
+    const reloadSnapshotForCurrentRun = async () => {
+      const runId = runIdRef.current
+      unsubscribeRef.current?.()
+      unsubscribeRef.current = null
+      lastSeqRef.current = 0
+      const snapshot = await loadTerminalHistorySnapshot(client, runId)
+      if (!snapshot || runIdRef.current !== runId) {
+        return false
+      }
+      startTerminalSubscription(client, runId)
+      setTerminalRunning(true)
+      return true
+    }
     try {
       const sinceSeq = lastSeqRef.current
       const history = await requestTerminalHistory(client, windowId, paneId, sinceSeq)
+      const historyViewport = normalizeTerminalViewport(history, viewportRef.current)
       if (history.gap) {
         if (resyncingRef.current) {
           return
@@ -364,8 +387,21 @@ export default function RemoteTerminalScreen() {
         resyncingRef.current = true
         setLoading(true)
         try {
-          await loadTerminalHistorySnapshot(client, runIdRef.current)
-          await measureAndFitLocalTerminal()
+          await reloadSnapshotForCurrentRun()
+        } finally {
+          resyncingRef.current = false
+          setLoading(false)
+        }
+        return
+      }
+      if (!sameTerminalViewport(historyViewport, viewportRef.current)) {
+        if (resyncingRef.current) {
+          return
+        }
+        resyncingRef.current = true
+        setLoading(true)
+        try {
+          await reloadSnapshotForCurrentRun()
         } finally {
           resyncingRef.current = false
           setLoading(false)
@@ -394,8 +430,8 @@ export default function RemoteTerminalScreen() {
   }, [
     loadTerminalHistorySnapshot,
     loading,
-    measureAndFitLocalTerminal,
     paneId,
+    startTerminalSubscription,
     t,
     windowId
   ])
@@ -417,10 +453,6 @@ export default function RemoteTerminalScreen() {
         if (!history || runIdRef.current !== runId) {
           return
         }
-        await measureAndFitLocalTerminal()
-        if (runIdRef.current !== runId) {
-          return
-        }
         startTerminalSubscription(client, runId)
         setTerminalRunning(true)
       } catch (err) {
@@ -434,7 +466,7 @@ export default function RemoteTerminalScreen() {
         resyncingRef.current = false
       }
     },
-    [loadTerminalHistorySnapshot, measureAndFitLocalTerminal, startTerminalSubscription]
+    [loadTerminalHistorySnapshot, startTerminalSubscription]
   )
 
   const syncPaneStatus = useCallback(async () => {
@@ -501,10 +533,6 @@ export default function RemoteTerminalScreen() {
       if (!history || runIdRef.current !== runId) {
         return
       }
-      await measureAndFitLocalTerminal()
-      if (runIdRef.current !== runId) {
-        return
-      }
 
       startTerminalSubscription(client, runId)
       setLoading(false)
@@ -521,7 +549,6 @@ export default function RemoteTerminalScreen() {
     hostId,
     loadWindowPaneTabs,
     loadTerminalHistorySnapshot,
-    measureAndFitLocalTerminal,
     startTerminalSubscription,
     t
   ])
@@ -613,7 +640,7 @@ export default function RemoteTerminalScreen() {
       setStartingTabPaneKey(paneKey)
       setError(null)
       try {
-        await startRemoteWindow(client, pane.windowId, pane.paneId)
+        await startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)
         await loadWindowPaneTabs(client)
         router.replace(targetPath)
       } catch (err) {
@@ -652,7 +679,7 @@ export default function RemoteTerminalScreen() {
       setStartingTabPaneKey(paneKey)
       setError(null)
       try {
-        await startRemoteWindow(client, pane.windowId, pane.paneId)
+        await startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)
         await loadWindowPaneTabs(client)
         router.replace(targetPath)
       } catch (err) {
@@ -665,11 +692,10 @@ export default function RemoteTerminalScreen() {
   )
 
   const handleLayout = useCallback(
-    (event: LayoutChangeEvent) => {
-      terminalHeightRef.current = event.nativeEvent.layout.height
-      void measureAndFitLocalTerminal()
+    () => {
+      refitTerminalToPhone()
     },
-    [measureAndFitLocalTerminal]
+    [refitTerminalToPhone]
   )
 
   const canSend = connectionState === 'connected' && !loading && terminalRunning && !stopping
@@ -932,7 +958,7 @@ export default function RemoteTerminalScreen() {
         <TerminalWebView
           ref={terminalRef}
           terminalTheme={terminalTheme}
-          onWebReady={() => void measureAndFitLocalTerminal()}
+          onWebReady={refitTerminalToPhone}
           onTerminalInput={handleTerminalInput}
           onEngineError={setError}
         />

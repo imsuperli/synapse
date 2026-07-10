@@ -4,8 +4,11 @@
 export const colors = {
   bgBase: '#111111',
   bgPanel: '#1a1a1a',
+  bgCard: '#1d1d1d',
+  bgInset: '#202020',
   bgRaised: '#242424',
   borderSubtle: '#2a2a2a',
+  borderStrong: '#3a3a3a',
   editorSurface: '#1e1e1e',
 
   textPrimary: '#e0e0e0',

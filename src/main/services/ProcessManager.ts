@@ -276,6 +276,12 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     }
 
     // Store process info
+    const terminalCols = typeof ptyProcess.cols === 'number'
+      ? ptyProcess.cols
+      : config.initialCols ?? 80;
+    const terminalRows = typeof ptyProcess.rows === 'number'
+      ? ptyProcess.rows
+      : config.initialRows ?? 30;
     const processInfo: ProcessInfo = {
       sessionId,
       backend,
@@ -284,6 +290,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       workingDirectory: config.workingDirectory,
       command,
       profileId: config.ssh?.profileId,
+      terminalCols,
+      terminalRows,
       windowId: config.windowId,
       paneId: config.paneId,
     };
@@ -724,6 +732,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     if (pty) {
       try {
         pty.resize(cols, rows);
+        processInfo.terminalCols = cols;
+        processInfo.terminalRows = rows;
       } catch (error) {
         // Window teardown can race with a final resize after the PTY has exited.
         if (this.isExitedPtyResizeError(error)) {
@@ -1138,8 +1148,10 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     const dataCallbacks: Array<(data: string) => void> = [];
     const exitCallbacks: Array<(exitCode: number) => void> = [];
 
-    return {
+    const mockPty = {
       pid,
+      cols: config.initialCols ?? 80,
+      rows: config.initialRows ?? 30,
       onData: (callback: (data: string) => void) => {
         dataCallbacks.push(callback);
         // Mock: 妯℃嫙缁堢杈撳嚭
@@ -1164,6 +1176,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       },
       resize: (cols: number, rows: number) => {
         // Mock: 妯℃嫙璋冩暣缁堢澶у皬锛堟棤闇€瀹為檯鎿嶄綔锛?
+        mockPty.cols = cols;
+        mockPty.rows = rows;
       },
       kill: () => {
         // Mock: 妯℃嫙缁堟杩涚▼
@@ -1171,6 +1185,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
         this.killProcess(pid);
       },
     };
+    return mockPty;
   }
 
   /**
@@ -1774,6 +1789,21 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       evictedBeforeSeq: 0,
       keyboardState: createDefaultKeyboardProtocolState(),
     });
+  }
+
+  getPaneTerminalDimensions(paneId: string): { cols?: number; rows?: number } {
+    for (const processInfo of this.processes.values()) {
+      if (processInfo.paneId !== paneId || processInfo.status === ProcessStatus.Exited) {
+        continue;
+      }
+      const cols = processInfo.terminalCols;
+      const rows = processInfo.terminalRows;
+      return {
+        ...(typeof cols === 'number' && cols > 0 ? { cols } : {}),
+        ...(typeof rows === 'number' && rows > 0 ? { rows } : {}),
+      };
+    }
+    return {};
   }
 
   private appendPaneHistory(paneId: string | undefined, data: string): number | undefined {

@@ -23,6 +23,12 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('disabled={!canCreateWindow || creatingWindow}')
   })
 
+  it('starts and creates mobile terminals with an explicit default viewport', () => {
+    expect(routeSource).toContain('const DEFAULT_REMOTE_START_VIEWPORT = { cols: 80, rows: 30 }')
+    expect(routeSource).toContain('createRemoteWindow(client, DEFAULT_REMOTE_START_VIEWPORT)')
+    expect(routeSource).toContain('startRemoteWindow(\n            client,\n            pane.windowId,\n            pane.paneId,\n            DEFAULT_REMOTE_START_VIEWPORT\n          )')
+  })
+
   it('drops stale group selections when windows disappear or become grouped elsewhere', () => {
     expect(routeSource).toContain('function filterSelectableWindowIds(')
     expect(routeSource).toContain('!groupedWindowIds.has(windowId)')

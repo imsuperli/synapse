@@ -104,6 +104,8 @@ export interface ProcessInfo {
   workingDirectory: string;
   command?: string;
   profileId?: string;
+  terminalCols?: number;
+  terminalRows?: number;
   windowId?: string;  // 关联的窗口 ID
   paneId?: string;  // 关联的窗格 ID
 }

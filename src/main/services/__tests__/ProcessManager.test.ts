@@ -211,6 +211,28 @@ describe('ProcessManager', () => {
       expect(status?.command).toMatch(/(pwsh|cmd|zsh|bash|sh)/);
     });
 
+    it('tracks terminal dimensions from spawn config and resize events', async () => {
+      const handle = await processManager.spawnTerminal({
+        workingDirectory: testWorkingDir,
+        windowId: 'win-dimensions',
+        paneId: 'pane-dimensions',
+        initialCols: 120,
+        initialRows: 40,
+      });
+
+      expect(processManager.getPaneTerminalDimensions('pane-dimensions')).toEqual({
+        cols: 120,
+        rows: 40,
+      });
+
+      processManager.resizePty(handle.pid, 96, 28);
+
+      expect(processManager.getPaneTerminalDimensions('pane-dimensions')).toEqual({
+        cols: 96,
+        rows: 28,
+      });
+    });
+
     it('uses the global default shell when the window does not override it', async () => {
       const processManagerWithGlobalShell = new ProcessManager(
         () => ({

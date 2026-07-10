@@ -41,6 +41,7 @@ function getParam(value: string | string[] | undefined): string {
 }
 
 const OVERVIEW_STATUS_SYNC_MS = 2500
+const DEFAULT_REMOTE_START_VIEWPORT = { cols: 80, rows: 30 }
 
 function connectionLabel(state: ConnectionState | 'loading', t: MobileTranslate): string {
   switch (state) {
@@ -338,7 +339,12 @@ export default function HostOverviewScreen() {
             return
           }
           setStartingPaneKey(paneKey)
-          const result = await startRemoteWindow(client, pane.windowId, pane.paneId)
+          const result = await startRemoteWindow(
+            client,
+            pane.windowId,
+            pane.paneId,
+            DEFAULT_REMOTE_START_VIEWPORT
+          )
           const nextPane = result.pane ?? result.startedPanes[0] ?? pane
           setWindows((current) =>
             current.map((window) =>
@@ -411,7 +417,7 @@ export default function HostOverviewScreen() {
     setCreatingWindow(true)
     setError(null)
     try {
-      const result = await createRemoteWindow(client)
+      const result = await createRemoteWindow(client, DEFAULT_REMOTE_START_VIEWPORT)
       setWindows((current) => [result.window, ...current.filter((window) => window.windowId !== result.window.windowId)])
       setTerminals((current) => [
         {
@@ -1149,27 +1155,40 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm
   },
   list: {
-    gap: spacing.sm
+    gap: spacing.md,
+    paddingBottom: spacing.md
   },
   windowCard: {
-    gap: spacing.sm,
+    gap: spacing.md,
     borderWidth: 1,
-    borderTopWidth: 2,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.bgPanel,
+    borderTopWidth: 3,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.bgCard,
     borderRadius: radii.row,
-    padding: spacing.md
+    padding: spacing.md,
+    shadowColor: '#000000',
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2
   },
   selectedWindowCard: {
     borderColor: colors.accentBlue
   },
   groupCard: {
-    gap: spacing.sm,
+    gap: spacing.md,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.bgPanel,
+    borderLeftWidth: 4,
+    borderColor: colors.borderStrong,
+    borderLeftColor: colors.statusPurple,
+    backgroundColor: colors.bgCard,
     borderRadius: radii.row,
-    padding: spacing.md
+    padding: spacing.md,
+    shadowColor: '#000000',
+    shadowOpacity: 0.24,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2
   },
   groupHeader: {
     flexDirection: 'row',
@@ -1273,9 +1292,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: colors.borderStrong,
     borderRadius: radii.button,
-    backgroundColor: colors.bgRaised,
+    backgroundColor: colors.bgInset,
     paddingHorizontal: spacing.sm
   },
   groupWindowMain: {
@@ -1315,10 +1334,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.bgPanel,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.bgCard,
     borderRadius: radii.row,
-    padding: spacing.md
+    padding: spacing.md,
+    shadowColor: '#000000',
+    shadowOpacity: 0.2,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2
   },
   terminalIcon: {
     width: 38,
@@ -1361,8 +1385,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.bgRaised,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.bgInset,
     borderRadius: radii.button,
     paddingVertical: spacing.sm,
     paddingRight: spacing.sm,

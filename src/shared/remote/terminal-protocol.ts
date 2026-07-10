@@ -20,6 +20,8 @@ export type TerminalHistoryResult = {
   firstSeq: number;
   lastSeq: number;
   gap: boolean;
+  cols?: number;
+  rows?: number;
   keyboardState?: unknown;
 };
 

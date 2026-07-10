@@ -45,6 +45,7 @@ export class RemoteTerminalController {
 
   getHistory(windowId: string, paneId: string, sinceSeq?: number): TerminalHistoryResult {
     this.requirePid(windowId, paneId);
+    const dimensions = this.processManager.getPaneTerminalDimensions(paneId);
     if (typeof sinceSeq === 'number') {
       const history = this.processManager.getPtyHistoryEntriesSince(paneId, sinceSeq);
       return {
@@ -54,6 +55,7 @@ export class RemoteTerminalController {
         firstSeq: history.firstSeq,
         lastSeq: history.lastSeq,
         gap: history.gap,
+        ...dimensions,
       };
     }
     const history = this.processManager.getPtyHistory(paneId);
@@ -64,6 +66,7 @@ export class RemoteTerminalController {
       firstSeq: history.firstSeq,
       lastSeq: history.lastSeq,
       gap: history.evictedBeforeSeq > 0,
+      ...dimensions,
       keyboardState: history.keyboardState,
     };
   }

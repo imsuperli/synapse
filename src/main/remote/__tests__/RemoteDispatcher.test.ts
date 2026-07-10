@@ -12,6 +12,7 @@ type MockProcessManager = {
   listProcesses: ReturnType<typeof vi.fn>;
   getPidByPane: ReturnType<typeof vi.fn>;
   getPtyHistory: ReturnType<typeof vi.fn>;
+  getPaneTerminalDimensions: ReturnType<typeof vi.fn>;
   clearPtyHistory: ReturnType<typeof vi.fn>;
   getLatestPaneOutputSeq: ReturnType<typeof vi.fn>;
   getPtyHistoryEntriesSince: ReturnType<typeof vi.fn>;
@@ -90,6 +91,7 @@ describe('RemoteDispatcher', () => {
         evictedBeforeSeq: 0,
         keyboardState: { applicationCursorKeysMode: false },
       })),
+      getPaneTerminalDimensions: vi.fn(() => ({ cols: 132, rows: 34 })),
       clearPtyHistory: vi.fn(),
       getLatestPaneOutputSeq: vi.fn(() => 5),
       getPtyHistoryEntriesSince: vi.fn((_paneId: string, sinceSeq: number = 0) => ({
@@ -246,6 +248,8 @@ describe('RemoteDispatcher', () => {
         firstSeq: 4,
         lastSeq: 5,
         gap: false,
+        cols: 132,
+        rows: 34,
       },
     });
     expect(harness.processManager.getPtyHistoryEntriesSince).toHaveBeenCalledWith('pane-1', 4);

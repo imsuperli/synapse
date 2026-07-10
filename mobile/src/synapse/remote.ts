@@ -60,6 +60,8 @@ export type TerminalHistoryResult = {
   firstSeq: number
   lastSeq: number
   gap: boolean
+  cols?: number
+  rows?: number
   keyboardState?: unknown
 }
 
@@ -151,11 +153,16 @@ export async function requestWindowList(client: RpcClient): Promise<WindowListRe
 export async function startRemoteWindow(
   client: RpcClient,
   windowId: string,
-  paneId?: string
+  paneId?: string,
+  initialViewport?: { cols: number; rows: number }
 ): Promise<WindowStartResult> {
   const response = await client.sendRequest('window.start', {
     windowId,
-    ...(paneId ? { paneId } : {})
+    ...(paneId ? { paneId } : {}),
+    ...(initialViewport ? {
+      initialCols: initialViewport.cols,
+      initialRows: initialViewport.rows
+    } : {})
   })
   if (!response.ok) {
     throw new Error(response.error.message)
@@ -163,8 +170,16 @@ export async function startRemoteWindow(
   return parseWindowStartResult(response.result)
 }
 
-export async function createRemoteWindow(client: RpcClient): Promise<WindowCreateResult> {
-  const response = await client.sendRequest('window.create', {})
+export async function createRemoteWindow(
+  client: RpcClient,
+  initialViewport?: { cols: number; rows: number }
+): Promise<WindowCreateResult> {
+  const response = await client.sendRequest('window.create', {
+    ...(initialViewport ? {
+      initialCols: initialViewport.cols,
+      initialRows: initialViewport.rows
+    } : {})
+  })
   if (!response.ok) {
     throw new Error(response.error.message)
   }
@@ -624,6 +639,8 @@ export function parseTerminalHistory(value: unknown): TerminalHistoryResult {
     firstSeq: typeof result.firstSeq === 'number' ? result.firstSeq : 0,
     lastSeq: typeof result.lastSeq === 'number' ? result.lastSeq : 0,
     gap: result.gap === true,
+    ...(typeof result.cols === 'number' && result.cols > 0 ? { cols: result.cols } : {}),
+    ...(typeof result.rows === 'number' && result.rows > 0 ? { rows: result.rows } : {}),
     keyboardState: result.keyboardState
   }
 }

@@ -133,6 +133,8 @@ describe('Synapse remote terminal helpers', () => {
         firstSeq: 2,
         lastSeq: 4,
         gap: true,
+        cols: 144,
+        rows: 36,
         keyboardState: { bracketedPasteMode: true }
       })
     ).toEqual({
@@ -142,6 +144,8 @@ describe('Synapse remote terminal helpers', () => {
       firstSeq: 2,
       lastSeq: 4,
       gap: true,
+      cols: 144,
+      rows: 36,
       keyboardState: { bracketedPasteMode: true }
     })
   })
@@ -285,12 +289,14 @@ describe('Synapse remote terminal helpers', () => {
       }
     })
 
-    await expect(startRemoteWindow(client, 'w1', 'p1')).resolves.toMatchObject({
+    await expect(startRemoteWindow(client, 'w1', 'p1', { cols: 132, rows: 34 })).resolves.toMatchObject({
       pane: { windowId: 'w1', paneId: 'p1', running: true }
     })
     expect(client.sendRequest).toHaveBeenCalledWith('window.start', {
       windowId: 'w1',
-      paneId: 'p1'
+      paneId: 'p1',
+      initialCols: 132,
+      initialRows: 34
     })
   })
 
@@ -335,10 +341,13 @@ describe('Synapse remote terminal helpers', () => {
       }
     })
 
-    await expect(createRemoteWindow(client)).resolves.toMatchObject({
+    await expect(createRemoteWindow(client, { cols: 100, rows: 30 })).resolves.toMatchObject({
       pane: { windowId: 'w-new', paneId: 'p-new', running: true }
     })
-    expect(client.sendRequest).toHaveBeenCalledWith('window.create', {})
+    expect(client.sendRequest).toHaveBeenCalledWith('window.create', {
+      initialCols: 100,
+      initialRows: 30
+    })
   })
 
   it('parses window lists with group summaries', () => {

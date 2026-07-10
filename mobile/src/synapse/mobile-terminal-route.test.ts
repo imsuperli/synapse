@@ -10,16 +10,22 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('loads terminal history before subscribing to live output without resizing the desktop PTY', () => {
     const historyIndex = routeSource.indexOf('requestTerminalHistory(client, windowId, paneId)')
     const subscribeIndex = routeSource.indexOf("client.subscribe(\n        'terminal.subscribe'")
+    const viewportIndex = routeSource.indexOf('const viewport = normalizeTerminalViewport(history, viewportRef.current)')
+    const initIndex = routeSource.indexOf('terminalRef.current?.init(\n        viewport.cols,\n        viewport.rows,')
 
     expect(historyIndex).toBeGreaterThanOrEqual(0)
     expect(subscribeIndex).toBeGreaterThan(historyIndex)
+    expect(viewportIndex).toBeGreaterThan(historyIndex)
+    expect(initIndex).toBeGreaterThan(viewportIndex)
     expect(routeSource).toContain('sinceSeq: lastSeqRef.current')
     expect(routeSource).not.toContain('viewport: viewportRef.current')
     expect(routeSource).not.toContain('resizeTerminal(client')
+    expect(routeSource).not.toContain('terminal.resize(')
     expect(routeSource).toContain('subscribeParams.sinceSeq = lastSeqRef.current')
     expect(routeSource).toContain('parseTerminalOutputEvent(payload)')
     expect(routeSource).toContain('parseTerminalSubscribeResult(payload)')
     expect(routeSource).toContain('loadTerminalHistorySnapshot(client, runId)')
+    expect(routeSource).toContain('terminalRef.current?.resetZoom()')
   })
 
   it('resynchronizes from history when the terminal subscription reports a gap', () => {
@@ -45,7 +51,6 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('routes user input and clear through Synapse terminal RPC helpers', () => {
     expect(routeSource).toContain('onTerminalInput={handleTerminalInput}')
     expect(routeSource).toContain('sendTerminalInput(client, windowId, paneId, bytes)')
-    expect(routeSource).toContain('terminal.resize(measured.cols, measured.rows)')
     expect(routeSource).toContain('const result = await clearTerminal(client, windowId, paneId)')
     expect(routeSource).toContain('lastSeqRef.current = Math.max(lastSeqRef.current, result.lastSeq)')
     expect(routeSource).toContain('terminalRef.current?.clear()')
@@ -66,7 +71,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('requestWindowList(client)')
     expect(routeSource).toContain('windowPanes.length > 1')
     expect(routeSource).toContain('router.replace(targetPath)')
-    expect(routeSource).toContain('startRemoteWindow(client, pane.windowId, pane.paneId)')
+    expect(routeSource).toContain('startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)')
     expect(routeSource).not.toContain('pane.focus')
     expect(routeSource).not.toContain('window.activate')
   })
