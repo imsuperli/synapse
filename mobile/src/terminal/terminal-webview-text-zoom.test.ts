@@ -198,12 +198,28 @@ describe('TerminalWebView text zoom', () => {
     expect(tailFrom(androidFontFamily)).toBe(tailFrom(iosFontFamily))
   })
 
-  it('can preserve the replay grid while changing text scale for remote terminal snapshots', () => {
-    expect(terminalWebViewSource).toContain('preserveGridOnTextScale?: boolean')
-    expect(terminalWebViewSource).toContain('preserveGridOnTextScale,')
-    expect(terminalHtmlSource).toContain('var preserveGridOnTextScale = false')
-    expect(terminalHtmlSource).toContain('if (preserveGridOnTextScale) {')
-    expect(terminalHtmlSource).toContain("applyFitScale('text-scale-preserve-grid')")
-    expect(terminalHtmlSource).toContain('preserveGridOnTextScale = msg.preserveGridOnTextScale === true')
+  it('defaults to font-size text scaling that reflows the mobile xterm grid', () => {
+    expect(terminalWebViewSource).not.toContain('preserveGridOnTextScale')
+    expect(terminalHtmlSource).not.toContain('preserveGridOnTextScale')
+    expect(terminalHtmlSource).not.toContain("applyFitScale('text-scale-preserve-grid')")
+    expect(terminalWebViewSource).toContain("textScaleMode = 'font-size'")
+    expect(terminalHtmlSource).toContain("var textScaleMode = 'font-size'")
+    expect(terminalHtmlSource).toContain('term.resize(cols, rows)')
+    expect(terminalHtmlSource).toContain("applyFitScale('text-scale')")
+  })
+
+  it('supports viewport zoom text scaling for remote snapshots without changing xterm font metrics', () => {
+    expect(terminalHtmlSource).toContain("mode === 'viewport-zoom' ? 'viewport-zoom' : 'font-size'")
+    expect(terminalHtmlSource).toContain('function isViewportZoomTextScale()')
+    expect(terminalHtmlSource).toContain('persistentTextScaleMultiplier() * userScale')
+    expect(terminalHtmlSource).toContain('function getLogicalTerminalWidth()')
+    expect(terminalHtmlSource).toContain('getLogicalTerminalWidth() * getTotalScale()')
+    expect(terminalHtmlSource).not.toContain("applyFitScale('text-scale-viewport-zoom')")
+    expect(terminalHtmlSource).toContain('function shouldPanViewportZoomGesture()')
+    expect(terminalHtmlSource).toContain('if (shouldPanViewportZoomGesture()) {')
+    expect(terminalHtmlSource).toContain('if (!keepViewportPan) updateTransform()')
+    expect(terminalHtmlSource).toContain(
+      'fontSize: fontPxForScale(isViewportZoomTextScale() ? 1 : currentTextScale)'
+    )
   })
 })

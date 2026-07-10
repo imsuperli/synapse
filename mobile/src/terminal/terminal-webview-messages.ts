@@ -1,6 +1,8 @@
 import type { TerminalOscLinkRange } from './terminal-osc-link-ranges'
 import type { MobileTerminalTheme } from './mobile-terminal-theme'
 
+export type TerminalTextScaleMode = 'font-size' | 'viewport-zoom'
+
 export type TerminalWebViewCommand =
   | { type: 'write'; id?: number; data: string }
   | {
@@ -12,12 +14,17 @@ export type TerminalWebViewCommand =
       oscLinks?: TerminalOscLinkRange[]
       terminalTheme?: MobileTerminalTheme
       fontScale?: number
-      preserveGridOnTextScale?: boolean
+      textScaleMode?: TerminalTextScaleMode
       // Why: width-reflow re-streams replay the same content rewrapped at new
       // cols; preserve the reader's scroll position instead of jumping to bottom.
       preserveScroll?: boolean
     }
-  | { type: 'set-font-scale'; id?: number; fontScale: number; preserveGridOnTextScale?: boolean }
+  | {
+      type: 'set-font-scale'
+      id?: number
+      fontScale: number
+      textScaleMode?: TerminalTextScaleMode
+    }
   | { type: 'resize'; id?: number; cols: number; rows: number }
   | { type: 'reflow'; id?: number; cols: number; rows: number }
   | { type: 'clear'; id?: number }

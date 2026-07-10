@@ -229,11 +229,10 @@ window.onerror = function(msg) {
   var everReady = false;
   var currentScale = 1;
   // Why: userScale is transient pinch zoom (CSS) for smooth feedback DURING a
-  // gesture only; it resets to 1 on release. The persistent "text size" is the
-  // real xterm fontSize (currentTextScale × BASE_FONT_PX), so changing it
-  // reflows the grid: a bigger cell means fewer columns fit, and RN re-measures
-  // and resizes the PTY (terminal.updateViewport) so the shell rewraps to the
-  // new width. A finished pinch snaps to the nearest preset and reports it to RN.
+  // gesture only; it resets to 1 on release. In normal font-size mode, the
+  // persistent text size is the real xterm fontSize. In viewport-zoom mode
+  // (remote desktop snapshots), the persistent text size is an extra CSS scale
+  // so the phone can magnify without changing the replay grid or desktop PTY.
   var userScale = 1;
   var BASE_FONT_PX = 13;
   var MIN_FONT_PX = 6;
@@ -242,7 +241,7 @@ window.onerror = function(msg) {
   var TEXT_SCALE_PRESETS = ${JSON.stringify([...TERMINAL_TEXT_SCALES])};
   var MIN_TEXT_SCALE = TEXT_SCALE_PRESETS[0];
   var MAX_TEXT_SCALE = TEXT_SCALE_PRESETS[TEXT_SCALE_PRESETS.length - 1];
-  var preserveGridOnTextScale = false;
+  var textScaleMode = 'font-size';
   function snapToTextScalePreset(value) {
     var best = TEXT_SCALE_PRESETS[0], bestDelta = Infinity;
     for (var i = 0; i < TEXT_SCALE_PRESETS.length; i++) {
@@ -254,6 +253,15 @@ window.onerror = function(msg) {
   function fontPxForScale(scale) {
     return Math.max(MIN_FONT_PX, Math.round(BASE_FONT_PX * scale));
   }
+  function normalizeTextScaleMode(mode) {
+    return mode === 'viewport-zoom' ? 'viewport-zoom' : 'font-size';
+  }
+  function isViewportZoomTextScale() {
+    return textScaleMode === 'viewport-zoom';
+  }
+  function persistentTextScaleMultiplier() {
+    return isViewportZoomTextScale() ? currentTextScale : 1;
+  }
   function isIOSWebView() {
     if (/iP(ad|hone|od)/.test(navigator.userAgent)) return true;
     return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
@@ -262,23 +270,24 @@ window.onerror = function(msg) {
   // fall to a non-monospace face; lead with the ui-monospace generic to avoid that.
   var TERMINAL_FONT_FALLBACKS = '"Menlo", "Monaco", "Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Liberation Mono", "Symbols Nerd Font Mono", monospace';
   var terminalFontFamily = (isIOSWebView() ? 'ui-monospace, ' : '"SF Mono", ') + TERMINAL_FONT_FALLBACKS;
-  // Why: change the real font size, then resize the grid to fit the viewport at
-  // the new cell metrics so the text shows at its true size immediately. RN's
-  // refit (measure → updateViewport) then makes the server reflow the PTY to the
-  // same column count so the shell rewraps. cell metrics update on the frame
-  // after fontSize changes, so the resize/fit is deferred one rAF.
+  // Why: in font-size mode, change the real font size, then resize the grid to
+  // fit the viewport at the new cell metrics so the text shows at its true size
+  // immediately. In viewport-zoom mode, leave xterm metrics alone and persist a
+  // CSS multiplier so remote TUI snapshots keep their desktop cursor grid.
   function applyTextScale(scale) {
     currentTextScale = scale;
     if (!term) return;
+    if (isViewportZoomTextScale()) {
+      userScale = 1;
+      clampPan();
+      updateTransform();
+      return;
+    }
     var px = fontPxForScale(scale);
     if (term.options.fontSize === px) return;
     term.options.fontSize = px;
     requestAnimationFrame(function() {
       if (!term) return;
-      if (preserveGridOnTextScale) {
-        applyFitScale('text-scale-preserve-grid');
-        return;
-      }
       var cellW = getCellWidth();
       var cellH = getCellHeight();
       if (cellW > 0 && cellH > 0) {
@@ -333,6 +342,20 @@ window.onerror = function(msg) {
     return 0;
   }
 
+  function getLogicalTerminalWidth() {
+    if (!term) return 0;
+    var cellW = getCellWidth();
+    if (cellW > 0 && term.cols > 0) return cellW * term.cols;
+    return term.element ? term.element.scrollWidth : 0;
+  }
+
+  function getLogicalTerminalHeight() {
+    if (!term) return 0;
+    var cellH = getCellHeight();
+    if (cellH > 0 && term.rows > 0) return cellH * term.rows;
+    return term.element ? term.element.scrollHeight : 0;
+  }
+
   // Why: width measurement strategy.
   //   1. Prefer cellWidth × term.cols — this is what xterm's renderer uses
   //      to lay out and is independent of buffer content. It's the "logical
@@ -345,14 +368,13 @@ window.onerror = function(msg) {
   //      applyFitScale will keep trying until one is positive.
   function computeFitScale() {
     if (!term) return 1;
-    var cellW = getCellWidth();
-    var termWidth = cellW > 0 ? cellW * term.cols : (term.element ? term.element.scrollWidth : 0);
+    var termWidth = getLogicalTerminalWidth();
     if (termWidth <= 0) return 1;
     var vpWidth = window.innerWidth;
     return Math.min(1, vpWidth / termWidth);
   }
 
-  function getTotalScale() { return currentScale * userScale; }
+  function getTotalScale() { return currentScale * persistentTextScaleMultiplier() * userScale; }
 
   function updateTransform() {
     surface.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + getTotalScale() + ')';
@@ -422,8 +444,8 @@ window.onerror = function(msg) {
   function clampPan() {
     if (!term || !term.element) return;
     var ts = getTotalScale();
-    var cw = term.element.scrollWidth * ts;
-    var ch = term.element.scrollHeight * ts;
+    var cw = getLogicalTerminalWidth() * ts;
+    var ch = getLogicalTerminalHeight() * ts;
     var vpW = window.innerWidth;
     var vpH = window.innerHeight;
     if (cw > vpW) {
@@ -436,6 +458,22 @@ window.onerror = function(msg) {
     } else {
       panY = 0;
     }
+  }
+
+  function canPanScaledTerminalX() {
+    return getLogicalTerminalWidth() * getTotalScale() > window.innerWidth + 1;
+  }
+
+  function canPanScaledTerminalY() {
+    return getLogicalTerminalHeight() * getTotalScale() > window.innerHeight + 1;
+  }
+
+  function shouldPanViewportZoomGesture() {
+    return (
+      isViewportZoomTextScale() &&
+      currentTextScale * userScale > 1.001 &&
+      (canPanScaledTerminalX() || canPanScaledTerminalY())
+    );
   }
 
   // Why: intentional no-op. Mobile replays a live PTY snapshot then applies
@@ -684,8 +722,8 @@ window.onerror = function(msg) {
     pumpWrites(terminalGeneration);
   }
 
-  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextPreserveGridOnTextScale) {
-    preserveGridOnTextScale = nextPreserveGridOnTextScale === true;
+  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode) {
+    textScaleMode = normalizeTextScaleMode(nextTextScaleMode);
     if (typeof nextFontScale === 'number' && nextFontScale > 0) currentTextScale = nextFontScale;
     // Why: a width-reflow re-stream rewraps the same content at new cols.
     // Distance-from-bottom (rows) is the only stable anchor across reflow,
@@ -744,7 +782,7 @@ window.onerror = function(msg) {
       rows: rows || 24,
       theme: terminalTheme,
       fontFamily: terminalFontFamily,
-      fontSize: fontPxForScale(currentTextScale),
+      fontSize: fontPxForScale(isViewportZoomTextScale() ? 1 : currentTextScale),
       fontWeight: '300',
       fontWeightBold: '500',
       scrollback: 5000,
@@ -943,15 +981,17 @@ window.onerror = function(msg) {
       if (handledMessageIds.length > 256) handledMessageIds.shift();
     }
     if (msg.type === 'init') {
-      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks, msg.preserveGridOnTextScale);
+      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks, msg.textScaleMode);
     } else if (msg.type === 'set-font-scale') {
-      preserveGridOnTextScale = msg.preserveGridOnTextScale === true;
+      textScaleMode = normalizeTextScaleMode(msg.textScaleMode);
       // Why: ignore RN echoing back the value a pinch just set (msg.fontScale ===
       // currentTextScale) so the post-pinch state isn't reset; only apply changes.
       if (typeof msg.fontScale === 'number' && msg.fontScale > 0 && msg.fontScale !== currentTextScale) {
         userScale = 1;
-        panX = 0;
-        panY = 0;
+        if (!isViewportZoomTextScale()) {
+          panX = 0;
+          panY = 0;
+        }
         applyTextScale(msg.fontScale);
       }
     } else if (msg.type === 'resize') {
@@ -1773,13 +1813,28 @@ window.onerror = function(msg) {
       } else if (e.touches.length === 1 && !ts.isPinching) {
         var x = e.touches[0].clientX, y = e.touches[0].clientY;
         var now = Date.now(), dt = now - ts.lastTime;
+        var dx = x - ts.lastX;
+        var dy = y - ts.lastY;
+
+        if (shouldPanViewportZoomGesture()) {
+          if (canPanScaledTerminalX()) panX += dx;
+          if (canPanScaledTerminalY()) panY += dy;
+          clampPan();
+          updateTransform();
+          ts.lastTime = now;
+          ts.velY = 0;
+          ts.accumDelta = 0;
+          ts.lastX = x;
+          ts.lastY = y;
+          return;
+        }
 
         // Why: pan horizontally only when content overflows the viewport (larger
         // than fit) — same check clampPan() uses. Vertical always drives buffer
         // scroll so scrollback stays reachable at any text size; calling the
         // never-defined contentWiderThanViewport() here threw and killed all
         // single-finger scrolling, scrollback included.
-        if (term.element && term.element.scrollWidth * getTotalScale() > window.innerWidth + 1) {
+        if (getLogicalTerminalWidth() * getTotalScale() > window.innerWidth + 1) {
           panX += x - ts.lastX;
           clampPan();
           updateTransform();
@@ -1815,16 +1870,19 @@ window.onerror = function(msg) {
 
       if (ts.isPinching && e.touches.length < 2) {
         ts.isPinching = false;
-        // Why: a finished pinch snaps to the nearest preset and becomes the new
-        // font size (reflowing the grid), so pinch-to-zoom IS the in-terminal way
-        // to set the text size. The CSS pinch zoom (userScale) is reset; the real
-        // size change reflows columns and RN persists + resizes the PTY to match.
+        // Why: a finished pinch snaps to the nearest preset and becomes the
+        // persistent terminal text size. Font-size mode reflows xterm metrics;
+        // viewport-zoom mode persists the CSS multiplier while keeping the
+        // remote replay grid unchanged.
         var target = snapToTextScalePreset(currentTextScale * userScale);
         var changed = target !== currentTextScale;
+        var keepViewportPan = isViewportZoomTextScale();
         userScale = 1;
-        panX = 0; panY = 0;
+        if (!keepViewportPan) {
+          panX = 0; panY = 0;
+        }
         applyTextScale(target);
-        updateTransform();
+        if (!keepViewportPan) updateTransform();
         notify({ type: 'font-scale-changed', fontScale: target });
         if (changed) notify({ type: 'haptic', kind: 'selection' });
         if (e.touches.length === 1) {

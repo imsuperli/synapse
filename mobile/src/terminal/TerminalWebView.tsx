@@ -15,7 +15,7 @@ import {
 import { TERMINAL_WEBVIEW_FRAME_STYLES } from './terminal-webview-frame-styles'
 import { useTerminalWebReadyWatchdog } from './terminal-webview-ready-watchdog'
 import { XTERM_WEBVIEW_SOURCE } from './terminal-webview-html'
-import type { TerminalWebViewCommand } from './terminal-webview-messages'
+import type { TerminalTextScaleMode, TerminalWebViewCommand } from './terminal-webview-messages'
 import { createTerminalWebViewPendingMessages } from './terminal-webview-pending-messages'
 
 export type {
@@ -29,10 +29,11 @@ export type {
 type Props = {
   style?: StyleProp<ViewStyle>
   terminalTheme?: MobileTerminalTheme
-  // Why: baseline zoom multiplier ("text size") applied on top of the fit-to-width
-  // scale; raw xterm fontSize can't drive apparent size because the fit cancels it.
+  // Why: terminal text size. The default mode changes xterm font metrics and lets
+  // session callers refit the PTY; viewport-zoom keeps the terminal grid intact
+  // and magnifies the already-fitted surface for remote desktop snapshots.
   textScale?: number
-  preserveGridOnTextScale?: boolean
+  textScaleMode?: TerminalTextScaleMode
   onWebReady?: () => void
   onEngineError?: (message: string) => void
 } & TerminalSelectionEvents
@@ -42,7 +43,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     style,
     terminalTheme,
     textScale = 1,
-    preserveGridOnTextScale = false,
+    textScaleMode = 'font-size',
     onWebReady,
     onEngineError,
     onSelectionMode,
@@ -249,8 +250,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
   // Why: live-apply text-size changes to an already-mounted terminal (the pane
   // stays alive while the user visits Settings), so no terminal reload is needed.
   useEffect(() => {
-    postMessage({ type: 'set-font-scale', fontScale: textScale, preserveGridOnTextScale })
-  }, [postMessage, preserveGridOnTextScale, textScale])
+    postMessage({ type: 'set-font-scale', fontScale: textScale, textScaleMode })
+  }, [postMessage, textScale, textScaleMode])
 
   useImperativeHandle(
     ref,
@@ -289,7 +290,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
           oscLinks,
           terminalTheme,
           fontScale: textScale,
-          preserveGridOnTextScale,
+          textScaleMode,
           preserveScroll
         })
       },
@@ -366,7 +367,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         })
       }
     }),
-    [postMessage, preserveGridOnTextScale, sendToWebView, terminalTheme, textScale]
+    [postMessage, sendToWebView, terminalTheme, textScale, textScaleMode]
   )
 
   return (

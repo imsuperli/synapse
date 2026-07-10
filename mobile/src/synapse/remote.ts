@@ -110,11 +110,18 @@ export function connectToHost(
         clientToken: host.relayClientToken
       }
     : undefined
+  let lastConnectedPersisted = false
   const client = connect(host.endpoint, host.deviceToken, host.publicKeyB64, {
     ...options,
+    onStateChange: (state) => {
+      options.onStateChange?.(state)
+      if (state === 'connected' && !lastConnectedPersisted) {
+        lastConnectedPersisted = true
+        void updateLastConnected(host.id).catch(() => undefined)
+      }
+    },
     relay
   })
-  void updateLastConnected(host.id).catch(() => undefined)
   return client
 }
 

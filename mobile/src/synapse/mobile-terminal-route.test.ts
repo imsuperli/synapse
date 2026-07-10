@@ -43,6 +43,23 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('lastSeqRef.current = 0')
   })
 
+  it('guards terminal background polling against overlapping stale responses', () => {
+    expect(routeSource).toContain('const terminalIncrementSyncInFlightRef = useRef(false)')
+    expect(routeSource).toContain('const paneStatusSyncInFlightRef = useRef(false)')
+    expect(routeSource).toContain('terminalIncrementSyncInFlightRef.current')
+    expect(routeSource).toContain('paneStatusSyncInFlightRef.current')
+    expect(routeSource).toContain('runIdRef.current !== runId || clientRef.current !== client')
+    expect(routeSource).toContain('terminalIncrementSyncInFlightRef.current = false')
+    expect(routeSource).toContain('paneStatusSyncInFlightRef.current = false')
+  })
+
+  it('maps protocol-level terminal errors to user-facing messages', () => {
+    expect(routeSource).toContain('function terminalErrorMessage(err: unknown, t: MobileTranslate): string')
+    expect(routeSource).toContain("t('terminal.stoppedOnDesktop')")
+    expect(routeSource).toContain("t('terminal.workspaceNotLoaded')")
+    expect(routeSource).toContain('setError(terminalErrorMessage(err, t))')
+  })
+
   it('ignores duplicate sequenced terminal events after replay or reconnect', () => {
     expect(routeSource).toContain('event.seq > 0 && event.seq <= lastSeqRef.current')
     expect(routeSource).toContain('lastSeqRef.current = Math.max(lastSeqRef.current, event.seq)')
@@ -67,10 +84,24 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('transform: [{ translateY: -keyboardLift }]')
   })
 
-  it('keeps the remote terminal toolbar compact and preserves the replay grid while zooming text', () => {
-    expect(routeSource).toContain("<Text style={styles.title}>{t('common.terminal')}</Text>")
+  it('places terminal actions in the native header without a second toolbar row', () => {
+    expect(routeSource).toContain('<Stack.Screen')
+    expect(routeSource).toContain("headerTitle: ''")
+    expect(routeSource).toContain('headerRight: () => (')
+    expect(routeSource).toContain('style={styles.navIconButton}')
+    expect(routeSource).not.toContain('<View style={styles.toolbar}>')
+    expect(routeSource).not.toContain("<Text style={styles.title}>{t('common.terminal')}</Text>")
     expect(routeSource).not.toContain('{windowId}:{paneId}')
-    expect(routeSource).toContain('preserveGridOnTextScale')
+    expect(routeSource).not.toContain('preserveGridOnTextScale')
+  })
+
+  it('persists mobile-only terminal text scale changes', () => {
+    expect(routeSource).toContain('loadTerminalTextScale')
+    expect(routeSource).toContain('saveTerminalTextScale(scale)')
+    expect(routeSource).toContain('const [terminalTextScale, setTerminalTextScale] = useState(1)')
+    expect(routeSource).toContain('textScale={terminalTextScale}')
+    expect(routeSource).toContain('textScaleMode="viewport-zoom"')
+    expect(routeSource).toContain('onTextScaleChange={handleTextScaleChange}')
   })
 
   it('renders same-window terminal pane tabs without changing desktop layout', () => {

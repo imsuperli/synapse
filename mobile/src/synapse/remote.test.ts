@@ -39,6 +39,7 @@ import {
 import type { RpcClient } from '../transport/rpc-client'
 import type { RpcResponse } from '../transport/types'
 import { connect } from '../transport/rpc-client'
+import { updateLastConnected } from '../transport/host-store'
 
 function mockClient(response: RpcResponse): RpcClient {
   return {
@@ -76,14 +77,45 @@ describe('Synapse remote terminal helpers', () => {
       'ws://127.0.0.1:6868',
       'device-token',
       'server-key',
-      {
+      expect.objectContaining({
+        onStateChange: expect.any(Function),
         relay: {
           endpoint: 'wss://relay.example.com/v1/relay',
           sessionId: 'relay-session',
           clientToken: 'relay-client-token'
         }
-      }
+      })
     )
+  })
+
+  it('updates lastConnected only after the host reaches connected state', () => {
+    const onStateChange = vi.fn()
+    connectToHost(
+      {
+        id: 'host-connected',
+        name: 'Desktop',
+        endpoint: 'ws://127.0.0.1:6868',
+        deviceToken: 'device-token',
+        publicKeyB64: 'server-key',
+        lastConnected: 0
+      },
+      { onStateChange }
+    )
+
+    const options = vi.mocked(connect).mock.calls.at(-1)?.[3] as {
+      onStateChange?: (state: string) => void
+    }
+    expect(updateLastConnected).not.toHaveBeenCalled()
+
+    options.onStateChange?.('connecting')
+    expect(onStateChange).toHaveBeenCalledWith('connecting')
+    expect(updateLastConnected).not.toHaveBeenCalled()
+
+    options.onStateChange?.('connected')
+    options.onStateChange?.('connected')
+    expect(onStateChange).toHaveBeenCalledWith('connected')
+    expect(updateLastConnected).toHaveBeenCalledTimes(1)
+    expect(updateLastConnected).toHaveBeenCalledWith('host-connected')
   })
 
   it('parses only controllable terminal list entries', () => {

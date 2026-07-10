@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { Cloud, Languages, Pencil, Trash2 } from 'lucide-react-native'
 import { TextInputModal } from '../../../src/components/TextInputModal'
@@ -38,10 +38,20 @@ export default function HostSettingsScreen() {
     }, [refresh])
   )
 
-  const handleRemove = useCallback(async () => {
-    await removeHost(hostId)
-    router.replace('/')
-  }, [hostId, router])
+  const handleRemove = useCallback(() => {
+    Alert.alert(t('hostSettings.removeTitle'), t('hostSettings.removeConfirm'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      {
+        text: t('hostSettings.remove'),
+        style: 'destructive',
+        onPress: () => {
+          void removeHost(hostId).then(() => router.replace('/')).catch((err) => {
+            setError(err instanceof Error ? err.message : String(err))
+          })
+        }
+      }
+    ])
+  }, [hostId, router, t])
 
   return (
     <View style={styles.container}>
@@ -88,7 +98,7 @@ export default function HostSettingsScreen() {
           </View>
         </Pressable>
 
-        <Pressable style={styles.actionRow} onPress={() => void handleRemove()}>
+        <Pressable style={styles.actionRow} onPress={handleRemove}>
           <Trash2 size={18} color={colors.statusRed} />
           <View style={styles.actionText}>
             <Text style={styles.dangerTitle}>{t('hostSettings.remove')}</Text>

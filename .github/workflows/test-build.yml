@@ -16,13 +16,15 @@ on:
   push:
     branches:
       - test-build-*
+    tags:
+      - test-*
 
 permissions:
   contents: write
 
 jobs:
   build-mac:
-    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'mac' }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/test-build-')) || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'mac' }}
     runs-on: macos-latest
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -53,7 +55,7 @@ jobs:
           retention-days: 7
 
   build-windows:
-    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/test-build-')) || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5

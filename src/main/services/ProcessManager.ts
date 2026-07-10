@@ -93,7 +93,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   private cachedSpawnEnvAt: number;
   private cachedSpawnEnvShellKey: string | null;
   private readonly SPAWN_ENV_CACHE_TTL_MS = 30000;
-  private readonly PANE_HISTORY_CHUNK_LIMIT = 2000;
+  private readonly PANE_HISTORY_CHUNK_LIMIT = 50000;
   private readonly PANE_HISTORY_CHAR_LIMIT = 2_000_000;
   private readonly getSettings: (() => Settings | null | undefined) | null;
   private tmuxCompatService: ITmuxCompatService | null;

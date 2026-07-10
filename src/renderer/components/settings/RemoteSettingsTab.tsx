@@ -86,33 +86,37 @@ export function RemoteSettingsTab() {
 
   async function refreshRemoteState() {
     setError(null);
-    const [statusResponse, interfacesResponse, devicesResponse] = await Promise.all([
-      window.electronAPI.remoteGetStatus(),
-      window.electronAPI.remoteListNetworkInterfaces(),
-      window.electronAPI.remoteListDevices(),
-    ]);
+    try {
+      const [statusResponse, interfacesResponse, devicesResponse] = await Promise.all([
+        window.electronAPI.remoteGetStatus(),
+        window.electronAPI.remoteListNetworkInterfaces(),
+        window.electronAPI.remoteListDevices(),
+      ]);
 
-    if (statusResponse.success && statusResponse.data) {
-      setStatus(statusResponse.data);
-      setEnabled(statusResponse.data.settings.enabled);
-      setCustomEndpoint(statusResponse.data.settings.manualEndpoint ?? '');
-      setUseCustomEndpoint(Boolean(statusResponse.data.settings.manualEndpoint));
-      setSelectedAddress(statusResponse.data.settings.selectedAddress ?? '');
-      setRelayEnabled(statusResponse.data.settings.relayEnabled);
-      setRelayEndpoint(statusResponse.data.settings.relayEndpoint ?? '');
-      setAcceptPlainWsNonLocal(statusResponse.data.settings.acceptedPlainWsNonLocal);
-    }
-    if (interfacesResponse.success && interfacesResponse.data) {
-      setInterfaces(interfacesResponse.data.interfaces);
-      setSelectedAddress((current) => current || interfacesResponse.data!.interfaces[0]?.address || '');
-    }
-    if (devicesResponse.success && devicesResponse.data) {
-      setDevices(devicesResponse.data.devices);
-    }
+      if (statusResponse.success && statusResponse.data) {
+        setStatus(statusResponse.data);
+        setEnabled(statusResponse.data.settings.enabled);
+        setCustomEndpoint(statusResponse.data.settings.manualEndpoint ?? '');
+        setUseCustomEndpoint(Boolean(statusResponse.data.settings.manualEndpoint));
+        setSelectedAddress(statusResponse.data.settings.selectedAddress ?? '');
+        setRelayEnabled(statusResponse.data.settings.relayEnabled);
+        setRelayEndpoint(statusResponse.data.settings.relayEndpoint ?? '');
+        setAcceptPlainWsNonLocal(statusResponse.data.settings.acceptedPlainWsNonLocal);
+      }
+      if (interfacesResponse.success && interfacesResponse.data) {
+        setInterfaces(interfacesResponse.data.interfaces);
+        setSelectedAddress((current) => current || interfacesResponse.data!.interfaces[0]?.address || '');
+      }
+      if (devicesResponse.success && devicesResponse.data) {
+        setDevices(devicesResponse.data.devices);
+      }
 
-    const firstError = statusResponse.error || interfacesResponse.error || devicesResponse.error;
-    if (firstError) {
-      setError(firstError);
+      const firstError = statusResponse.error || interfacesResponse.error || devicesResponse.error;
+      if (firstError) {
+        setError(firstError);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -222,6 +226,13 @@ export function RemoteSettingsTab() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function confirmRevokeDevice(device: RemoteDevice) {
+    if (!window.confirm(t('settings.remote.revokeDeviceConfirm', { name: device.name }))) {
+      return;
+    }
+    await revokeDevice(device.deviceId);
   }
 
   async function copyPairingCode() {
@@ -504,7 +515,7 @@ export function RemoteSettingsTab() {
                 <button
                   type="button"
                   className={secondaryButtonClassName}
-                  onClick={() => void revokeDevice(device.deviceId)}
+                  onClick={() => void confirmRevokeDevice(device)}
                   disabled={loading}
                 >
                   <Trash2 size={14} />

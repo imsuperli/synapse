@@ -13,7 +13,7 @@ import {
   type KeyboardEvent,
 } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { Eraser, Keyboard as KeyboardIcon, RotateCw, Square } from 'lucide-react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { TerminalWebView, type TerminalWebViewHandle } from '../../../../../src/terminal/TerminalWebView'
@@ -52,6 +52,7 @@ import type { ConnectionLogEntry, ConnectionState } from '../../../../../src/tra
 import type { MobileTerminalTheme } from '../../../../../src/terminal/mobile-terminal-theme'
 import { colors, radii, spacing, typography } from '../../../../../src/theme/mobile-theme'
 import { useMobileI18n, type MobileTranslate } from '../../../../../src/i18n'
+import { loadTerminalTextScale, saveTerminalTextScale } from '../../../../../src/storage/preferences'
 
 type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryInput>
 
@@ -118,6 +119,20 @@ function sameTerminalViewport(a: TerminalViewport, b: TerminalViewport): boolean
   return a.cols === b.cols && a.rows === b.rows
 }
 
+function terminalErrorMessage(err: unknown, t: MobileTranslate): string {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/terminal not found|terminal_not_found|pane_not_found|window_not_found/i.test(message)) {
+    return t('terminal.stoppedOnDesktop')
+  }
+  if (/remote_start_ssh_not_supported/i.test(message)) {
+    return t('terminal.onlyLocalStart')
+  }
+  if (/workspace_not_loaded/i.test(message)) {
+    return t('terminal.workspaceNotLoaded')
+  }
+  return message
+}
+
 const terminalTheme: MobileTerminalTheme = {
   theme: {
     background: colors.terminalBg,
@@ -180,6 +195,8 @@ export default function RemoteTerminalScreen() {
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sendLiveTerminalInputRef = useRef<TerminalLiveInputSender>(async () => false)
   const currentPaneRuntimeKeyRef = useRef<string | null>(null)
+  const terminalIncrementSyncInFlightRef = useRef(false)
+  const paneStatusSyncInFlightRef = useRef(false)
   const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -191,6 +208,7 @@ export default function RemoteTerminalScreen() {
   const [startingTabPaneKey, setStartingTabPaneKey] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(true)
+  const [terminalTextScale, setTerminalTextScale] = useState(1)
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const liveInputTerminalHandles = useMemo(() => new Set([terminalHandle]), [terminalHandle])
   const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set([terminalHandle]))
@@ -222,6 +240,8 @@ export default function RemoteTerminalScreen() {
   const cleanup = useCallback(() => {
     runIdRef.current += 1
     resyncingRef.current = false
+    terminalIncrementSyncInFlightRef.current = false
+    paneStatusSyncInFlightRef.current = false
     unsubscribeRef.current?.()
     unsubscribeRef.current = null
     clientRef.current?.close()
@@ -235,9 +255,12 @@ export default function RemoteTerminalScreen() {
   }, [])
 
   const loadWindowPaneTabs = useCallback(
-    async (client: RpcClient) => {
+    async (client: RpcClient, expectedRunId = runIdRef.current) => {
       try {
         const { windows, groups } = await requestWindowList(client)
+        if (runIdRef.current !== expectedRunId || clientRef.current !== client) {
+          return null
+        }
         const currentWindow = windows.find((window) => window.windowId === windowId)
         setWindowPanes(currentWindow?.panes.filter((pane) => pane.kind === 'terminal') ?? [])
         const currentGroup = groups.find((group) =>
@@ -246,8 +269,10 @@ export default function RemoteTerminalScreen() {
         setGroupWindowTabs(currentGroup?.windows ?? [])
         return currentWindow?.panes.find((pane) => pane.paneId === paneId && pane.kind === 'terminal') ?? null
       } catch {
-        setWindowPanes([])
-        setGroupWindowTabs([])
+        if (runIdRef.current === expectedRunId && clientRef.current === client) {
+          setWindowPanes([])
+          setGroupWindowTabs([])
+        }
         return null
       }
     },
@@ -257,7 +282,7 @@ export default function RemoteTerminalScreen() {
   const loadTerminalHistorySnapshot = useCallback(
     async (client: RpcClient, runId: number) => {
       const history = await requestTerminalHistory(client, windowId, paneId)
-      if (runIdRef.current !== runId) {
+      if (runIdRef.current !== runId || clientRef.current !== client) {
         return null
       }
       lastSeqRef.current = history.lastSeq
@@ -270,7 +295,7 @@ export default function RemoteTerminalScreen() {
         false
       )
       await terminalRef.current?.awaitReady()
-      if (runIdRef.current !== runId) {
+      if (runIdRef.current !== runId || clientRef.current !== client) {
         return null
       }
       return history
@@ -290,6 +315,9 @@ export default function RemoteTerminalScreen() {
         'terminal.subscribe',
         subscribeParams,
         (payload) => {
+          if (runIdRef.current !== runId || clientRef.current !== client) {
+            return
+          }
           const subscription = parseTerminalSubscribeResult(payload)
           if (subscription) {
             if (subscription.gap) {
@@ -304,18 +332,20 @@ export default function RemoteTerminalScreen() {
               void (async () => {
                 try {
                   const history = await loadTerminalHistorySnapshot(client, runId)
-                  if (!history || runIdRef.current !== runId) {
+                  if (!history || runIdRef.current !== runId || clientRef.current !== client) {
                     return
                   }
                   startTerminalSubscription(client, runId)
                   setLoading(false)
                 } catch (err) {
-                  if (runIdRef.current === runId) {
-                    setError(err instanceof Error ? err.message : String(err))
+                  if (runIdRef.current === runId && clientRef.current === client) {
+                    setError(terminalErrorMessage(err, t))
                     setLoading(false)
                   }
                 } finally {
-                  resyncingRef.current = false
+                  if (runIdRef.current === runId && clientRef.current === client) {
+                    resyncingRef.current = false
+                  }
                 }
               })()
             }
@@ -335,21 +365,22 @@ export default function RemoteTerminalScreen() {
         }
       )
     },
-    [loadTerminalHistorySnapshot, paneId, windowId]
+    [loadTerminalHistorySnapshot, paneId, t, windowId]
   )
 
   const syncTerminalIncrement = useCallback(async () => {
     const client = clientRef.current
-    if (!client || loading || resyncingRef.current) {
+    if (!client || loading || resyncingRef.current || terminalIncrementSyncInFlightRef.current) {
       return
     }
+    const runId = runIdRef.current
+    terminalIncrementSyncInFlightRef.current = true
     const reloadSnapshotForCurrentRun = async () => {
-      const runId = runIdRef.current
       unsubscribeRef.current?.()
       unsubscribeRef.current = null
       lastSeqRef.current = 0
       const snapshot = await loadTerminalHistorySnapshot(client, runId)
-      if (!snapshot || runIdRef.current !== runId) {
+      if (!snapshot || runIdRef.current !== runId || clientRef.current !== client) {
         return false
       }
       startTerminalSubscription(client, runId)
@@ -359,6 +390,9 @@ export default function RemoteTerminalScreen() {
     try {
       const sinceSeq = lastSeqRef.current
       const history = await requestTerminalHistory(client, windowId, paneId, sinceSeq)
+      if (runIdRef.current !== runId || clientRef.current !== client) {
+        return
+      }
       const historyViewport = normalizeTerminalViewport(history, viewportRef.current)
       if (history.gap) {
         if (resyncingRef.current) {
@@ -369,8 +403,10 @@ export default function RemoteTerminalScreen() {
         try {
           await reloadSnapshotForCurrentRun()
         } finally {
-          resyncingRef.current = false
-          setLoading(false)
+          if (runIdRef.current === runId && clientRef.current === client) {
+            resyncingRef.current = false
+            setLoading(false)
+          }
         }
         return
       }
@@ -383,8 +419,10 @@ export default function RemoteTerminalScreen() {
         try {
           await reloadSnapshotForCurrentRun()
         } finally {
-          resyncingRef.current = false
-          setLoading(false)
+          if (runIdRef.current === runId && clientRef.current === client) {
+            resyncingRef.current = false
+            setLoading(false)
+          }
         }
         return
       }
@@ -398,6 +436,9 @@ export default function RemoteTerminalScreen() {
       terminalRef.current?.write(history.chunks.join(''))
       lastSeqRef.current = Math.max(lastSeqRef.current, history.lastSeq)
     } catch (err) {
+      if (runIdRef.current !== runId || clientRef.current !== client) {
+        return
+      }
       const message = err instanceof Error ? err.message : String(err)
       if (/terminal not found|terminal_not_found/i.test(message)) {
         unsubscribeRef.current?.()
@@ -405,6 +446,10 @@ export default function RemoteTerminalScreen() {
         currentPaneRuntimeKeyRef.current = null
         setTerminalRunning(false)
         setError(t('terminal.stoppedOnDesktop'))
+      }
+    } finally {
+      if (runIdRef.current === runId && clientRef.current === client) {
+        terminalIncrementSyncInFlightRef.current = false
       }
     }
   }, [
@@ -430,47 +475,58 @@ export default function RemoteTerminalScreen() {
       lastSeqRef.current = 0
       try {
         const history = await loadTerminalHistorySnapshot(client, runId)
-        if (!history || runIdRef.current !== runId) {
+        if (!history || runIdRef.current !== runId || clientRef.current !== client) {
           return
         }
         startTerminalSubscription(client, runId)
         setTerminalRunning(true)
       } catch (err) {
-        if (runIdRef.current === runId) {
-          setError(err instanceof Error ? err.message : String(err))
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setError(terminalErrorMessage(err, t))
         }
       } finally {
-        if (runIdRef.current === runId) {
+        if (runIdRef.current === runId && clientRef.current === client) {
           setLoading(false)
+          resyncingRef.current = false
         }
-        resyncingRef.current = false
       }
     },
-    [loadTerminalHistorySnapshot, startTerminalSubscription]
+    [loadTerminalHistorySnapshot, startTerminalSubscription, t]
   )
 
   const syncPaneStatus = useCallback(async () => {
     const client = clientRef.current
-    if (!client) {
+    if (!client || paneStatusSyncInFlightRef.current) {
       return
     }
-    const currentPane = await loadWindowPaneTabs(client)
-    if (!currentPane) {
-      currentPaneRuntimeKeyRef.current = null
-      return
-    }
-    const runtimeKey = terminalPaneRuntimeKey(currentPane)
-    const previousRuntimeKey = currentPaneRuntimeKeyRef.current
-    currentPaneRuntimeKeyRef.current = runtimeKey
-    if (!currentPane.running) {
-      unsubscribeRef.current?.()
-      unsubscribeRef.current = null
-      setTerminalRunning(false)
-      setError(t('terminal.stoppedOnDesktop'))
-      return
-    }
-    if (!terminalRunning || (previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey)) {
-      await reloadCurrentTerminalStream(client)
+    const runId = runIdRef.current
+    paneStatusSyncInFlightRef.current = true
+    try {
+      const currentPane = await loadWindowPaneTabs(client, runId)
+      if (runIdRef.current !== runId || clientRef.current !== client) {
+        return
+      }
+      if (!currentPane) {
+        currentPaneRuntimeKeyRef.current = null
+        return
+      }
+      const runtimeKey = terminalPaneRuntimeKey(currentPane)
+      const previousRuntimeKey = currentPaneRuntimeKeyRef.current
+      currentPaneRuntimeKeyRef.current = runtimeKey
+      if (!currentPane.running) {
+        unsubscribeRef.current?.()
+        unsubscribeRef.current = null
+        setTerminalRunning(false)
+        setError(t('terminal.stoppedOnDesktop'))
+        return
+      }
+      if (!terminalRunning || (previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey)) {
+        await reloadCurrentTerminalStream(client)
+      }
+    } finally {
+      if (runIdRef.current === runId && clientRef.current === client) {
+        paneStatusSyncInFlightRef.current = false
+      }
     }
   }, [loadWindowPaneTabs, reloadCurrentTerminalStream, t, terminalRunning])
 
@@ -498,18 +554,26 @@ export default function RemoteTerminalScreen() {
         return
       }
       const client = connectToHost(loadedHost, {
-        onStateChange: setConnectionState,
-        onLog: appendLog
+        onStateChange: (state) => {
+          if (runIdRef.current === runId) {
+            setConnectionState(state)
+          }
+        },
+        onLog: (entry) => {
+          if (runIdRef.current === runId) {
+            appendLog(entry)
+          }
+        }
       })
       clientRef.current = client
-      const currentPane = await loadWindowPaneTabs(client)
-      if (runIdRef.current !== runId) {
+      const currentPane = await loadWindowPaneTabs(client, runId)
+      if (runIdRef.current !== runId || clientRef.current !== client) {
         return
       }
       currentPaneRuntimeKeyRef.current = terminalPaneRuntimeKey(currentPane)
 
       const history = await loadTerminalHistorySnapshot(client, runId)
-      if (!history || runIdRef.current !== runId) {
+      if (!history || runIdRef.current !== runId || clientRef.current !== client) {
         return
       }
 
@@ -519,7 +583,7 @@ export default function RemoteTerminalScreen() {
       if (runIdRef.current !== runId) {
         return
       }
-      setError(err instanceof Error ? err.message : String(err))
+      setError(terminalErrorMessage(err, t))
       setLoading(false)
     }
   }, [
@@ -553,11 +617,14 @@ export default function RemoteTerminalScreen() {
       if (!client) {
         return
       }
+      const runId = runIdRef.current
       void sendTerminalInput(client, windowId, paneId, bytes).catch((err) => {
-        setError(err instanceof Error ? err.message : String(err))
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setError(terminalErrorMessage(err, t))
+        }
       })
     },
-    [paneId, windowId]
+    [paneId, t, windowId]
   )
 
   const handleClear = useCallback(async () => {
@@ -565,34 +632,48 @@ export default function RemoteTerminalScreen() {
     if (!client) {
       return
     }
+    const runId = runIdRef.current
     try {
       const result = await clearTerminal(client, windowId, paneId)
+      if (runIdRef.current !== runId || clientRef.current !== client) {
+        return
+      }
       if (result.windowId === windowId && result.paneId === paneId) {
         lastSeqRef.current = Math.max(lastSeqRef.current, result.lastSeq)
       }
       terminalRef.current?.clear()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (runIdRef.current === runId && clientRef.current === client) {
+        setError(terminalErrorMessage(err, t))
+      }
     }
-  }, [paneId, windowId])
+  }, [paneId, t, windowId])
 
   const handleStop = useCallback(async () => {
     const client = clientRef.current
     if (!client || stopping) {
       return
     }
+    const runId = runIdRef.current
     setStopping(true)
     setError(null)
     try {
       await stopRemotePane(client, windowId, paneId)
+      if (runIdRef.current !== runId || clientRef.current !== client) {
+        return
+      }
       currentPaneRuntimeKeyRef.current = null
       setTerminalRunning(false)
       setError(t('terminal.stopped'))
       router.replace(`/h/${hostId}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (runIdRef.current === runId && clientRef.current === client) {
+        setError(terminalErrorMessage(err, t))
+      }
     } finally {
-      setStopping(false)
+      if (runIdRef.current === runId && clientRef.current === client) {
+        setStopping(false)
+      }
     }
   }, [hostId, paneId, router, stopping, t, windowId])
 
@@ -615,17 +696,28 @@ export default function RemoteTerminalScreen() {
         setError(t('terminal.notConnected'))
         return
       }
+      const runId = runIdRef.current
       const paneKey = `${pane.windowId}:${pane.paneId}`
       setStartingTabPaneKey(paneKey)
       setError(null)
       try {
         await startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)
-        await loadWindowPaneTabs(client)
+        if (runIdRef.current !== runId || clientRef.current !== client) {
+          return
+        }
+        await loadWindowPaneTabs(client, runId)
+        if (runIdRef.current !== runId || clientRef.current !== client) {
+          return
+        }
         router.replace(targetPath)
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setError(terminalErrorMessage(err, t))
+        }
       } finally {
-        setStartingTabPaneKey(null)
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setStartingTabPaneKey(null)
+        }
       }
     },
     [hostId, loadWindowPaneTabs, paneId, router, t]
@@ -654,17 +746,28 @@ export default function RemoteTerminalScreen() {
         setError(t('terminal.notConnected'))
         return
       }
+      const runId = runIdRef.current
       const paneKey = `${pane.windowId}:${pane.paneId}`
       setStartingTabPaneKey(paneKey)
       setError(null)
       try {
         await startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)
-        await loadWindowPaneTabs(client)
+        if (runIdRef.current !== runId || clientRef.current !== client) {
+          return
+        }
+        await loadWindowPaneTabs(client, runId)
+        if (runIdRef.current !== runId || clientRef.current !== client) {
+          return
+        }
         router.replace(targetPath)
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setError(terminalErrorMessage(err, t))
+        }
       } finally {
-        setStartingTabPaneKey(null)
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setStartingTabPaneKey(null)
+        }
       }
     },
     [hostId, loadWindowPaneTabs, router, t, windowId]
@@ -696,10 +799,13 @@ export default function RemoteTerminalScreen() {
       if (!client || connectionState !== 'connected') {
         return false
       }
+      const runId = runIdRef.current
       return sendTerminalInput(client, windowId, paneId, text).then(
         () => true,
         (err) => {
-          setError(err instanceof Error ? err.message : String(err))
+          if (runIdRef.current === runId && clientRef.current === client) {
+            setError(terminalErrorMessage(err, t))
+          }
           return false
         }
       )
@@ -780,6 +886,23 @@ export default function RemoteTerminalScreen() {
   }, [canSend, flushPendingLiveInputBeforeExternalSend, sendLiveTerminalInput, terminalHandle])
 
   useEffect(() => {
+    let cancelled = false
+    void loadTerminalTextScale().then((scale) => {
+      if (!cancelled) {
+        setTerminalTextScale(scale)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const handleTextScaleChange = useCallback((scale: number) => {
+    setTerminalTextScale(scale)
+    void saveTerminalTextScale(scale)
+  }, [])
+
+  useEffect(() => {
     const updateKeyboardHeight = (event: KeyboardEvent) => {
       setKeyboardHeight(Math.max(0, event.endCoordinates.height - insets.bottom))
     }
@@ -818,28 +941,31 @@ export default function RemoteTerminalScreen() {
   const showGroupWindowTabs = groupWindowTabs.length > 1
 
   return (
-    <View style={styles.container}>
-      <View style={styles.toolbar}>
-        <View style={styles.titleBlock}>
-          <Text style={styles.title}>{t('common.terminal')}</Text>
-        </View>
-        <View style={styles.toolbarActions}>
-          <Pressable style={styles.iconButton} onPress={() => void openTerminal()}>
-            <RotateCw size={18} color={colors.textPrimary} />
-          </Pressable>
-          <Pressable style={styles.iconButton} onPress={() => void handleClear()}>
-            <Eraser size={18} color={colors.textPrimary} />
-          </Pressable>
-          <Pressable
-            style={[styles.iconButton, stopping && styles.iconButtonDisabled]}
-            disabled={stopping}
-            onPress={() => void handleStop()}
-            accessibilityLabel={t('overview.stopTerminal')}
-          >
-            <Square size={17} color={colors.statusRed} fill={colors.statusRed} />
-          </Pressable>
-        </View>
-      </View>
+    <>
+      <Stack.Screen
+        options={{
+          headerTitle: '',
+          headerRight: () => (
+            <View style={styles.navActions}>
+              <Pressable style={styles.navIconButton} onPress={() => void openTerminal()}>
+                <RotateCw size={18} color={colors.textPrimary} />
+              </Pressable>
+              <Pressable style={styles.navIconButton} onPress={() => void handleClear()}>
+                <Eraser size={18} color={colors.textPrimary} />
+              </Pressable>
+              <Pressable
+                style={[styles.navIconButton, stopping && styles.iconButtonDisabled]}
+                disabled={stopping}
+                onPress={() => void handleStop()}
+                accessibilityLabel={t('overview.stopTerminal')}
+              >
+                <Square size={17} color={colors.statusRed} fill={colors.statusRed} />
+              </Pressable>
+            </View>
+          )
+        }}
+      />
+      <View style={styles.container}>
 
       {showGroupWindowTabs ? (
         <View style={styles.paneTabs}>
@@ -934,10 +1060,12 @@ export default function RemoteTerminalScreen() {
         <TerminalWebView
           ref={terminalRef}
           terminalTheme={terminalTheme}
-          preserveGridOnTextScale
+          textScale={terminalTextScale}
+          textScaleMode="viewport-zoom"
           onWebReady={refitTerminalToPhone}
           onTerminalInput={handleTerminalInput}
           onEngineError={setError}
+          onTextScaleChange={handleTextScaleChange}
         />
         {loading ? (
           <View style={styles.loadingOverlay}>
@@ -1058,7 +1186,8 @@ export default function RemoteTerminalScreen() {
           />
         </View>
       </View>
-    </View>
+      </View>
+    </>
   )
 }
 
@@ -1067,30 +1196,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bgBase
   },
-  toolbar: {
+  navActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.borderSubtle
-  },
-  titleBlock: {
-    flex: 1,
-    minWidth: 0
-  },
-  title: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '700'
-  },
-  toolbarActions: {
-    flexDirection: 'row',
     gap: spacing.sm
   },
-  iconButton: {
+  navIconButton: {
     width: 36,
     height: 36,
     borderRadius: radii.button,

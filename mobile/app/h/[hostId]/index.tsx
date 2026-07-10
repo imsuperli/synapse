@@ -5,20 +5,33 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View
 } from 'react-native'
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Check, Layers, Play, Plus, RotateCw, Search, Settings, Square, TerminalSquare, X } from 'lucide-react-native'
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
+import {
+  Check,
+  Layers,
+  Play,
+  Plus,
+  RotateCw,
+  Search,
+  Server,
+  Settings,
+  Square,
+  TerminalSquare,
+  X
+} from 'lucide-react-native'
 import {
   connectToHost,
   createRemoteWindow,
   createRemoteGroup,
   deleteRemoteGroup,
   deleteRemoteWindow,
-  loadHostById,
   startRemoteWindow,
   stopRemotePane,
   type RemoteWindowGroupSummary,
@@ -27,6 +40,7 @@ import {
   type RemoteWindowSummary
 } from '../../../src/synapse/remote'
 import { loadHostOverviewData } from '../../../src/synapse/host-overview'
+import { loadHosts } from '../../../src/transport/host-store'
 import {
   filterTerminals,
   filterWindows,
@@ -43,25 +57,7 @@ function getParam(value: string | string[] | undefined): string {
 
 const OVERVIEW_STATUS_SYNC_MS = 2500
 const DEFAULT_REMOTE_START_VIEWPORT = { cols: 80, rows: 30 }
-
-function connectionLabel(state: ConnectionState | 'loading', t: MobileTranslate): string {
-  switch (state) {
-    case 'connected':
-      return t('common.connected')
-    case 'connecting':
-      return t('common.connecting')
-    case 'handshaking':
-      return t('common.handshaking')
-    case 'reconnecting':
-      return t('common.reconnecting')
-    case 'auth-failed':
-      return t('common.authFailed')
-    case 'disconnected':
-      return t('common.disconnected')
-    case 'loading':
-      return t('common.loading')
-  }
-}
+const HOST_SWITCH_TIMEOUT_MS = 15000
 
 type OverviewItem =
   | { type: 'group'; group: RemoteWindowGroupSummary }
@@ -178,12 +174,45 @@ function filterSelectableWindowIds(
   )
 }
 
+function switcherHostEndpointLabel(host: HostProfile, t: MobileTranslate): string {
+  return host.relayEndpoint ? `${t('common.relay')} ${host.relayEndpoint}` : host.endpoint
+}
+
+function withSwitchTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error('Connection timeout')), HOST_SWITCH_TIMEOUT_MS)
+  })
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
+  })
+}
+
+function overviewErrorMessage(err: unknown, t: MobileTranslate): string {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/remote_start_ssh_not_supported/i.test(message)) {
+    return t('overview.onlyLocalStart')
+  }
+  if (/window_not_found/i.test(message)) {
+    return t('overview.windowNotFound')
+  }
+  if (/pane_not_found|terminal_not_found/i.test(message)) {
+    return t('overview.paneNotFound')
+  }
+  if (/workspace_not_loaded/i.test(message)) {
+    return t('overview.workspaceNotLoaded')
+  }
+  return message
+}
+
 export default function HostOverviewScreen() {
   const params = useLocalSearchParams<{ hostId?: string }>()
   const hostId = getParam(params.hostId)
   const router = useRouter()
   const { t } = useMobileI18n()
-  const [host, setHost] = useState<HostProfile | null>(null)
+  const { width: screenWidth } = useWindowDimensions()
   const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [terminals, setTerminals] = useState<RemoteTerminalSummary[]>([])
   const [windows, setWindows] = useState<RemoteWindowSummary[]>([])
@@ -202,8 +231,14 @@ export default function HostOverviewScreen() {
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null)
   const [groupSelectionMode, setGroupSelectionMode] = useState(false)
   const [selectedGroupWindowIds, setSelectedGroupWindowIds] = useState<string[]>([])
+  const [pairedHosts, setPairedHosts] = useState<HostProfile[]>([])
+  const [hostSwitcherOpen, setHostSwitcherOpen] = useState(false)
+  const [switchingHostId, setSwitchingHostId] = useState<string | null>(null)
+  const [hostSwitchError, setHostSwitchError] = useState<string | null>(null)
   const clientRef = useRef<RpcClient | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
+  const loadGenerationRef = useRef(0)
+  const syncOverviewStateInFlightRef = useRef(false)
 
   const normalizedSearchQuery = useMemo(
     () => normalizeTerminalSearchQuery(searchQuery),
@@ -218,6 +253,10 @@ export default function HostOverviewScreen() {
     }
     return ids
   }, [groups])
+  const groupableWindowCount = useMemo(
+    () => windows.filter((window) => !groupedWindowIds.has(window.windowId)).length,
+    [groupedWindowIds, windows]
+  )
   const visibleWindows = useMemo(
     () => filterWindows(
       windows.filter((window) => !groupedWindowIds.has(window.windowId)),
@@ -261,21 +300,24 @@ export default function HostOverviewScreen() {
     [overviewMode, visibleGroups, visibleTerminals, visibleWindows]
   )
   const hasSearchQuery = normalizedSearchQuery.length > 0
-  const hostEndpointLabel = host?.relayEndpoint
-    ? `${t('common.relay')} ${host.relayEndpoint}`
-    : host?.endpoint ?? hostId
-
+  const canUseGroupSelection = overviewMode === 'windows' && groupableWindowCount >= 2
+  const hostSwitcherPanelWidth = Math.min(286, Math.max(220, screenWidth - spacing.lg * 2))
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-80)
   }, [])
 
   const closeClient = useCallback(() => {
+    loadGenerationRef.current += 1
+    syncOverviewStateInFlightRef.current = false
     clientRef.current?.close()
     clientRef.current = null
   }, [])
 
   const loadAndConnect = useCallback(async () => {
     closeClient()
+    const loadId = loadGenerationRef.current
+    const isCurrentLoad = () => loadGenerationRef.current === loadId
+    let client: RpcClient | null = null
     setRefreshing(true)
     setConnectionState('loading')
     setError(null)
@@ -289,21 +331,41 @@ export default function HostOverviewScreen() {
     setStoppingPaneKey(null)
     setGroupSelectionMode(false)
     setSelectedGroupWindowIds([])
+    setHostSwitchError(null)
     try {
-      const loadedHost = await loadHostById(hostId)
+      const hosts = await loadHosts()
+      if (!isCurrentLoad()) {
+        return
+      }
+      setPairedHosts(hosts)
+      const loadedHost = hosts.find((host) => host.id === hostId) ?? null
       if (!loadedHost) {
-        setHost(null)
         setError(t('overview.hostNotFound'))
         setConnectionState('disconnected')
         return
       }
-      setHost(loadedHost)
-      const client = connectToHost(loadedHost, {
-        onStateChange: setConnectionState,
-        onLog: appendLog
+      client = connectToHost(loadedHost, {
+        onStateChange: (state) => {
+          if (isCurrentLoad()) {
+            setConnectionState(state)
+          }
+        },
+        onLog: (entry) => {
+          if (isCurrentLoad()) {
+            appendLog(entry)
+          }
+        }
       })
+      if (!isCurrentLoad()) {
+        client.close()
+        return
+      }
       clientRef.current = client
       const overview = await loadHostOverviewData(client)
+      if (!isCurrentLoad() || clientRef.current !== client) {
+        client.close()
+        return
+      }
       setOverviewMode(overview.mode)
       setCanCreateWindow(overview.canCreateWindow)
       setWindows(overview.windows)
@@ -315,9 +377,13 @@ export default function HostOverviewScreen() {
         overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
       )
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (isCurrentLoad()) {
+        setError(overviewErrorMessage(err, t))
+      }
     } finally {
-      setRefreshing(false)
+      if (isCurrentLoad()) {
+        setRefreshing(false)
+      }
     }
   }, [appendLog, closeClient, hostId, t])
 
@@ -334,6 +400,8 @@ export default function HostOverviewScreen() {
         return
       }
       const paneKey = `${pane.windowId}:${pane.paneId}`
+      const loadId = loadGenerationRef.current
+      let operationClient: RpcClient | null = null
       try {
         setError(null)
         if (!pane.running) {
@@ -346,6 +414,7 @@ export default function HostOverviewScreen() {
             setError(t('overview.notConnected'))
             return
           }
+          operationClient = client
           setStartingPaneKey(paneKey)
           const result = await startRemoteWindow(
             client,
@@ -353,6 +422,9 @@ export default function HostOverviewScreen() {
             pane.paneId,
             DEFAULT_REMOTE_START_VIEWPORT
           )
+          if (loadGenerationRef.current !== loadId || clientRef.current !== client) {
+            return
+          }
           const nextPane = result.pane ?? result.startedPanes[0] ?? pane
           setWindows((current) =>
             current.map((window) =>
@@ -369,9 +441,13 @@ export default function HostOverviewScreen() {
           `/h/${hostId}/t/${encodeURIComponent(pane.windowId)}/${encodeURIComponent(pane.paneId)}`
         )
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        if (!operationClient || (loadGenerationRef.current === loadId && clientRef.current === operationClient)) {
+          setError(overviewErrorMessage(err, t))
+        }
       } finally {
-        setStartingPaneKey(null)
+        if (!operationClient || (loadGenerationRef.current === loadId && clientRef.current === operationClient)) {
+          setStartingPaneKey(null)
+        }
       }
     },
     [hostId, router, t]
@@ -422,10 +498,14 @@ export default function HostOverviewScreen() {
       setError(t('overview.notConnected'))
       return
     }
+    const loadId = loadGenerationRef.current
     setCreatingWindow(true)
     setError(null)
     try {
       const result = await createRemoteWindow(client, DEFAULT_REMOTE_START_VIEWPORT)
+      if (loadGenerationRef.current !== loadId || clientRef.current !== client) {
+        return
+      }
       setWindows((current) => [result.window, ...current.filter((window) => window.windowId !== result.window.windowId)])
       setTerminals((current) => [
         {
@@ -448,9 +528,13 @@ export default function HostOverviewScreen() {
         `/h/${hostId}/t/${encodeURIComponent(result.pane.windowId)}/${encodeURIComponent(result.pane.paneId)}`
       )
     } catch (err) {
-      setError(t('overview.createFailed', { message: err instanceof Error ? err.message : String(err) }))
+      if (loadGenerationRef.current === loadId && clientRef.current === client) {
+        setError(t('overview.createFailed', { message: overviewErrorMessage(err, t) }))
+      }
     } finally {
-      setCreatingWindow(false)
+      if (loadGenerationRef.current === loadId && clientRef.current === client) {
+        setCreatingWindow(false)
+      }
     }
   }, [canCreateWindow, hostId, router, t])
 
@@ -472,10 +556,14 @@ export default function HostOverviewScreen() {
       setError(t('overview.selectGroupWindows'))
       return
     }
+    const loadId = loadGenerationRef.current
     setCreatingGroup(true)
     setError(null)
     try {
       const result = await createRemoteGroup(client, selectedGroupWindowIds, t('overview.defaultGroupName'))
+      if (loadGenerationRef.current !== loadId || clientRef.current !== client) {
+        return
+      }
       setGroups((current) => [
         result.group,
         ...current.filter((group) => group.groupId !== result.group.groupId)
@@ -483,21 +571,29 @@ export default function HostOverviewScreen() {
       setSelectedGroupWindowIds([])
       setGroupSelectionMode(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (loadGenerationRef.current === loadId && clientRef.current === client) {
+        setError(overviewErrorMessage(err, t))
+      }
     } finally {
-      setCreatingGroup(false)
+      if (loadGenerationRef.current === loadId && clientRef.current === client) {
+        setCreatingGroup(false)
+      }
     }
   }, [selectedGroupWindowIds, t])
 
   const handleGroupAction = useCallback(async () => {
     if (!groupSelectionMode) {
+      if (!canUseGroupSelection) {
+        setError(t('overview.selectGroupWindows'))
+        return
+      }
       setGroupSelectionMode(true)
       setSelectedGroupWindowIds([])
       setError(null)
       return
     }
     await handleCreateGroup()
-  }, [groupSelectionMode, handleCreateGroup])
+  }, [canUseGroupSelection, groupSelectionMode, handleCreateGroup, t])
 
   const cancelGroupSelection = useCallback(() => {
     setGroupSelectionMode(false)
@@ -513,17 +609,25 @@ export default function HostOverviewScreen() {
           setError(t('overview.notConnected'))
           return
         }
+        const loadId = loadGenerationRef.current
         setDeletingWindowId(windowId)
         setError(null)
         try {
           const result = await deleteRemoteWindow(client, windowId)
+          if (loadGenerationRef.current !== loadId || clientRef.current !== client) {
+            return
+          }
           setWindows((current) => current.filter((window) => window.windowId !== result.windowId))
           setGroups(result.groups)
           setSelectedGroupWindowIds((current) => current.filter((id) => id !== result.windowId))
         } catch (err) {
-          setError(err instanceof Error ? err.message : String(err))
+          if (loadGenerationRef.current === loadId && clientRef.current === client) {
+            setError(overviewErrorMessage(err, t))
+          }
         } finally {
-          setDeletingWindowId(null)
+          if (loadGenerationRef.current === loadId && clientRef.current === client) {
+            setDeletingWindowId(null)
+          }
         }
       }
 
@@ -547,15 +651,23 @@ export default function HostOverviewScreen() {
           setError(t('overview.notConnected'))
           return
         }
+        const loadId = loadGenerationRef.current
         setDeletingGroupId(groupId)
         setError(null)
         try {
           const result = await deleteRemoteGroup(client, groupId)
+          if (loadGenerationRef.current !== loadId || clientRef.current !== client) {
+            return
+          }
           setGroups((current) => current.filter((group) => group.groupId !== result.groupId))
         } catch (err) {
-          setError(err instanceof Error ? err.message : String(err))
+          if (loadGenerationRef.current === loadId && clientRef.current === client) {
+            setError(overviewErrorMessage(err, t))
+          }
         } finally {
-          setDeletingGroupId(null)
+          if (loadGenerationRef.current === loadId && clientRef.current === client) {
+            setDeletingGroupId(null)
+          }
         }
       }
 
@@ -573,11 +685,15 @@ export default function HostOverviewScreen() {
 
   const syncOverviewState = useCallback(async () => {
     const client = clientRef.current
-    if (!client || refreshing) {
+    if (!client || refreshing || syncOverviewStateInFlightRef.current) {
       return
     }
+    syncOverviewStateInFlightRef.current = true
     try {
       const overview = await loadHostOverviewData(client)
+      if (clientRef.current !== client) {
+        return
+      }
       setOverviewMode(overview.mode)
       setCanCreateWindow(overview.canCreateWindow)
       setWindows(overview.windows)
@@ -590,9 +706,16 @@ export default function HostOverviewScreen() {
       )
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (clientRef.current !== client) {
+        return
+      }
+      setError(overviewErrorMessage(err, t))
+    } finally {
+      if (clientRef.current === client) {
+        syncOverviewStateInFlightRef.current = false
+      }
     }
-  }, [refreshing])
+  }, [refreshing, t])
 
   const handleStopPane = useCallback(
     async (pane: RemotePaneSummary) => {
@@ -602,10 +725,14 @@ export default function HostOverviewScreen() {
         return
       }
       const paneKey = `${pane.windowId}:${pane.paneId}`
+      const loadId = loadGenerationRef.current
       setStoppingPaneKey(paneKey)
       setError(null)
       try {
         const result = await stopRemotePane(client, pane.windowId, pane.paneId)
+        if (loadGenerationRef.current !== loadId || clientRef.current !== client) {
+          return
+        }
         setWindows((current) =>
           current.map((window) =>
             window.windowId === result.window.windowId ? result.window : window
@@ -625,12 +752,52 @@ export default function HostOverviewScreen() {
           )
         )
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        if (loadGenerationRef.current === loadId && clientRef.current === client) {
+          setError(overviewErrorMessage(err, t))
+        }
       } finally {
-        setStoppingPaneKey(null)
+        if (loadGenerationRef.current === loadId && clientRef.current === client) {
+          setStoppingPaneKey(null)
+        }
       }
     },
     [t]
+  )
+
+  const switchToHost = useCallback(
+    async (host: HostProfile) => {
+      if (host.id === hostId) {
+        setHostSwitcherOpen(false)
+        setHostSwitchError(null)
+        return
+      }
+      if (switchingHostId) {
+        return
+      }
+
+      let client: RpcClient | null = null
+      setSwitchingHostId(host.id)
+      setHostSwitchError(null)
+      try {
+        client = connectToHost(host)
+        await withSwitchTimeout(loadHostOverviewData(client))
+        client.close()
+        client = null
+        setHostSwitcherOpen(false)
+        router.replace(`/h/${host.id}`)
+      } catch (err) {
+        client?.close()
+        setHostSwitchError(
+          t('overview.switchHostFailed', {
+            name: host.name,
+            message: err instanceof Error ? err.message : String(err)
+          })
+        )
+      } finally {
+        setSwitchingHostId(null)
+      }
+    },
+    [hostId, router, switchingHostId, t]
   )
 
   useFocusEffect(
@@ -643,15 +810,15 @@ export default function HostOverviewScreen() {
   )
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.hostTitleBlock}>
-          <View style={styles.hostTitleLine}>
-            <Text style={styles.title}>{t('nav.desktop')}</Text>
-            <View style={styles.connectionPill}>
+    <>
+      <Stack.Screen
+        options={{
+          headerTitle: '',
+          headerRight: () => (
+            <View style={styles.navActions}>
               <View
                 style={[
-                  styles.statusDot,
+                  styles.navStatusDot,
                   connectionState === 'connected'
                     ? styles.statusGreen
                     : connectionState === 'auth-failed'
@@ -659,75 +826,95 @@ export default function HostOverviewScreen() {
                       : styles.statusAmber
                 ]}
               />
-              <Text style={styles.statusText}>{connectionLabel(connectionState, t)}</Text>
-              <Text style={styles.endpoint} numberOfLines={1}>
-                {hostEndpointLabel}
-              </Text>
+              {!groupSelectionMode ? (
+                <Pressable
+                  style={[
+                    styles.navNewTerminalButton,
+                    (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
+                  ]}
+                  disabled={!canCreateWindow || creatingWindow}
+                  onPress={() => void handleCreateWindow()}
+                  accessibilityLabel={t('overview.newTerminal')}
+                >
+                  {creatingWindow ? (
+                    <ActivityIndicator color={colors.textPrimary} />
+                  ) : (
+                    <>
+                      <Plus size={17} color={colors.textPrimary} />
+                      <Text style={styles.navNewTerminalButtonText}>
+                        {t('overview.newTerminalShort')}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              ) : null}
+              {overviewMode === 'windows' || groupSelectionMode ? (
+                <Pressable
+                  style={[
+                    styles.navIconButton,
+                    ((!groupSelectionMode && !canUseGroupSelection) ||
+                      (groupSelectionMode && selectedGroupWindowIds.length < 2) ||
+                      creatingGroup) &&
+                      styles.iconButtonDisabled
+                  ]}
+                  disabled={
+                    (!groupSelectionMode && !canUseGroupSelection) ||
+                    (groupSelectionMode && selectedGroupWindowIds.length < 2) ||
+                    creatingGroup
+                  }
+                  onPress={() => void handleGroupAction()}
+                  accessibilityLabel={
+                    groupSelectionMode
+                      ? t('overview.confirmCreateGroup')
+                      : t('overview.groupSelection')
+                  }
+                >
+                  {creatingGroup ? (
+                    <ActivityIndicator color={colors.textPrimary} />
+                  ) : groupSelectionMode ? (
+                    <Check size={18} color={colors.textPrimary} />
+                  ) : (
+                    <Layers size={18} color={colors.textPrimary} />
+                  )}
+                </Pressable>
+              ) : null}
+              {groupSelectionMode ? (
+                <Pressable
+                  style={styles.navIconButton}
+                  onPress={cancelGroupSelection}
+                  accessibilityLabel={t('overview.cancelGroupSelection')}
+                >
+                  <X size={18} color={colors.textPrimary} />
+                </Pressable>
+              ) : (
+                <>
+                  <Pressable style={styles.navIconButton} onPress={() => void loadAndConnect()}>
+                    <RotateCw size={18} color={colors.textPrimary} />
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.navIconButton,
+                      (searchVisible || hasSearchQuery) && styles.iconButtonActive
+                    ]}
+                    onPress={() => setSearchVisible((visible) => !visible)}
+                    accessibilityLabel={t('overview.searchPlaceholder')}
+                  >
+                    <Search size={18} color={colors.textPrimary} />
+                  </Pressable>
+                  <Pressable
+                    style={styles.navIconButton}
+                    onPress={() => router.push(`/h/${hostId}/settings`)}
+                  >
+                    <Settings size={18} color={colors.textPrimary} />
+                  </Pressable>
+                </>
+              )}
             </View>
-          </View>
-        </View>
-        <View style={styles.headerActions}>
-          <Pressable
-            style={[
-              styles.newTerminalButton,
-              (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
-            ]}
-            disabled={!canCreateWindow || creatingWindow}
-            onPress={() => void handleCreateWindow()}
-            accessibilityLabel={t('overview.newTerminal')}
-          >
-            {creatingWindow ? (
-              <ActivityIndicator color={colors.textPrimary} />
-            ) : (
-              <>
-                <Plus size={17} color={colors.textPrimary} />
-                <Text style={styles.newTerminalButtonText}>{t('overview.newTerminalShort')}</Text>
-              </>
-            )}
-          </Pressable>
-          <Pressable
-            style={[
-              styles.iconButton,
-              ((groupSelectionMode && selectedGroupWindowIds.length < 2) || creatingGroup) && styles.iconButtonDisabled
-            ]}
-            disabled={(groupSelectionMode && selectedGroupWindowIds.length < 2) || creatingGroup}
-            onPress={() => void handleGroupAction()}
-            accessibilityLabel={groupSelectionMode ? t('overview.confirmCreateGroup') : t('overview.groupSelection')}
-          >
-            {creatingGroup ? (
-              <ActivityIndicator color={colors.textPrimary} />
-            ) : groupSelectionMode ? (
-              <Check size={18} color={colors.textPrimary} />
-            ) : (
-              <Layers size={18} color={colors.textPrimary} />
-            )}
-          </Pressable>
-          {groupSelectionMode ? (
-            <Pressable
-              style={styles.iconButton}
-              onPress={cancelGroupSelection}
-              accessibilityLabel={t('overview.cancelGroupSelection')}
-            >
-              <X size={18} color={colors.textPrimary} />
-            </Pressable>
-          ) : null}
-          <Pressable style={styles.iconButton} onPress={() => void loadAndConnect()}>
-            <RotateCw size={18} color={colors.textPrimary} />
-          </Pressable>
-          <Pressable
-            style={[styles.iconButton, (searchVisible || hasSearchQuery) && styles.iconButtonActive]}
-            onPress={() => setSearchVisible((visible) => !visible)}
-            accessibilityLabel={t('overview.searchPlaceholder')}
-          >
-            <Search size={18} color={colors.textPrimary} />
-          </Pressable>
-          <Pressable style={styles.iconButton} onPress={() => router.push(`/h/${hostId}/settings`)}>
-            <Settings size={18} color={colors.textPrimary} />
-          </Pressable>
-        </View>
-      </View>
-
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          )
+        }}
+      />
+      <View style={styles.container}>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <Text style={styles.sectionTitle}>
         {overviewMode === 'windows' ? t('overview.windowsTitle') : t('overview.terminalsTitle')}
@@ -832,7 +1019,83 @@ export default function HostOverviewScreen() {
             : renderTerminalItem(item.terminal, openTerminal, t)
         }
       />
-    </View>
+      {pairedHosts.length > 1 ? (
+        <View style={styles.hostSwitcherDock} pointerEvents="box-none">
+          {hostSwitcherOpen ? (
+            <View style={[styles.hostSwitcherPanel, { width: hostSwitcherPanelWidth }]}>
+              <View style={styles.hostSwitcherHeader}>
+                <Text style={styles.hostSwitcherTitle}>{t('overview.switchHost')}</Text>
+                <Pressable
+                  style={styles.hostSwitcherCloseButton}
+                  onPress={() => {
+                    setHostSwitcherOpen(false)
+                    setHostSwitchError(null)
+                  }}
+                  accessibilityLabel={t('common.cancel')}
+                >
+                  <X size={16} color={colors.textPrimary} />
+                </Pressable>
+              </View>
+              <ScrollView
+                style={styles.hostSwitcherList}
+                contentContainerStyle={styles.hostSwitcherListContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {pairedHosts.map((host) => {
+                  const current = host.id === hostId
+                  const switching = switchingHostId === host.id
+                  return (
+                    <Pressable
+                      key={host.id}
+                      disabled={current || switchingHostId !== null}
+                      style={({ pressed }) => [
+                        styles.hostSwitcherRow,
+                        current && styles.hostSwitcherRowCurrent,
+                        pressed && styles.pressed,
+                        switchingHostId !== null && !switching && !current && styles.disabledRow
+                      ]}
+                      onPress={() => void switchToHost(host)}
+                    >
+                      <View style={styles.hostSwitcherIcon}>
+                        {switching ? (
+                          <ActivityIndicator color={colors.textSecondary} />
+                        ) : (
+                          <Server size={16} color={colors.textPrimary} />
+                        )}
+                      </View>
+                      <View style={styles.hostSwitcherMain}>
+                        <Text style={styles.hostSwitcherName} numberOfLines={1}>
+                          {host.name}
+                        </Text>
+                        <Text style={styles.hostSwitcherEndpoint} numberOfLines={1}>
+                          {current
+                            ? t('overview.currentHost')
+                            : switching
+                              ? t('overview.switchingHost')
+                              : switcherHostEndpointLabel(host, t)}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  )
+                })}
+              </ScrollView>
+              {hostSwitchError ? (
+                <Text style={styles.hostSwitcherError}>{hostSwitchError}</Text>
+              ) : null}
+            </View>
+          ) : (
+            <Pressable
+              style={styles.hostSwitcherTab}
+              onPress={() => setHostSwitcherOpen(true)}
+              accessibilityLabel={t('overview.switchHost')}
+            >
+              <Server size={18} color={colors.bgBase} />
+            </Pressable>
+          )}
+        </View>
+      ) : null}
+      </View>
+    </>
   )
 }
 
@@ -1139,54 +1402,121 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bgBase,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg,
     gap: spacing.md
   },
-  header: {
+  hostSwitcherDock: {
+    position: 'absolute',
+    right: 0,
+    top: 104,
+    zIndex: 20,
+    elevation: 8
+  },
+  hostSwitcherTab: {
+    width: 42,
+    height: 52,
+    borderTopLeftRadius: radii.button,
+    borderBottomLeftRadius: radii.button,
+    backgroundColor: colors.surfaceBright,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  hostSwitcherPanel: {
+    width: 286,
+    maxWidth: 286,
+    borderTopLeftRadius: radii.card,
+    borderBottomLeftRadius: radii.card,
+    borderWidth: 1,
+    borderRightWidth: 0,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel,
+    padding: spacing.sm,
+    gap: spacing.sm
+  },
+  hostSwitcherHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.md
-  },
-  hostTitleBlock: {
-    flex: 1,
-    minWidth: 0
-  },
-  hostTitleLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    minWidth: 0
-  },
-  title: {
-    color: colors.textPrimary,
-    fontSize: 20,
-    fontWeight: '700'
-  },
-  endpoint: {
-    flex: 1,
-    minWidth: 0,
-    color: colors.textSecondary,
-    fontFamily: typography.monoFamily,
-    fontSize: typography.metaSize
-  },
-  headerActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
     gap: spacing.sm
   },
-  iconButton: {
-    width: 38,
-    height: 38,
+  hostSwitcherTitle: {
+    color: colors.textPrimary,
+    fontSize: typography.bodySize,
+    fontWeight: '700'
+  },
+  hostSwitcherCloseButton: {
+    width: 30,
+    height: 30,
     borderRadius: radii.button,
     backgroundColor: colors.bgRaised,
     alignItems: 'center',
     justifyContent: 'center'
   },
-  newTerminalButton: {
-    minWidth: 64,
-    height: 38,
+  hostSwitcherList: {
+    maxHeight: 320
+  },
+  hostSwitcherListContent: {
+    gap: spacing.xs
+  },
+  hostSwitcherRow: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.row,
+    backgroundColor: colors.bgRaised,
+    padding: spacing.sm
+  },
+  hostSwitcherRowCurrent: {
+    borderColor: colors.accentBlue
+  },
+  hostSwitcherIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgPanel,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  hostSwitcherMain: {
+    flex: 1,
+    minWidth: 0
+  },
+  hostSwitcherName: {
+    color: colors.textPrimary,
+    fontSize: typography.bodySize,
+    fontWeight: '700'
+  },
+  hostSwitcherEndpoint: {
+    color: colors.textSecondary,
+    fontSize: typography.metaSize,
+    marginTop: 2
+  },
+  hostSwitcherError: {
+    color: colors.statusRed,
+    fontSize: typography.metaSize,
+    lineHeight: 18
+  },
+  navActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  navIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgRaised,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  navNewTerminalButton: {
+    minWidth: 58,
+    height: 34,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1195,7 +1525,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgRaised,
     paddingHorizontal: spacing.sm
   },
-  newTerminalButtonText: {
+  navNewTerminalButtonText: {
     color: colors.textPrimary,
     fontSize: typography.metaSize,
     fontWeight: '700'
@@ -1207,23 +1537,11 @@ const styles = StyleSheet.create({
   iconButtonDisabled: {
     opacity: 0.52
   },
-  connectionPill: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    borderRadius: radii.button,
-    backgroundColor: colors.bgPanel,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4
+  navStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    marginRight: 2
   },
   statusGreen: {
     backgroundColor: colors.statusGreen
