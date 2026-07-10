@@ -35,7 +35,7 @@ export default function HostListScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerCopy}>
           <Text style={styles.title}>{t('home.welcomeTitle')}</Text>
           <Text style={styles.subtitle}>{t('home.subtitle')}</Text>
         </View>
@@ -104,15 +104,17 @@ const styles = StyleSheet.create({
     padding: spacing.lg
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'stretch',
     gap: spacing.md,
     marginBottom: spacing.lg
+  },
+  headerCopy: {
+    minWidth: 0
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: spacing.sm
   },
   title: {
@@ -123,11 +125,14 @@ const styles = StyleSheet.create({
   subtitle: {
     color: colors.textSecondary,
     fontSize: typography.bodySize,
-    marginTop: 2
+    marginTop: 2,
+    lineHeight: 20
   },
   primaryButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: spacing.xs,
     backgroundColor: colors.surfaceBright,
     borderRadius: radii.button,
@@ -142,10 +147,12 @@ const styles = StyleSheet.create({
   languageButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: spacing.xs,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
     borderRadius: radii.button,
+    minWidth: 104,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm
   },
