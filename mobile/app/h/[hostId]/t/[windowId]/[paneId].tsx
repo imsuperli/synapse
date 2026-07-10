@@ -228,7 +228,7 @@ export default function RemoteTerminalScreen() {
   const loadWindowPaneTabs = useCallback(
     async (client: RpcClient) => {
       try {
-        const windows = await requestWindowList(client)
+        const { windows } = await requestWindowList(client)
         const currentWindow = windows.find((window) => window.windowId === windowId)
         setWindowPanes(currentWindow?.panes.filter((pane) => pane.kind === 'terminal') ?? [])
         return currentWindow?.panes.find((pane) => pane.paneId === paneId && pane.kind === 'terminal') ?? null

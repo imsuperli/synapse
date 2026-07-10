@@ -3,13 +3,18 @@ import type { ProcessManager } from '../services/ProcessManager';
 import { ProcessStatus } from '../types/process';
 import type { Workspace } from '../types/workspace';
 import { WindowStatus, type LayoutNode, type Pane, type PaneBackend, type PaneKind, type Window } from '../../shared/types/window';
+import type { GroupLayoutNode, WindowGroup } from '../../shared/types/window-group';
 import type {
+  GroupCreateResult,
+  GroupDeleteResult,
   WindowCreateResult,
   WindowCloseResult,
   PaneListResult,
   PaneCloseResult,
   RemotePaneSummary,
+  RemoteWindowGroupSummary,
   RemoteWindowSummary,
+  WindowDeleteResult,
   WindowStartResult,
   WindowListResult,
 } from '../../shared/remote/window-protocol';
@@ -28,7 +33,9 @@ type RemoteStateProviderOptions = {
   }) => Promise<{ pid: number; sessionId: string; status: WindowStatus; command?: string }>;
   onWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
   stopWindowPanes?: (params: { windowId: string; paneIds: string[] }) => Promise<void> | void;
+  onWindowDeleted?: (payload: { windowId: string; paneIds: string[]; workspace: Workspace }) => void | Promise<void>;
   onWindowRuntimeUpdated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
+  onWorkspaceLayoutUpdated?: (payload: { workspace: Workspace }) => void | Promise<void>;
 };
 
 type ListOptions = {
@@ -67,13 +74,26 @@ type ClosePaneOptions = {
   paneId: string;
 };
 
+type DeleteWindowOptions = {
+  windowId: string;
+};
+
+type CreateGroupOptions = {
+  name?: string;
+  windowIds: string[];
+};
+
+type DeleteGroupOptions = {
+  groupId: string;
+};
+
 export class RemoteStateProvider {
   constructor(private readonly options: RemoteStateProviderOptions) {}
 
   listWindows(options: ListOptions = {}): WindowListResult {
     const workspace = this.options.getCurrentWorkspace();
     if (!workspace) {
-      return { windows: [] };
+      return { windows: [], groups: [] };
     }
 
     const livePaneProcesses = this.getLivePaneProcesses();
@@ -82,7 +102,10 @@ export class RemoteStateProvider {
       .map((window) => this.summarizeWindow(window, livePaneProcesses, options))
       .filter((window) => !options.terminalOnly || window.terminalPaneCount > 0);
 
-    return { windows };
+    return {
+      windows,
+      groups: this.summarizeGroups(workspace, livePaneProcesses, options),
+    };
   }
 
   listPanes(options: ListOptions = {}): PaneListResult {
@@ -174,6 +197,8 @@ export class RemoteStateProvider {
 
     const nextLivePaneProcesses = this.getLivePaneProcesses();
     const window = this.summarizeWindow(targetWindow, nextLivePaneProcesses, { terminalOnly: true });
+    markWorkspaceUpdated(workspace);
+    await this.options.onWindowRuntimeUpdated?.({ window: targetWindow, workspace });
     return {
       window,
       pane: findResultPane(window, options.paneId ?? targetWindow.activePaneId),
@@ -243,6 +268,7 @@ export class RemoteStateProvider {
       throw error;
     }
 
+    markWorkspaceUpdated(workspace);
     await this.options.onWindowCreated?.({ window, workspace });
 
     const livePaneProcesses = this.getLivePaneProcesses();
@@ -275,6 +301,7 @@ export class RemoteStateProvider {
       clearPaneRuntime(pane);
     }
     targetWindow.lastActiveAt = new Date().toISOString();
+    markWorkspaceUpdated(workspace);
     await this.options.onWindowRuntimeUpdated?.({ window: targetWindow, workspace });
 
     const summary = this.summarizeWindow(targetWindow, this.getLivePaneProcesses(), { terminalOnly: true });
@@ -306,6 +333,7 @@ export class RemoteStateProvider {
     await this.options.stopWindowPanes?.({ windowId: targetWindow.id, paneIds: [targetPane.id] });
     clearPaneRuntime(targetPane);
     targetWindow.lastActiveAt = new Date().toISOString();
+    markWorkspaceUpdated(workspace);
     await this.options.onWindowRuntimeUpdated?.({ window: targetWindow, workspace });
 
     const summary = this.summarizeWindow(targetWindow, this.getLivePaneProcesses(), { terminalOnly: true });
@@ -316,6 +344,94 @@ export class RemoteStateProvider {
     return {
       window: summary,
       pane,
+    };
+  }
+
+  async deleteWindow(options: DeleteWindowOptions): Promise<WindowDeleteResult> {
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+
+    const targetIndex = workspace.windows.findIndex((window) => window.id === options.windowId);
+    if (targetIndex < 0) {
+      throw new Error('window_not_found');
+    }
+
+    const targetWindow = workspace.windows[targetIndex]!;
+    const panes = collectPanes(targetWindow.layout);
+    const terminalPanes = panes.filter((pane) => getPaneKind(pane) === 'terminal');
+    await this.options.stopWindowPanes?.({
+      windowId: targetWindow.id,
+      paneIds: terminalPanes.map((pane) => pane.id),
+    });
+    workspace.windows.splice(targetIndex, 1);
+    workspace.groups = removeWindowFromGroups(workspace.groups, targetWindow.id);
+    markWorkspaceUpdated(workspace);
+    await this.options.onWindowDeleted?.({
+      windowId: targetWindow.id,
+      paneIds: panes.map((pane) => pane.id),
+      workspace,
+    });
+    await this.options.onWorkspaceLayoutUpdated?.({ workspace });
+
+    return {
+      deleted: true,
+      windowId: targetWindow.id,
+      groups: this.summarizeGroups(workspace, this.getLivePaneProcesses(), { terminalOnly: true }),
+    };
+  }
+
+  async createGroup(options: CreateGroupOptions): Promise<GroupCreateResult> {
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+    const windowIds = Array.from(new Set(options.windowIds));
+    if (windowIds.length < 2) {
+      throw new Error('group_requires_two_windows');
+    }
+    for (const windowId of windowIds) {
+      if (!workspace.windows.some((window) => window.id === windowId && !window.archived)) {
+        throw new Error('window_not_found');
+      }
+    }
+
+    const now = new Date().toISOString();
+    const group: WindowGroup = {
+      id: randomUUID(),
+      name: options.name?.trim() || 'Group',
+      layout: buildInitialGroupLayout(windowIds),
+      activeWindowId: windowIds[0]!,
+      createdAt: now,
+      lastActiveAt: now,
+    };
+    workspace.groups.push(group);
+    markWorkspaceUpdated(workspace);
+    await this.options.onWorkspaceLayoutUpdated?.({ workspace });
+
+    const summary = this.summarizeGroup(group, workspace, this.getLivePaneProcesses(), { terminalOnly: true });
+    if (!summary) {
+      throw new Error('group_not_found');
+    }
+    return { group: summary };
+  }
+
+  async deleteGroup(options: DeleteGroupOptions): Promise<GroupDeleteResult> {
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+    const before = workspace.groups.length;
+    workspace.groups = workspace.groups.filter((group) => group.id !== options.groupId);
+    if (workspace.groups.length === before) {
+      throw new Error('group_not_found');
+    }
+    markWorkspaceUpdated(workspace);
+    await this.options.onWorkspaceLayoutUpdated?.({ workspace });
+    return {
+      deleted: true,
+      groupId: options.groupId,
     };
   }
 
@@ -391,6 +507,47 @@ export class RemoteStateProvider {
     }
     return result;
   }
+
+  private summarizeGroups(
+    workspace: Workspace,
+    livePaneProcesses: Map<string, LivePaneProcess>,
+    options: ListOptions,
+  ): RemoteWindowGroupSummary[] {
+    return (workspace.groups ?? [])
+      .filter((group) => options.includeArchived || !group.archived)
+      .flatMap((group) => {
+        const summary = this.summarizeGroup(group, workspace, livePaneProcesses, options);
+        return summary ? [summary] : [];
+      });
+  }
+
+  private summarizeGroup(
+    group: WindowGroup,
+    workspace: Workspace,
+    livePaneProcesses: Map<string, LivePaneProcess>,
+    options: ListOptions,
+  ): RemoteWindowGroupSummary | null {
+    const memberIds = getGroupWindowIds(group.layout);
+    const windows = memberIds
+      .map((windowId) => workspace.windows.find((window) => window.id === windowId))
+      .filter((window): window is Window => isListableWindow(window, options))
+      .map((window) => this.summarizeWindow(window, livePaneProcesses, options))
+      .filter((window) => !options.terminalOnly || window.terminalPaneCount > 0);
+    if (windows.length === 0) {
+      return null;
+    }
+    return {
+      groupId: group.id,
+      name: group.name,
+      archived: group.archived === true,
+      activeWindowId: group.activeWindowId,
+      createdAt: group.createdAt,
+      lastActiveAt: group.lastActiveAt,
+      windowCount: memberIds.length,
+      layout: group.layout,
+      windows,
+    };
+  }
 }
 
 function collectPanes(layout: LayoutNode): Pane[] {
@@ -442,4 +599,69 @@ function getDefaultWindowName(workingDirectory: string): string {
   const normalized = workingDirectory.replace(/[\\/]+$/, '');
   const parts = normalized.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) || 'Terminal';
+}
+
+function markWorkspaceUpdated(workspace: Workspace): void {
+  workspace.lastSavedAt = new Date().toISOString();
+}
+
+function isListableWindow(window: Window | undefined, options: ListOptions): window is Window {
+  return Boolean(window) && (options.includeArchived === true || window?.archived !== true);
+}
+
+function buildInitialGroupLayout(windowIds: string[]): GroupLayoutNode {
+  return {
+    type: 'split',
+    direction: 'horizontal',
+    sizes: windowIds.map(() => 1 / windowIds.length),
+    children: windowIds.map((id) => ({ type: 'window', id })),
+  };
+}
+
+function getGroupWindowIds(layout: GroupLayoutNode): string[] {
+  if (layout.type === 'window') {
+    return [layout.id];
+  }
+  return layout.children.flatMap((child) => getGroupWindowIds(child));
+}
+
+function removeWindowFromGroups(groups: WindowGroup[], windowId: string): WindowGroup[] {
+  return groups.flatMap((group) => {
+    const nextLayout = removeWindowFromGroupLayout(group.layout, windowId);
+    const nextWindowIds = nextLayout ? getGroupWindowIds(nextLayout) : [];
+    if (!nextLayout || nextWindowIds.length < 2) {
+      return [];
+    }
+    return [{
+      ...group,
+      layout: nextLayout,
+      activeWindowId: nextWindowIds.includes(group.activeWindowId)
+        ? group.activeWindowId
+        : nextWindowIds[0]!,
+      lastActiveAt: new Date().toISOString(),
+    }];
+  });
+}
+
+function removeWindowFromGroupLayout(layout: GroupLayoutNode, windowId: string): GroupLayoutNode | null {
+  if (layout.type === 'window') {
+    return layout.id === windowId ? null : layout;
+  }
+  const nextChildren = layout.children
+    .map((child) => removeWindowFromGroupLayout(child, windowId))
+    .filter((child): child is GroupLayoutNode => child !== null);
+  if (nextChildren.length === layout.children.length) {
+    return layout;
+  }
+  if (nextChildren.length === 0) {
+    return null;
+  }
+  if (nextChildren.length === 1) {
+    return nextChildren[0]!;
+  }
+  return {
+    ...layout,
+    children: nextChildren,
+    sizes: nextChildren.map(() => 1 / nextChildren.length),
+  };
 }

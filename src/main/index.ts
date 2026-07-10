@@ -583,6 +583,14 @@ if (hasSingleInstanceLock) {
       console.error('[Main] ConPTY DLL warmup failed:', error);
     });
 
+    const publishRemoteWorkspaceUpdate = (workspace: Workspace) => {
+      currentWorkspace = workspace;
+      autoSaveManager?.triggerSave();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('workspace-loaded', workspace);
+      }
+    };
+
     remoteGateway = new RemoteGateway({
       processManager,
       userDataPath: app.getPath('userData'),
@@ -615,16 +623,21 @@ if (hasSingleInstanceLock) {
         });
       },
       onRemoteWindowCreated: ({ workspace }) => {
-        currentWorkspace = workspace;
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('workspace-loaded', workspace);
+        publishRemoteWorkspaceUpdate(workspace);
+      },
+      onRemoteWindowDeleted: ({ windowId, paneIds, workspace }) => {
+        for (const paneId of paneIds) {
+          ptySubscriptionManager?.remove(paneId);
         }
+        statusPoller?.removeWindow(windowId);
+        gitBranchWatcher?.unwatch(windowId);
+        projectConfigWatcher?.stopWatching(windowId);
       },
       onRemoteWindowRuntimeUpdated: ({ workspace }) => {
-        currentWorkspace = workspace;
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('workspace-loaded', workspace);
-        }
+        publishRemoteWorkspaceUpdate(workspace);
+      },
+      onRemoteWorkspaceLayoutUpdated: ({ workspace }) => {
+        publishRemoteWorkspaceUpdate(workspace);
       },
     });
     await remoteGateway.startFromSavedSettings().catch((error) => {

@@ -19,10 +19,13 @@ import {
   TerminalSubscribeParamsSchema,
 } from '../../shared/remote/terminal-protocol';
 import {
+  GroupCreateParamsSchema,
+  GroupDeleteParamsSchema,
   PaneCloseParamsSchema,
   PaneListParamsSchema,
   WindowCloseParamsSchema,
   WindowCreateParamsSchema,
+  WindowDeleteParamsSchema,
   WindowListParamsSchema,
   WindowStartParamsSchema,
 } from '../../shared/remote/window-protocol';
@@ -289,6 +292,30 @@ export class RemoteDispatcher {
         handler: (params) => {
           const typed = WindowCloseParamsSchema.parse(params);
           return stateProvider.closeWindow(typed);
+        },
+      });
+
+      this.methods.set(REMOTE_METHODS.WINDOW_DELETE, {
+        params: WindowDeleteParamsSchema,
+        handler: (params) => {
+          const typed = WindowDeleteParamsSchema.parse(params);
+          return stateProvider.deleteWindow(typed);
+        },
+      });
+
+      this.methods.set(REMOTE_METHODS.GROUP_CREATE, {
+        params: GroupCreateParamsSchema,
+        handler: (params) => {
+          const typed = GroupCreateParamsSchema.parse(params);
+          return stateProvider.createGroup(typed);
+        },
+      });
+
+      this.methods.set(REMOTE_METHODS.GROUP_DELETE, {
+        params: GroupDeleteParamsSchema,
+        handler: (params) => {
+          const typed = GroupDeleteParamsSchema.parse(params);
+          return stateProvider.deleteGroup(typed);
         },
       });
 

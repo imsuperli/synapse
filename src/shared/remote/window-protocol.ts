@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { PaneBackend, PaneKind, WindowKind, WindowStatus } from '../types/window';
+import type { GroupLayoutNode } from '../types/window-group';
 
 export type RemotePaneSummary = {
   windowId: string;
@@ -29,8 +30,21 @@ export type RemoteWindowSummary = {
   panes: RemotePaneSummary[];
 };
 
+export type RemoteWindowGroupSummary = {
+  groupId: string;
+  name: string;
+  archived: boolean;
+  activeWindowId: string;
+  createdAt: string;
+  lastActiveAt: string;
+  windowCount: number;
+  layout: GroupLayoutNode;
+  windows: RemoteWindowSummary[];
+};
+
 export type WindowListResult = {
   windows: RemoteWindowSummary[];
+  groups: RemoteWindowGroupSummary[];
 };
 
 export type PaneListResult = {
@@ -56,6 +70,21 @@ export type WindowCloseResult = {
 export type PaneCloseResult = {
   window: RemoteWindowSummary;
   pane: RemotePaneSummary;
+};
+
+export type WindowDeleteResult = {
+  deleted: true;
+  windowId: string;
+  groups: RemoteWindowGroupSummary[];
+};
+
+export type GroupCreateResult = {
+  group: RemoteWindowGroupSummary;
+};
+
+export type GroupDeleteResult = {
+  deleted: true;
+  groupId: string;
 };
 
 export const WindowListParamsSchema = z.object({
@@ -91,4 +120,17 @@ export const WindowCloseParamsSchema = z.object({
 export const PaneCloseParamsSchema = z.object({
   windowId: z.string().min(1),
   paneId: z.string().min(1),
+}).strict();
+
+export const WindowDeleteParamsSchema = z.object({
+  windowId: z.string().min(1),
+}).strict();
+
+export const GroupCreateParamsSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  windowIds: z.array(z.string().min(1)).min(2).max(12),
+}).strict();
+
+export const GroupDeleteParamsSchema = z.object({
+  groupId: z.string().min(1),
 }).strict();

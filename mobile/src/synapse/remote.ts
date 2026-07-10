@@ -6,8 +6,12 @@ import type {
   RemotePaneSummary,
   RemoteWindowSummary,
   PaneCloseResult,
+  GroupCreateResult,
+  GroupDeleteResult,
   WindowCreateResult,
   WindowCloseResult,
+  WindowDeleteResult,
+  RemoteWindowGroupSummary,
   WindowStartResult
 } from '../../../src/shared/remote/window-protocol'
 import { WindowStatus, type PaneBackend, type PaneKind, type WindowKind } from '../../../src/shared/types/window'
@@ -17,8 +21,12 @@ export type {
   RemotePaneSummary,
   RemoteWindowSummary,
   PaneCloseResult,
+  GroupCreateResult,
+  GroupDeleteResult,
   WindowCreateResult,
   WindowCloseResult,
+  WindowDeleteResult,
+  RemoteWindowGroupSummary,
   WindowStartResult
 }
 
@@ -76,6 +84,11 @@ export type TerminalClearResult = {
   lastSeq: number
 }
 
+export type WindowListResponse = {
+  windows: RemoteWindowSummary[]
+  groups: RemoteWindowGroupSummary[]
+}
+
 export async function loadHostById(hostId: string): Promise<HostProfile | null> {
   const hosts = await loadHosts()
   return hosts.find((host) => host.id === hostId) ?? null
@@ -127,7 +140,7 @@ export async function requestTerminalList(client: RpcClient): Promise<RemoteTerm
   return parseTerminalList(response)
 }
 
-export async function requestWindowList(client: RpcClient): Promise<RemoteWindowSummary[]> {
+export async function requestWindowList(client: RpcClient): Promise<WindowListResponse> {
   const response = await client.sendRequest('window.list', { terminalOnly: true })
   if (!response.ok) {
     throw new Error(response.error.message)
@@ -179,6 +192,43 @@ export async function stopRemotePane(
     throw new Error(response.error.message)
   }
   return parsePaneCloseResult(response.result)
+}
+
+export async function deleteRemoteWindow(
+  client: RpcClient,
+  windowId: string
+): Promise<WindowDeleteResult> {
+  const response = await client.sendRequest('window.delete', { windowId })
+  if (!response.ok) {
+    throw new Error(response.error.message)
+  }
+  return parseWindowDeleteResult(response.result)
+}
+
+export async function createRemoteGroup(
+  client: RpcClient,
+  windowIds: string[],
+  name?: string
+): Promise<GroupCreateResult> {
+  const response = await client.sendRequest('group.create', {
+    windowIds,
+    ...(name?.trim() ? { name: name.trim() } : {})
+  })
+  if (!response.ok) {
+    throw new Error(response.error.message)
+  }
+  return parseGroupCreateResult(response.result)
+}
+
+export async function deleteRemoteGroup(
+  client: RpcClient,
+  groupId: string
+): Promise<GroupDeleteResult> {
+  const response = await client.sendRequest('group.delete', { groupId })
+  if (!response.ok) {
+    throw new Error(response.error.message)
+  }
+  return parseGroupDeleteResult(response.result)
 }
 
 export async function requestTerminalHistory(
@@ -288,15 +338,12 @@ export function parseTerminalList(response: RpcResponse): RemoteTerminalSummary[
   })
 }
 
-export function parseWindowList(value: unknown): RemoteWindowSummary[] {
+export function parseWindowList(value: unknown): WindowListResponse {
   if (!value || typeof value !== 'object') {
-    return []
+    return { windows: [], groups: [] }
   }
   const result = value as Record<string, unknown>
-  if (!Array.isArray(result.windows)) {
-    return []
-  }
-  return result.windows.flatMap((window) => {
+  const windows = Array.isArray(result.windows) ? result.windows.flatMap((window) => {
     if (!window || typeof window !== 'object') {
       return []
     }
@@ -324,7 +371,11 @@ export function parseWindowList(value: unknown): RemoteWindowSummary[] {
         panes
       }
     ]
-  })
+  }) : []
+  const groups = Array.isArray(result.groups)
+    ? result.groups.flatMap((group) => parseRemoteWindowGroupSummary(group, windows))
+    : []
+  return { windows, groups }
 }
 
 export function parseWindowStartResult(value: unknown): WindowStartResult {
@@ -332,7 +383,7 @@ export function parseWindowStartResult(value: unknown): WindowStartResult {
     throw new Error('Invalid window start response')
   }
   const result = value as Record<string, unknown>
-  const windows = parseWindowList({ windows: [result.window] })
+  const { windows } = parseWindowList({ windows: [result.window] })
   if (windows.length === 0) {
     throw new Error('Invalid window start response')
   }
@@ -352,7 +403,7 @@ export function parseWindowCreateResult(value: unknown): WindowCreateResult {
     throw new Error('Invalid window create response')
   }
   const result = value as Record<string, unknown>
-  const windows = parseWindowList({ windows: [result.window] })
+  const { windows } = parseWindowList({ windows: [result.window] })
   const pane = parseRemotePaneSummary(result.pane)[0] ?? null
   if (windows.length === 0 || !pane) {
     throw new Error('Invalid window create response')
@@ -368,7 +419,7 @@ export function parseWindowCloseResult(value: unknown): WindowCloseResult {
     throw new Error('Invalid window close response')
   }
   const result = value as Record<string, unknown>
-  const windows = parseWindowList({ windows: [result.window] })
+  const { windows } = parseWindowList({ windows: [result.window] })
   if (windows.length === 0) {
     throw new Error('Invalid window close response')
   }
@@ -386,7 +437,7 @@ export function parsePaneCloseResult(value: unknown): PaneCloseResult {
     throw new Error('Invalid pane close response')
   }
   const result = value as Record<string, unknown>
-  const windows = parseWindowList({ windows: [result.window] })
+  const { windows } = parseWindowList({ windows: [result.window] })
   const pane = parseRemotePaneSummary(result.pane)[0] ?? null
   if (windows.length === 0 || !pane) {
     throw new Error('Invalid pane close response')
@@ -395,6 +446,110 @@ export function parsePaneCloseResult(value: unknown): PaneCloseResult {
     window: windows[0]!,
     pane
   }
+}
+
+export function parseWindowDeleteResult(value: unknown): WindowDeleteResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid window delete response')
+  }
+  const result = value as Record<string, unknown>
+  if (result.deleted !== true || typeof result.windowId !== 'string') {
+    throw new Error('Invalid window delete response')
+  }
+  const groups = Array.isArray(result.groups)
+    ? result.groups.flatMap((group) => parseRemoteWindowGroupSummary(group, []))
+    : []
+  return {
+    deleted: true,
+    windowId: result.windowId,
+    groups
+  }
+}
+
+export function parseGroupCreateResult(value: unknown): GroupCreateResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid group create response')
+  }
+  const group = parseRemoteWindowGroupSummary((value as Record<string, unknown>).group, [])[0] ?? null
+  if (!group) {
+    throw new Error('Invalid group create response')
+  }
+  return { group }
+}
+
+export function parseGroupDeleteResult(value: unknown): GroupDeleteResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid group delete response')
+  }
+  const result = value as Record<string, unknown>
+  if (result.deleted !== true || typeof result.groupId !== 'string') {
+    throw new Error('Invalid group delete response')
+  }
+  return {
+    deleted: true,
+    groupId: result.groupId
+  }
+}
+
+function parseRemoteWindowGroupSummary(
+  value: unknown,
+  fallbackWindows: RemoteWindowSummary[]
+): RemoteWindowGroupSummary[] {
+  if (!value || typeof value !== 'object') {
+    return []
+  }
+  const item = value as Record<string, unknown>
+  if (typeof item.groupId !== 'string' || typeof item.name !== 'string') {
+    return []
+  }
+  const windows = Array.isArray(item.windows)
+    ? parseWindowList({ windows: item.windows }).windows
+    : fallbackWindows.filter((window) => groupLayoutContainsWindow(item.layout, window.windowId))
+  return [
+    {
+      groupId: item.groupId,
+      name: item.name,
+      archived: item.archived === true,
+      activeWindowId: typeof item.activeWindowId === 'string' ? item.activeWindowId : '',
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : '',
+      lastActiveAt: typeof item.lastActiveAt === 'string' ? item.lastActiveAt : '',
+      windowCount: typeof item.windowCount === 'number' ? item.windowCount : windows.length,
+      layout: isGroupLayoutNode(item.layout) ? item.layout : { type: 'window', id: windows[0]?.windowId ?? '' },
+      windows
+    }
+  ]
+}
+
+function groupLayoutContainsWindow(layout: unknown, windowId: string): boolean {
+  if (!layout || typeof layout !== 'object') {
+    return false
+  }
+  const node = layout as Record<string, unknown>
+  if (node.type === 'window') {
+    return node.id === windowId
+  }
+  if (node.type === 'split' && Array.isArray(node.children)) {
+    return node.children.some((child) => groupLayoutContainsWindow(child, windowId))
+  }
+  return false
+}
+
+function isGroupLayoutNode(value: unknown): value is RemoteWindowGroupSummary['layout'] {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const node = value as Record<string, unknown>
+  if (node.type === 'window') {
+    return typeof node.id === 'string'
+  }
+  return (
+    node.type === 'split' &&
+    (node.direction === 'horizontal' || node.direction === 'vertical') &&
+    Array.isArray(node.sizes) &&
+    node.sizes.every((size) => typeof size === 'number') &&
+    Array.isArray(node.children) &&
+    node.children.every((child) => isGroupLayoutNode(child))
+  )
 }
 
 function parseRemotePaneSummary(value: unknown): RemotePaneSummary[] {

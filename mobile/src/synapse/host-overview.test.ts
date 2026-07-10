@@ -74,6 +74,7 @@ describe('Synapse Mobile host overview data', () => {
       mode: 'terminals',
       deviceScope: 'mobile.control',
       canCreateWindow: false,
+      groups: [],
       terminals: [{ windowId: 'w1', paneId: 'p1' }]
     })
     expect(client.sendRequest).not.toHaveBeenCalledWith('window.list', expect.anything())
@@ -125,6 +126,46 @@ describe('Synapse Mobile host overview data', () => {
                 }
               ]
             }
+          ],
+          groups: [
+            {
+              groupId: 'g1',
+              name: 'Phone Group',
+              archived: false,
+              activeWindowId: 'w1',
+              createdAt: '2026-07-08T00:00:00.000Z',
+              lastActiveAt: '2026-07-08T00:00:00.000Z',
+              windowCount: 1,
+              layout: { type: 'window', id: 'w1' },
+              windows: [
+                {
+                  windowId: 'w1',
+                  name: 'Workspace',
+                  kind: 'local',
+                  archived: false,
+                  activePaneId: 'p1',
+                  createdAt: '2026-07-08T00:00:00.000Z',
+                  lastActiveAt: '2026-07-08T00:00:00.000Z',
+                  paneCount: 1,
+                  terminalPaneCount: 1,
+                  panes: [
+                    {
+                      windowId: 'w1',
+                      paneId: 'p1',
+                      active: true,
+                      kind: 'terminal',
+                      backend: 'local',
+                      status: 'waiting',
+                      running: true,
+                      pid: 8,
+                      sessionId: 's1',
+                      cwd: '/repo',
+                      command: 'bash'
+                    }
+                  ]
+                }
+              ]
+            }
           ]
         }
       }
@@ -135,6 +176,7 @@ describe('Synapse Mobile host overview data', () => {
       deviceScope: 'mobile.window-control',
       canCreateWindow: true,
       windows: [{ windowId: 'w1', name: 'Workspace' }],
+      groups: [{ groupId: 'g1', name: 'Phone Group' }],
       terminals: [{ windowId: 'w1', paneId: 'p1', pid: 8 }]
     })
     expect(client.sendRequest).toHaveBeenCalledWith('window.list', { terminalOnly: true })

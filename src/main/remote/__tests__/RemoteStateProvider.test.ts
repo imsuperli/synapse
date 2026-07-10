@@ -66,6 +66,7 @@ describe('RemoteStateProvider', () => {
           ],
         },
       ],
+      groups: [],
     });
   });
 
@@ -97,6 +98,31 @@ describe('RemoteStateProvider', () => {
     expect(provider.listWindows({ includeArchived: true }).windows.map((window) => window.windowId)).toEqual([
       'win-1',
       'win-archived',
+    ]);
+  });
+
+  it('includes group summaries with current member window state', () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createTerminalWindow('win-local', 'Local'));
+    workspace.groups = [
+      createGroupFixture('group-1', ['win-1', 'win-local']),
+    ];
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+    });
+
+    expect(provider.listWindows({ terminalOnly: true }).groups).toEqual([
+      expect.objectContaining({
+        groupId: 'group-1',
+        name: 'Mobile Group',
+        activeWindowId: 'win-1',
+        windowCount: 2,
+        windows: [
+          expect.objectContaining({ windowId: 'win-1', panes: [expect.objectContaining({ paneId: 'pane-terminal' })] }),
+          expect.objectContaining({ windowId: 'win-local', panes: [expect.objectContaining({ paneId: 'win-local-pane' })] }),
+        ],
+      }),
     ]);
   });
 
@@ -132,7 +158,7 @@ describe('RemoteStateProvider', () => {
       processManager: { listProcesses: vi.fn(() => []) } as any,
     });
 
-    expect(provider.listWindows()).toEqual({ windows: [] });
+    expect(provider.listWindows()).toEqual({ windows: [], groups: [] });
     expect(provider.listPanes()).toEqual({ panes: [] });
   });
 
@@ -357,6 +383,89 @@ describe('RemoteStateProvider', () => {
       }),
     ]);
   });
+
+  it('deletes a window and removes dissolved group references', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createRunningTerminalWindow('win-local', 'Local'));
+    workspace.windows.push(createTerminalWindow('win-peer', 'Peer'));
+    workspace.groups = [
+      createGroupFixture('group-1', ['win-local', 'win-peer']),
+    ];
+    const stopWindowPanes = vi.fn();
+    const onWindowDeleted = vi.fn();
+    const onWorkspaceLayoutUpdated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes,
+      onWindowDeleted,
+      onWorkspaceLayoutUpdated,
+    });
+
+    const result = await provider.deleteWindow({ windowId: 'win-local' });
+
+    expect(result).toEqual({
+      deleted: true,
+      windowId: 'win-local',
+      groups: [],
+    });
+    expect(stopWindowPanes).toHaveBeenCalledWith({
+      windowId: 'win-local',
+      paneIds: ['win-local-pane'],
+    });
+    expect(workspace.windows.map((window) => window.id)).not.toContain('win-local');
+    expect(workspace.groups).toEqual([]);
+    expect(onWindowDeleted).toHaveBeenCalledWith({
+      windowId: 'win-local',
+      paneIds: ['win-local-pane'],
+      workspace,
+    });
+    expect(onWorkspaceLayoutUpdated).toHaveBeenCalledWith({ workspace });
+  });
+
+  it('creates and deletes groups from mobile window-control requests', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createTerminalWindow('win-local', 'Local'));
+    workspace.windows.push(createTerminalWindow('win-peer', 'Peer'));
+    const onWorkspaceLayoutUpdated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      onWorkspaceLayoutUpdated,
+    });
+
+    const createResult = await provider.createGroup({
+      name: 'Phone Group',
+      windowIds: ['win-local', 'win-peer', 'win-local'],
+    });
+
+    expect(createResult.group).toMatchObject({
+      name: 'Phone Group',
+      activeWindowId: 'win-local',
+      windowCount: 2,
+      windows: [
+        expect.objectContaining({ windowId: 'win-local' }),
+        expect.objectContaining({ windowId: 'win-peer' }),
+      ],
+    });
+    expect(workspace.groups).toHaveLength(1);
+    expect(workspace.groups[0]?.layout).toMatchObject({
+      type: 'split',
+      direction: 'horizontal',
+      children: [
+        { type: 'window', id: 'win-local' },
+        { type: 'window', id: 'win-peer' },
+      ],
+    });
+    expect(onWorkspaceLayoutUpdated).toHaveBeenCalledWith({ workspace });
+
+    const groupId = createResult.group.groupId;
+    await expect(provider.deleteGroup({ groupId })).resolves.toEqual({
+      deleted: true,
+      groupId,
+    });
+    expect(workspace.groups).toEqual([]);
+  });
 });
 
 function createWorkspace(): Workspace {
@@ -464,4 +573,20 @@ function createRunningTerminalWindow(id: string, name: string): Window {
     window.layout.pane.sessionId = 'session-999';
   }
   return window;
+}
+
+function createGroupFixture(id: string, windowIds: string[]) {
+  return {
+    id,
+    name: 'Mobile Group',
+    activeWindowId: windowIds[0]!,
+    createdAt: '2026-07-08T02:00:00.000Z',
+    lastActiveAt: '2026-07-08T02:00:00.000Z',
+    layout: {
+      type: 'split' as const,
+      direction: 'horizontal' as const,
+      sizes: windowIds.map(() => 1 / windowIds.length),
+      children: windowIds.map((windowId) => ({ type: 'window' as const, id: windowId })),
+    },
+  };
 }

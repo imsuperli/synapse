@@ -12,8 +12,14 @@ vi.mock('../transport/rpc-client', () => ({
 import {
   clearTerminal,
   connectToHost,
+  createRemoteGroup,
   createRemoteWindow,
+  deleteRemoteGroup,
+  deleteRemoteWindow,
+  parseGroupCreateResult,
+  parseGroupDeleteResult,
   parseWindowCreateResult,
+  parseWindowDeleteResult,
   parsePaneCloseResult,
   parseTerminalClearResult,
   parseTerminalHistory,
@@ -21,6 +27,8 @@ import {
   parseTerminalOutputEvent,
   parseTerminalSubscribeResult,
   parseWindowCloseResult,
+  parseWindowList,
+  requestWindowList,
   requestTerminalHistory,
   requestTerminalList,
   sendTerminalInput,
@@ -333,6 +341,57 @@ describe('Synapse remote terminal helpers', () => {
     expect(client.sendRequest).toHaveBeenCalledWith('window.create', {})
   })
 
+  it('parses window lists with group summaries', () => {
+    const windowPayload = {
+      windowId: 'w1',
+      name: 'Workspace',
+      kind: 'local',
+      archived: false,
+      activePaneId: 'p1',
+      createdAt: '2026-07-08T00:00:00.000Z',
+      lastActiveAt: '2026-07-08T00:00:00.000Z',
+      paneCount: 1,
+      terminalPaneCount: 1,
+      panes: [
+        {
+          windowId: 'w1',
+          paneId: 'p1',
+          active: true,
+          kind: 'terminal',
+          backend: 'local',
+          status: 'waiting',
+          running: true,
+          pid: 42,
+          sessionId: 's1',
+          cwd: '/repo',
+          command: 'bash'
+        }
+      ]
+    }
+
+    expect(
+      parseWindowList({
+        windows: [windowPayload],
+        groups: [
+          {
+            groupId: 'g1',
+            name: 'Phone Group',
+            archived: false,
+            activeWindowId: 'w1',
+            createdAt: '2026-07-08T00:00:00.000Z',
+            lastActiveAt: '2026-07-08T00:00:00.000Z',
+            windowCount: 1,
+            layout: { type: 'window', id: 'w1' },
+            windows: [windowPayload]
+          }
+        ]
+      })
+    ).toMatchObject({
+      windows: [{ windowId: 'w1', panes: [{ paneId: 'p1', running: true }] }],
+      groups: [{ groupId: 'g1', windows: [{ windowId: 'w1' }] }]
+    })
+  })
+
   it('stops remote windows and panes through the window close RPCs', async () => {
     const windowClosePayload = {
       window: {
@@ -398,6 +457,88 @@ describe('Synapse remote terminal helpers', () => {
       windowId: 'w1',
       paneId: 'p1'
     })
+  })
+
+  it('deletes windows and manages groups through window-control RPCs', async () => {
+    const groupCreatePayload = {
+      group: {
+        groupId: 'g1',
+        name: 'Phone Group',
+        archived: false,
+        activeWindowId: 'w1',
+        createdAt: '2026-07-08T00:00:00.000Z',
+        lastActiveAt: '2026-07-08T00:00:00.000Z',
+        windowCount: 2,
+        layout: {
+          type: 'split',
+          direction: 'horizontal',
+          sizes: [0.5, 0.5],
+          children: [
+            { type: 'window', id: 'w1' },
+            { type: 'window', id: 'w2' }
+          ]
+        },
+        windows: []
+      }
+    }
+    const deleteWindowClient = mockClient({
+      id: 'rpc-1',
+      ok: true,
+      result: { deleted: true, windowId: 'w1', groups: [] }
+    })
+    const createGroupClient = mockClient({
+      id: 'rpc-2',
+      ok: true,
+      result: groupCreatePayload
+    })
+    const deleteGroupClient = mockClient({
+      id: 'rpc-3',
+      ok: true,
+      result: { deleted: true, groupId: 'g1' }
+    })
+
+    await expect(deleteRemoteWindow(deleteWindowClient, 'w1')).resolves.toEqual({
+      deleted: true,
+      windowId: 'w1',
+      groups: []
+    })
+    await expect(createRemoteGroup(createGroupClient, ['w1', 'w2'], 'Phone Group')).resolves.toMatchObject({
+      group: { groupId: 'g1', name: 'Phone Group', windowCount: 2 }
+    })
+    await expect(deleteRemoteGroup(deleteGroupClient, 'g1')).resolves.toEqual({
+      deleted: true,
+      groupId: 'g1'
+    })
+
+    expect(parseWindowDeleteResult({ deleted: true, windowId: 'w1', groups: [] })).toEqual({
+      deleted: true,
+      windowId: 'w1',
+      groups: []
+    })
+    expect(parseGroupCreateResult(groupCreatePayload)).toMatchObject({
+      group: { groupId: 'g1', name: 'Phone Group', windowCount: 2 }
+    })
+    expect(parseGroupDeleteResult({ deleted: true, groupId: 'g1' })).toEqual({
+      deleted: true,
+      groupId: 'g1'
+    })
+    expect(deleteWindowClient.sendRequest).toHaveBeenCalledWith('window.delete', { windowId: 'w1' })
+    expect(createGroupClient.sendRequest).toHaveBeenCalledWith('group.create', {
+      windowIds: ['w1', 'w2'],
+      name: 'Phone Group'
+    })
+    expect(deleteGroupClient.sendRequest).toHaveBeenCalledWith('group.delete', { groupId: 'g1' })
+  })
+
+  it('requests window lists with terminal-only summaries', async () => {
+    const client = mockClient({
+      id: 'rpc-1',
+      ok: true,
+      result: { windows: [], groups: [] }
+    })
+
+    await expect(requestWindowList(client)).resolves.toEqual({ windows: [], groups: [] })
+    expect(client.sendRequest).toHaveBeenCalledWith('window.list', { terminalOnly: true })
   })
 
   it('rejects malformed window create responses', () => {

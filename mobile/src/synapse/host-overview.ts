@@ -6,6 +6,7 @@ import {
   requestWindowList,
   type RemoteDeviceScope,
   type RemoteTerminalSummary,
+  type RemoteWindowGroupSummary,
   type RemoteWindowSummary
 } from './remote'
 
@@ -15,6 +16,7 @@ export type HostOverviewData =
       deviceScope: RemoteDeviceScope
       canCreateWindow: boolean
       windows: RemoteWindowSummary[]
+      groups: RemoteWindowGroupSummary[]
       terminals: RemoteTerminalSummary[]
     }
   | {
@@ -22,6 +24,7 @@ export type HostOverviewData =
       deviceScope: RemoteDeviceScope
       canCreateWindow: boolean
       windows: RemoteWindowSummary[]
+      groups: RemoteWindowGroupSummary[]
       terminals: RemoteTerminalSummary[]
     }
 
@@ -33,12 +36,13 @@ export async function loadHostOverviewData(client: RpcClient): Promise<HostOverv
     requestRemoteCapabilities(client)
   ])
   if (canUseWindowList(status.deviceScope, capabilities.methods)) {
-    const windows = await requestWindowList(client)
+    const { windows, groups } = await requestWindowList(client)
     return {
       mode: 'windows',
       deviceScope: status.deviceScope,
       canCreateWindow: canCreateWindow(status.deviceScope, capabilities.methods),
       windows,
+      groups,
       terminals: flattenTerminalPanes(windows)
     }
   }
@@ -49,6 +53,7 @@ export async function loadHostOverviewData(client: RpcClient): Promise<HostOverv
     deviceScope: status.deviceScope,
     canCreateWindow: canCreateWindow(status.deviceScope, capabilities.methods),
     windows: [],
+    groups: [],
     terminals
   }
 }

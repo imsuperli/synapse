@@ -41,6 +41,9 @@ describe('RemoteDispatcher', () => {
         startWindow?: ReturnType<typeof vi.fn>;
         closeWindow?: ReturnType<typeof vi.fn>;
         closePane?: ReturnType<typeof vi.fn>;
+        deleteWindow?: ReturnType<typeof vi.fn>;
+        createGroup?: ReturnType<typeof vi.fn>;
+        deleteGroup?: ReturnType<typeof vi.fn>;
       };
     } = {},
   ) {
@@ -664,6 +667,78 @@ describe('RemoteDispatcher', () => {
     });
     expect(stateProvider.closeWindow).toHaveBeenCalledWith({ windowId: 'win-1' });
     expect(stateProvider.closePane).toHaveBeenCalledWith({ windowId: 'win-1', paneId: 'pane-1' });
+  });
+
+  it('deletes windows and manages groups through the state provider for window-control devices', async () => {
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      startWindow: vi.fn(),
+      createWindow: vi.fn(),
+      closeWindow: vi.fn(),
+      closePane: vi.fn(),
+      deleteWindow: vi.fn(() => ({
+        deleted: true,
+        windowId: 'win-1',
+        groups: [],
+      })),
+      createGroup: vi.fn(() => ({
+        group: {
+          groupId: 'group-1',
+          name: 'Phone Group',
+          archived: false,
+          activeWindowId: 'win-1',
+          createdAt: '2026-07-08T00:00:00.000Z',
+          lastActiveAt: '2026-07-08T00:00:00.000Z',
+          windowCount: 2,
+          layout: {
+            type: 'split',
+            direction: 'horizontal',
+            sizes: [0.5, 0.5],
+            children: [
+              { type: 'window', id: 'win-1' },
+              { type: 'window', id: 'win-2' },
+            ],
+          },
+          windows: [],
+        },
+      })),
+      deleteGroup: vi.fn(() => ({
+        deleted: true,
+        groupId: 'group-1',
+      })),
+    };
+    const harness = createHarness('mobile.window-control', { stateProvider });
+
+    const deleteWindowResponse = await dispatch(harness, REMOTE_METHODS.WINDOW_DELETE, {
+      windowId: 'win-1',
+    });
+    const createGroupResponse = await dispatch(harness, REMOTE_METHODS.GROUP_CREATE, {
+      name: 'Phone Group',
+      windowIds: ['win-1', 'win-2'],
+    });
+    const deleteGroupResponse = await dispatch(harness, REMOTE_METHODS.GROUP_DELETE, {
+      groupId: 'group-1',
+    });
+
+    expect(deleteWindowResponse).toMatchObject({
+      ok: true,
+      result: { deleted: true, windowId: 'win-1' },
+    });
+    expect(createGroupResponse).toMatchObject({
+      ok: true,
+      result: { group: { groupId: 'group-1', name: 'Phone Group' } },
+    });
+    expect(deleteGroupResponse).toMatchObject({
+      ok: true,
+      result: { deleted: true, groupId: 'group-1' },
+    });
+    expect(stateProvider.deleteWindow).toHaveBeenCalledWith({ windowId: 'win-1' });
+    expect(stateProvider.createGroup).toHaveBeenCalledWith({
+      name: 'Phone Group',
+      windowIds: ['win-1', 'win-2'],
+    });
+    expect(stateProvider.deleteGroup).toHaveBeenCalledWith({ groupId: 'group-1' });
   });
 
   it('does not advertise window methods when no state provider is registered', async () => {

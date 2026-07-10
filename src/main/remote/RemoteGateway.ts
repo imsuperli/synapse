@@ -44,7 +44,9 @@ type RemoteGatewayOptions = {
   onPanePtyUnsubscribe?: (paneId: string) => void;
   onLocalPaneStarted?: (payload: { windowId: string; workingDirectory: string }) => void | Promise<void>;
   onRemoteWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
+  onRemoteWindowDeleted?: (payload: { windowId: string; paneIds: string[]; workspace: Workspace }) => void | Promise<void>;
   onRemoteWindowRuntimeUpdated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
+  onRemoteWorkspaceLayoutUpdated?: (payload: { workspace: Workspace }) => void | Promise<void>;
   transportOptions?: Partial<RemoteWebSocketTransportOptions>;
 };
 
@@ -77,7 +79,9 @@ export class RemoteGateway {
   private readonly onPanePtyUnsubscribe: ((paneId: string) => void) | undefined;
   private readonly onLocalPaneStarted: ((payload: { windowId: string; workingDirectory: string }) => void | Promise<void>) | undefined;
   private readonly onRemoteWindowCreated: ((payload: { window: Window; workspace: Workspace }) => void | Promise<void>) | undefined;
+  private readonly onRemoteWindowDeleted: ((payload: { windowId: string; paneIds: string[]; workspace: Workspace }) => void | Promise<void>) | undefined;
   private readonly onRemoteWindowRuntimeUpdated: ((payload: { window: Window; workspace: Workspace }) => void | Promise<void>) | undefined;
+  private readonly onRemoteWorkspaceLayoutUpdated: ((payload: { workspace: Workspace }) => void | Promise<void>) | undefined;
   private readonly settingsStore: RemoteSettingsStore;
   private readonly deviceRegistry: RemoteDeviceRegistry;
   private readonly keypair: RemoteE2EEKeypair;
@@ -105,7 +109,9 @@ export class RemoteGateway {
     this.onPanePtyUnsubscribe = options.onPanePtyUnsubscribe;
     this.onLocalPaneStarted = options.onLocalPaneStarted;
     this.onRemoteWindowCreated = options.onRemoteWindowCreated;
+    this.onRemoteWindowDeleted = options.onRemoteWindowDeleted;
     this.onRemoteWindowRuntimeUpdated = options.onRemoteWindowRuntimeUpdated;
+    this.onRemoteWorkspaceLayoutUpdated = options.onRemoteWorkspaceLayoutUpdated;
     this.settingsStore = new RemoteSettingsStore(this.userDataPath);
     this.deviceRegistry = new RemoteDeviceRegistry(this.userDataPath);
     this.keypair = loadOrCreateRemoteKeypair(this.userDataPath);
@@ -116,7 +122,9 @@ export class RemoteGateway {
           startLocalTerminalPane: (params) => this.startLocalTerminalPane(params),
           stopWindowPanes: (params) => this.stopWindowPanes(params),
           onWindowCreated: (payload) => this.onRemoteWindowCreated?.(payload),
+          onWindowDeleted: (payload) => this.onRemoteWindowDeleted?.(payload),
           onWindowRuntimeUpdated: (payload) => this.onRemoteWindowRuntimeUpdated?.(payload),
+          onWorkspaceLayoutUpdated: (payload) => this.onRemoteWorkspaceLayoutUpdated?.(payload),
         })
       : undefined;
     this.dispatcher = new RemoteDispatcher({

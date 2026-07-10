@@ -14,9 +14,13 @@ import { Layers, Play, Plus, RotateCw, Search, Settings, Square, TerminalSquare 
 import {
   connectToHost,
   createRemoteWindow,
+  createRemoteGroup,
+  deleteRemoteGroup,
+  deleteRemoteWindow,
   loadHostById,
   startRemoteWindow,
   stopRemotePane,
+  type RemoteWindowGroupSummary,
   type RemotePaneSummary,
   type RemoteTerminalSummary,
   type RemoteWindowSummary
@@ -58,6 +62,7 @@ function connectionLabel(state: ConnectionState | 'loading', t: MobileTranslate)
 }
 
 type OverviewItem =
+  | { type: 'group'; group: RemoteWindowGroupSummary }
   | { type: 'window'; window: RemoteWindowSummary }
   | { type: 'terminal'; terminal: RemoteTerminalSummary }
 
@@ -145,6 +150,18 @@ function windowTopBorderColor(window: RemoteWindowSummary): string {
   return colors.borderSubtle
 }
 
+function replaceWindowInGroups(
+  groups: RemoteWindowGroupSummary[],
+  replacement: RemoteWindowSummary
+): RemoteWindowGroupSummary[] {
+  return groups.map((group) => ({
+    ...group,
+    windows: group.windows.map((window) =>
+      window.windowId === replacement.windowId ? replacement : window
+    )
+  }))
+}
+
 export default function HostOverviewScreen() {
   const params = useLocalSearchParams<{ hostId?: string }>()
   const hostId = getParam(params.hostId)
@@ -154,14 +171,19 @@ export default function HostOverviewScreen() {
   const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [terminals, setTerminals] = useState<RemoteTerminalSummary[]>([])
   const [windows, setWindows] = useState<RemoteWindowSummary[]>([])
+  const [groups, setGroups] = useState<RemoteWindowGroupSummary[]>([])
   const [overviewMode, setOverviewMode] = useState<'terminals' | 'windows'>('terminals')
   const [canCreateWindow, setCanCreateWindow] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [creatingWindow, setCreatingWindow] = useState(false)
+  const [creatingGroup, setCreatingGroup] = useState(false)
   const [startingPaneKey, setStartingPaneKey] = useState<string | null>(null)
   const [stoppingPaneKey, setStoppingPaneKey] = useState<string | null>(null)
+  const [deletingWindowId, setDeletingWindowId] = useState<string | null>(null)
+  const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null)
+  const [selectedGroupWindowIds, setSelectedGroupWindowIds] = useState<string[]>([])
   const clientRef = useRef<RpcClient | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
 
@@ -173,6 +195,27 @@ export default function HostOverviewScreen() {
     () => filterWindows(windows, normalizedSearchQuery),
     [normalizedSearchQuery, windows]
   )
+  const visibleGroups = useMemo(
+    () =>
+      groups
+        .flatMap((group) => {
+          if (!normalizedSearchQuery) {
+            return [group]
+          }
+          const matchesGroupName = group.name.toLowerCase().includes(normalizedSearchQuery)
+          const filteredWindows = filterWindows(group.windows, normalizedSearchQuery)
+          if (!matchesGroupName && filteredWindows.length === 0) {
+            return []
+          }
+          return [
+            {
+              ...group,
+              windows: matchesGroupName ? group.windows : filteredWindows
+            }
+          ]
+        }),
+    [groups, normalizedSearchQuery]
+  )
   const visibleTerminals = useMemo(
     () => filterTerminals(terminals, normalizedSearchQuery),
     [normalizedSearchQuery, terminals]
@@ -180,9 +223,12 @@ export default function HostOverviewScreen() {
   const overviewItems = useMemo<OverviewItem[]>(
     () =>
       overviewMode === 'windows'
-        ? visibleWindows.map((window) => ({ type: 'window', window }))
+        ? [
+            ...visibleGroups.map((group) => ({ type: 'group' as const, group })),
+            ...visibleWindows.map((window) => ({ type: 'window' as const, window }))
+          ]
         : visibleTerminals.map((terminal) => ({ type: 'terminal', terminal })),
-    [overviewMode, visibleTerminals, visibleWindows]
+    [overviewMode, visibleGroups, visibleTerminals, visibleWindows]
   )
   const hasSearchQuery = normalizedSearchQuery.length > 0
 
@@ -203,6 +249,7 @@ export default function HostOverviewScreen() {
     logsRef.current = []
     setTerminals([])
     setWindows([])
+    setGroups([])
     setOverviewMode('terminals')
     setCanCreateWindow(false)
     setStartingPaneKey(null)
@@ -225,6 +272,11 @@ export default function HostOverviewScreen() {
       setOverviewMode(overview.mode)
       setCanCreateWindow(overview.canCreateWindow)
       setWindows(overview.windows)
+      setGroups(overview.groups)
+      setSelectedGroupWindowIds((current) => {
+        const liveWindowIds = new Set(overview.windows.map((window) => window.windowId))
+        return current.filter((windowId) => liveWindowIds.has(windowId))
+      })
       setTerminals(
         overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
       )
@@ -268,6 +320,7 @@ export default function HostOverviewScreen() {
               window.windowId === result.window.windowId ? result.window : window
             )
           )
+          setGroups((current) => replaceWindowInGroups(current, result.window))
           router.push(
             `/h/${hostId}/t/${encodeURIComponent(nextPane.windowId)}/${encodeURIComponent(nextPane.paneId)}`
           )
@@ -293,6 +346,18 @@ export default function HostOverviewScreen() {
       }
     },
     [openPane]
+  )
+
+  const openGroup = useCallback(
+    async (group: RemoteWindowGroupSummary) => {
+      const activeWindow =
+        group.windows.find((window) => window.windowId === group.activeWindowId) ??
+        group.windows[0]
+      if (activeWindow) {
+        await openWindow(activeWindow)
+      }
+    },
+    [openWindow]
   )
 
   const openTerminal = useCallback(
@@ -350,6 +415,84 @@ export default function HostOverviewScreen() {
     }
   }, [canCreateWindow, hostId, router, t])
 
+  const toggleGroupWindowSelection = useCallback((windowId: string) => {
+    setSelectedGroupWindowIds((current) =>
+      current.includes(windowId)
+        ? current.filter((id) => id !== windowId)
+        : [...current, windowId]
+    )
+  }, [])
+
+  const handleCreateGroup = useCallback(async () => {
+    const client = clientRef.current
+    if (!client) {
+      setError(t('overview.notConnected'))
+      return
+    }
+    if (selectedGroupWindowIds.length < 2) {
+      setError(t('overview.selectGroupWindows'))
+      return
+    }
+    setCreatingGroup(true)
+    setError(null)
+    try {
+      const result = await createRemoteGroup(client, selectedGroupWindowIds, t('overview.defaultGroupName'))
+      setGroups((current) => [
+        result.group,
+        ...current.filter((group) => group.groupId !== result.group.groupId)
+      ])
+      setSelectedGroupWindowIds([])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCreatingGroup(false)
+    }
+  }, [selectedGroupWindowIds, t])
+
+  const handleDeleteWindow = useCallback(
+    async (windowId: string) => {
+      const client = clientRef.current
+      if (!client) {
+        setError(t('overview.notConnected'))
+        return
+      }
+      setDeletingWindowId(windowId)
+      setError(null)
+      try {
+        const result = await deleteRemoteWindow(client, windowId)
+        setWindows((current) => current.filter((window) => window.windowId !== result.windowId))
+        setGroups(result.groups)
+        setSelectedGroupWindowIds((current) => current.filter((id) => id !== result.windowId))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setDeletingWindowId(null)
+      }
+    },
+    [t]
+  )
+
+  const handleDeleteGroup = useCallback(
+    async (groupId: string) => {
+      const client = clientRef.current
+      if (!client) {
+        setError(t('overview.notConnected'))
+        return
+      }
+      setDeletingGroupId(groupId)
+      setError(null)
+      try {
+        const result = await deleteRemoteGroup(client, groupId)
+        setGroups((current) => current.filter((group) => group.groupId !== result.groupId))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setDeletingGroupId(null)
+      }
+    },
+    [t]
+  )
+
   const syncOverviewState = useCallback(async () => {
     const client = clientRef.current
     if (!client || refreshing) {
@@ -360,6 +503,11 @@ export default function HostOverviewScreen() {
       setOverviewMode(overview.mode)
       setCanCreateWindow(overview.canCreateWindow)
       setWindows(overview.windows)
+      setGroups(overview.groups)
+      setSelectedGroupWindowIds((current) => {
+        const liveWindowIds = new Set(overview.windows.map((window) => window.windowId))
+        return current.filter((windowId) => liveWindowIds.has(windowId))
+      })
       setTerminals(
         overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
       )
@@ -385,6 +533,7 @@ export default function HostOverviewScreen() {
             window.windowId === result.window.windowId ? result.window : window
           )
         )
+        setGroups((current) => replaceWindowInGroups(current, result.window))
         setTerminals((current) =>
           current.map((terminal) =>
             terminal.windowId === result.pane.windowId && terminal.paneId === result.pane.paneId
@@ -440,6 +589,21 @@ export default function HostOverviewScreen() {
               <Plus size={18} color={colors.textPrimary} />
             )}
           </Pressable>
+          <Pressable
+            style={[
+              styles.iconButton,
+              (selectedGroupWindowIds.length < 2 || creatingGroup) && styles.iconButtonDisabled
+            ]}
+            disabled={selectedGroupWindowIds.length < 2 || creatingGroup}
+            onPress={() => void handleCreateGroup()}
+            accessibilityLabel={t('overview.createGroup')}
+          >
+            {creatingGroup ? (
+              <ActivityIndicator color={colors.textPrimary} />
+            ) : (
+              <Layers size={18} color={colors.textPrimary} />
+            )}
+          </Pressable>
           <Pressable style={styles.iconButton} onPress={() => void loadAndConnect()}>
             <RotateCw size={18} color={colors.textPrimary} />
           </Pressable>
@@ -468,6 +632,13 @@ export default function HostOverviewScreen() {
       <Text style={styles.sectionTitle}>
         {overviewMode === 'windows' ? t('overview.windowsTitle') : t('overview.terminalsTitle')}
       </Text>
+      {overviewMode === 'windows' ? (
+        <Text style={styles.selectionHint}>
+          {selectedGroupWindowIds.length >= 2
+            ? t('overview.groupSelectionReady', { count: selectedGroupWindowIds.length })
+            : t('overview.groupSelectionHint')}
+        </Text>
+      ) : null}
       <View style={styles.searchBox}>
         <Search size={16} color={colors.textMuted} />
         <TextInput
@@ -487,8 +658,10 @@ export default function HostOverviewScreen() {
         data={overviewItems}
         keyExtractor={(item) =>
           item.type === 'window'
-            ? item.window.windowId
-            : `${item.terminal.windowId}:${item.terminal.paneId}:${item.terminal.sessionId}`
+            ? `window:${item.window.windowId}`
+            : item.type === 'group'
+              ? `group:${item.group.groupId}`
+              : `terminal:${item.terminal.windowId}:${item.terminal.paneId}:${item.terminal.sessionId}`
         }
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={() => void loadAndConnect()} />
@@ -520,14 +693,27 @@ export default function HostOverviewScreen() {
           </View>
         }
         renderItem={({ item }) =>
-          item.type === 'window'
+          item.type === 'group'
+            ? renderGroupItem(
+                item.group,
+                deletingGroupId,
+                openGroup,
+                openWindow,
+                handleDeleteGroup,
+                t
+              )
+            : item.type === 'window'
             ? renderWindowItem(
                 item.window,
                 startingPaneKey,
                 stoppingPaneKey,
+                deletingWindowId,
+                selectedGroupWindowIds,
                 openWindow,
                 openPane,
                 handleStopPane,
+                toggleGroupWindowSelection,
+                handleDeleteWindow,
                 t
               )
             : renderTerminalItem(item.terminal, openTerminal, t)
@@ -621,21 +807,28 @@ function renderWindowItem(
   item: RemoteWindowSummary,
   startingPaneKey: string | null,
   stoppingPaneKey: string | null,
+  deletingWindowId: string | null,
+  selectedGroupWindowIds: string[],
   onOpenWindow: (window: RemoteWindowSummary) => void | Promise<void>,
   onOpenPane: (pane: RemotePaneSummary) => void | Promise<void>,
   onStopPane: (pane: RemotePaneSummary) => void | Promise<void>,
+  onToggleGroupSelection: (windowId: string) => void,
+  onDeleteWindow: (windowId: string) => void | Promise<void>,
   t: MobileTranslate
 ) {
   const activePane = getActiveTerminalPane(item)
+  const selectedForGroup = selectedGroupWindowIds.includes(item.windowId)
+  const deleting = deletingWindowId === item.windowId
   return (
     <Pressable
       style={({ pressed }) => [
         styles.windowCard,
         { borderTopColor: windowTopBorderColor(item) },
+        selectedForGroup && styles.selectedWindowCard,
         pressed && styles.pressed
       ]}
       onPress={() => void onOpenWindow(item)}
-      disabled={!activePane}
+      disabled={!activePane || deleting}
     >
       <View style={styles.windowHeader}>
         <View style={styles.windowTitleGroup}>
@@ -655,14 +848,39 @@ function renderWindowItem(
             </Text>
           </View>
         </View>
-        <View style={styles.statusDots}>
-          {item.panes.map((pane) => (
-            <View
-              key={`${pane.windowId}:${pane.paneId}:dot`}
-              style={[styles.paneStatusDot, { backgroundColor: statusColor(pane.status, pane.running) }]}
-            />
-          ))}
+        <View style={styles.windowActions}>
+          <Pressable
+            style={[styles.selectButton, selectedForGroup && styles.selectButtonActive]}
+            onPress={(event) => {
+              event.stopPropagation()
+              onToggleGroupSelection(item.windowId)
+            }}
+            accessibilityLabel={t('overview.selectForGroup')}
+          >
+            <Text style={[styles.selectButtonText, selectedForGroup && styles.selectButtonTextActive]}>
+              {selectedForGroup ? '✓' : '+'}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.deleteButton, deleting && styles.iconButtonDisabled]}
+            disabled={deleting}
+            onPress={(event) => {
+              event.stopPropagation()
+              void onDeleteWindow(item.windowId)
+            }}
+            accessibilityLabel={t('overview.deleteWindow')}
+          >
+            <Text style={styles.deleteButtonText}>×</Text>
+          </Pressable>
         </View>
+      </View>
+      <View style={styles.statusDots}>
+        {item.panes.map((pane) => (
+          <View
+            key={`${pane.windowId}:${pane.paneId}:dot`}
+            style={[styles.paneStatusDot, { backgroundColor: statusColor(pane.status, pane.running) }]}
+          />
+        ))}
       </View>
       {item.panes.map((pane) => {
         const paneKey = `${pane.windowId}:${pane.paneId}`
@@ -683,6 +901,81 @@ function renderWindowItem(
           />
         )
       })}
+    </Pressable>
+  )
+}
+
+function renderGroupItem(
+  item: RemoteWindowGroupSummary,
+  deletingGroupId: string | null,
+  onOpenGroup: (group: RemoteWindowGroupSummary) => void | Promise<void>,
+  onOpenWindow: (window: RemoteWindowSummary) => void | Promise<void>,
+  onDeleteGroup: (groupId: string) => void | Promise<void>,
+  t: MobileTranslate
+) {
+  const deleting = deletingGroupId === item.groupId
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.groupCard, pressed && styles.pressed]}
+      onPress={() => void onOpenGroup(item)}
+      disabled={deleting}
+    >
+      <View style={styles.groupHeader}>
+        <View style={styles.windowTitleGroup}>
+          <View style={styles.windowIcon}>
+            <Layers size={18} color={colors.textPrimary} />
+          </View>
+          <View style={styles.windowTitleText}>
+            <Text style={styles.windowTitle} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <Text style={styles.windowMeta}>
+              {t('overview.groupWindowCount', { count: item.windowCount })}
+            </Text>
+          </View>
+        </View>
+        <Pressable
+          style={[styles.deleteButton, deleting && styles.iconButtonDisabled]}
+          disabled={deleting}
+          onPress={(event) => {
+            event.stopPropagation()
+            void onDeleteGroup(item.groupId)
+          }}
+          accessibilityLabel={t('overview.deleteGroup')}
+        >
+          {deleting ? (
+            <ActivityIndicator color={colors.statusRed} />
+          ) : (
+            <Text style={styles.deleteButtonText}>×</Text>
+          )}
+        </Pressable>
+      </View>
+      <View style={styles.groupWindows}>
+        {item.windows.map((window) => {
+          const pane = getActiveTerminalPane(window)
+          return (
+            <Pressable
+              key={window.windowId}
+              disabled={!pane}
+              style={({ pressed }) => [styles.groupWindowRow, pressed && styles.pressed]}
+              onPress={(event) => {
+                event.stopPropagation()
+                void onOpenWindow(window)
+              }}
+            >
+              <TerminalSquare size={15} color={colors.textPrimary} />
+              <View style={styles.groupWindowMain}>
+                <Text style={styles.groupWindowTitle} numberOfLines={1}>
+                  {window.name}
+                </Text>
+                <Text style={styles.groupWindowMeta} numberOfLines={1}>
+                  {windowPaneCountLabel(window.terminalPaneCount, t)}
+                </Text>
+              </View>
+            </Pressable>
+          )
+        })}
+      </View>
     </Pressable>
   )
 }
@@ -759,6 +1052,8 @@ const styles = StyleSheet.create({
   },
   headerActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
     gap: spacing.sm
   },
   iconButton: {
@@ -805,6 +1100,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700'
   },
+  selectionHint: {
+    color: colors.textMuted,
+    fontSize: typography.metaSize,
+    marginTop: -spacing.sm
+  },
   searchBox: {
     minHeight: 42,
     flexDirection: 'row',
@@ -834,6 +1134,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgPanel,
     borderRadius: radii.row,
     padding: spacing.md
+  },
+  selectedWindowCard: {
+    borderColor: colors.accentBlue
+  },
+  groupCard: {
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel,
+    borderRadius: radii.row,
+    padding: spacing.md
+  },
+  groupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md
   },
   windowHeader: {
     flexDirection: 'row',
@@ -875,10 +1192,80 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     alignItems: 'center'
   },
+  windowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs
+  },
+  selectButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle
+  },
+  selectButtonActive: {
+    borderColor: colors.accentBlue
+  },
+  selectButtonText: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    fontWeight: '700'
+  },
+  selectButtonTextActive: {
+    color: colors.accentBlue
+  },
+  deleteButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle
+  },
+  deleteButtonText: {
+    color: colors.statusRed,
+    fontSize: 18,
+    lineHeight: 20,
+    fontWeight: '700'
+  },
   paneStatusDot: {
     width: 8,
     height: 8,
     borderRadius: 4
+  },
+  groupWindows: {
+    gap: spacing.sm
+  },
+  groupWindowRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgRaised,
+    paddingHorizontal: spacing.sm
+  },
+  groupWindowMain: {
+    flex: 1,
+    minWidth: 0
+  },
+  groupWindowTitle: {
+    color: colors.textPrimary,
+    fontSize: typography.bodySize,
+    fontWeight: '700'
+  },
+  groupWindowMeta: {
+    color: colors.textMuted,
+    fontSize: typography.metaSize,
+    marginTop: 1
   },
   emptyList: {
     flexGrow: 1,
