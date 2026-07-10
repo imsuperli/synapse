@@ -5,7 +5,9 @@ import type { RemoteDeviceScope } from '../../../src/shared/remote/methods'
 import type {
   RemotePaneSummary,
   RemoteWindowSummary,
+  PaneCloseResult,
   WindowCreateResult,
+  WindowCloseResult,
   WindowStartResult
 } from '../../../src/shared/remote/window-protocol'
 import { WindowStatus, type PaneBackend, type PaneKind, type WindowKind } from '../../../src/shared/types/window'
@@ -14,7 +16,9 @@ export type {
   RemoteDeviceScope,
   RemotePaneSummary,
   RemoteWindowSummary,
+  PaneCloseResult,
   WindowCreateResult,
+  WindowCloseResult,
   WindowStartResult
 }
 
@@ -154,12 +158,40 @@ export async function createRemoteWindow(client: RpcClient): Promise<WindowCreat
   return parseWindowCreateResult(response.result)
 }
 
-export async function requestTerminalHistory(
+export async function stopRemoteWindow(
+  client: RpcClient,
+  windowId: string
+): Promise<WindowCloseResult> {
+  const response = await client.sendRequest('window.close', { windowId })
+  if (!response.ok) {
+    throw new Error(response.error.message)
+  }
+  return parseWindowCloseResult(response.result)
+}
+
+export async function stopRemotePane(
   client: RpcClient,
   windowId: string,
   paneId: string
+): Promise<PaneCloseResult> {
+  const response = await client.sendRequest('pane.close', { windowId, paneId })
+  if (!response.ok) {
+    throw new Error(response.error.message)
+  }
+  return parsePaneCloseResult(response.result)
+}
+
+export async function requestTerminalHistory(
+  client: RpcClient,
+  windowId: string,
+  paneId: string,
+  sinceSeq?: number
 ): Promise<TerminalHistoryResult> {
-  const response = await client.sendRequest('terminal.history', { windowId, paneId })
+  const response = await client.sendRequest('terminal.history', {
+    windowId,
+    paneId,
+    ...(typeof sinceSeq === 'number' ? { sinceSeq } : {})
+  })
   if (!response.ok) {
     throw new Error(response.error.message)
   }
@@ -324,6 +356,40 @@ export function parseWindowCreateResult(value: unknown): WindowCreateResult {
   const pane = parseRemotePaneSummary(result.pane)[0] ?? null
   if (windows.length === 0 || !pane) {
     throw new Error('Invalid window create response')
+  }
+  return {
+    window: windows[0]!,
+    pane
+  }
+}
+
+export function parseWindowCloseResult(value: unknown): WindowCloseResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid window close response')
+  }
+  const result = value as Record<string, unknown>
+  const windows = parseWindowList({ windows: [result.window] })
+  if (windows.length === 0) {
+    throw new Error('Invalid window close response')
+  }
+  const stoppedPanes = Array.isArray(result.stoppedPanes)
+    ? result.stoppedPanes.flatMap((item) => parseRemotePaneSummary(item))
+    : []
+  return {
+    window: windows[0]!,
+    stoppedPanes
+  }
+}
+
+export function parsePaneCloseResult(value: unknown): PaneCloseResult {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid pane close response')
+  }
+  const result = value as Record<string, unknown>
+  const windows = parseWindowList({ windows: [result.window] })
+  const pane = parseRemotePaneSummary(result.pane)[0] ?? null
+  if (windows.length === 0 || !pane) {
+    throw new Error('Invalid pane close response')
   }
   return {
     window: windows[0]!,

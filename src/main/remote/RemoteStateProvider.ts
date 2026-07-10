@@ -5,7 +5,9 @@ import type { Workspace } from '../types/workspace';
 import { WindowStatus, type LayoutNode, type Pane, type PaneBackend, type PaneKind, type Window } from '../../shared/types/window';
 import type {
   WindowCreateResult,
+  WindowCloseResult,
   PaneListResult,
+  PaneCloseResult,
   RemotePaneSummary,
   RemoteWindowSummary,
   WindowStartResult,
@@ -25,6 +27,8 @@ type RemoteStateProviderOptions = {
     initialRows?: number;
   }) => Promise<{ pid: number; sessionId: string; status: WindowStatus; command?: string }>;
   onWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
+  stopWindowPanes?: (params: { windowId: string; paneIds: string[] }) => Promise<void> | void;
+  onWindowRuntimeUpdated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
 };
 
 type ListOptions = {
@@ -52,6 +56,15 @@ type CreateWindowOptions = {
   command?: string;
   initialCols?: number;
   initialRows?: number;
+};
+
+type CloseWindowOptions = {
+  windowId: string;
+};
+
+type ClosePaneOptions = {
+  windowId: string;
+  paneId: string;
 };
 
 export class RemoteStateProvider {
@@ -244,6 +257,68 @@ export class RemoteStateProvider {
     };
   }
 
+  async closeWindow(options: CloseWindowOptions): Promise<WindowCloseResult> {
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+
+    const targetWindow = workspace.windows.find((window) => window.id === options.windowId);
+    if (!targetWindow) {
+      throw new Error('window_not_found');
+    }
+
+    const terminalPanes = collectPanes(targetWindow.layout).filter((pane) => getPaneKind(pane) === 'terminal');
+    const paneIds = terminalPanes.map((pane) => pane.id);
+    await this.options.stopWindowPanes?.({ windowId: targetWindow.id, paneIds });
+    for (const pane of terminalPanes) {
+      clearPaneRuntime(pane);
+    }
+    targetWindow.lastActiveAt = new Date().toISOString();
+    await this.options.onWindowRuntimeUpdated?.({ window: targetWindow, workspace });
+
+    const summary = this.summarizeWindow(targetWindow, this.getLivePaneProcesses(), { terminalOnly: true });
+    return {
+      window: summary,
+      stoppedPanes: summary.panes.filter((pane) => paneIds.includes(pane.paneId)),
+    };
+  }
+
+  async closePane(options: ClosePaneOptions): Promise<PaneCloseResult> {
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+
+    const targetWindow = workspace.windows.find((window) => window.id === options.windowId);
+    if (!targetWindow) {
+      throw new Error('window_not_found');
+    }
+
+    const targetPane = collectPanes(targetWindow.layout).find((pane) => pane.id === options.paneId);
+    if (!targetPane) {
+      throw new Error('pane_not_found');
+    }
+    if (getPaneKind(targetPane) !== 'terminal') {
+      throw new Error('pane_not_terminal');
+    }
+
+    await this.options.stopWindowPanes?.({ windowId: targetWindow.id, paneIds: [targetPane.id] });
+    clearPaneRuntime(targetPane);
+    targetWindow.lastActiveAt = new Date().toISOString();
+    await this.options.onWindowRuntimeUpdated?.({ window: targetWindow, workspace });
+
+    const summary = this.summarizeWindow(targetWindow, this.getLivePaneProcesses(), { terminalOnly: true });
+    const pane = findResultPane(summary, targetPane.id);
+    if (!pane) {
+      throw new Error('pane_not_found');
+    }
+    return {
+      window: summary,
+      pane,
+    };
+  }
+
   private summarizeWindow(
     window: Window,
     livePaneProcesses: Map<string, LivePaneProcess>,
@@ -344,6 +419,14 @@ function findResultPane(window: RemoteWindowSummary, paneId: string): RemotePane
   return window.panes.find((pane) => pane.paneId === paneId)
     ?? window.panes.find((pane) => pane.kind === 'terminal')
     ?? null;
+}
+
+function clearPaneRuntime(pane: Pane): void {
+  pane.status = WindowStatus.Completed;
+  pane.pid = null;
+  pane.sessionId = undefined;
+  pane.lastOutput = undefined;
+  pane.tmuxScopeId = undefined;
 }
 
 function getDefaultWorkingDirectory(workspace: Workspace): string {

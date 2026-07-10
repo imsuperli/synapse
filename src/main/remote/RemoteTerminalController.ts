@@ -43,8 +43,19 @@ export class RemoteTerminalController {
       }));
   }
 
-  getHistory(windowId: string, paneId: string): TerminalHistoryResult {
+  getHistory(windowId: string, paneId: string, sinceSeq?: number): TerminalHistoryResult {
     this.requirePid(windowId, paneId);
+    if (typeof sinceSeq === 'number') {
+      const history = this.processManager.getPtyHistoryEntriesSince(paneId, sinceSeq);
+      return {
+        windowId,
+        paneId,
+        chunks: history.entries.map((entry) => entry.data),
+        firstSeq: history.firstSeq,
+        lastSeq: history.lastSeq,
+        gap: history.gap,
+      };
+    }
     const history = this.processManager.getPtyHistory(paneId);
     return {
       windowId,

@@ -5,8 +5,8 @@ import type { RemoteSettingsPatch } from '../remote/RemoteSettingsStore';
 import { HandlerContext } from './HandlerContext';
 import { successResponse, errorResponse } from './HandlerResponse';
 
-const REMOTE_PAIRING_QR_WIDTH = 512;
-const REMOTE_PAIRING_QR_MARGIN = 4;
+const REMOTE_PAIRING_QR_WIDTH = 320;
+const REMOTE_PAIRING_QR_MARGIN = 3;
 
 export type RemoteNetworkInterface = {
   name: string;

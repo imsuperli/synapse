@@ -106,8 +106,8 @@ describe('registerRemoteHandlers', () => {
     });
     expect(mockQrToDataUrl).toHaveBeenCalledWith('synapse://pair?code=abc', {
       errorCorrectionLevel: 'M',
-      margin: 4,
-      width: 512,
+      margin: 3,
+      width: 320,
     });
     expect(response).toEqual({
       success: true,

@@ -35,7 +35,9 @@ export const TerminalPaneRefSchema = z.object({
   paneId: z.string().min(1),
 }).strict();
 
-export const TerminalHistoryParamsSchema = TerminalPaneRefSchema;
+export const TerminalHistoryParamsSchema = TerminalPaneRefSchema.extend({
+  sinceSeq: z.number().int().nonnegative().optional(),
+}).strict();
 
 export const TerminalSubscribeParamsSchema = TerminalPaneRefSchema.extend({
   sinceSeq: z.number().int().nonnegative().optional(),

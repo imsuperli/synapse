@@ -10,12 +10,13 @@ import {
   View
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Layers, Play, Plus, RotateCw, Search, Settings, TerminalSquare } from 'lucide-react-native'
+import { Layers, Play, Plus, RotateCw, Search, Settings, Square, TerminalSquare } from 'lucide-react-native'
 import {
   connectToHost,
   createRemoteWindow,
   loadHostById,
   startRemoteWindow,
+  stopRemotePane,
   type RemotePaneSummary,
   type RemoteTerminalSummary,
   type RemoteWindowSummary
@@ -34,6 +35,8 @@ import { useMobileI18n, type MobileTranslate } from '../../../src/i18n'
 function getParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
 }
+
+const OVERVIEW_STATUS_SYNC_MS = 2500
 
 function connectionLabel(state: ConnectionState | 'loading', t: MobileTranslate): string {
   switch (state) {
@@ -92,23 +95,17 @@ function statusLabel(status: string, running: boolean, t: MobileTranslate): stri
   if (running) {
     return t('overview.running')
   }
-  switch (status) {
-    case 'waiting':
-      return t('overview.waiting')
-    case 'error':
-      return t('overview.error')
-    case 'restoring':
-      return t('common.starting')
-    case 'paused':
-      return t('overview.stopped')
-    case 'completed':
-    default:
-      return t('overview.stopped')
+  if (status === 'error') {
+    return t('overview.error')
   }
+  if (status === 'restoring') {
+    return t('common.starting')
+  }
+  return t('overview.stopped')
 }
 
 function statusColor(status: string, running: boolean): string {
-  if (running || status === 'running' || status === 'waiting') {
+  if (running) {
     return colors.statusGreen
   }
   if (status === 'restoring') {
@@ -164,6 +161,7 @@ export default function HostOverviewScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [creatingWindow, setCreatingWindow] = useState(false)
   const [startingPaneKey, setStartingPaneKey] = useState<string | null>(null)
+  const [stoppingPaneKey, setStoppingPaneKey] = useState<string | null>(null)
   const clientRef = useRef<RpcClient | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
 
@@ -208,6 +206,7 @@ export default function HostOverviewScreen() {
     setOverviewMode('terminals')
     setCanCreateWindow(false)
     setStartingPaneKey(null)
+    setStoppingPaneKey(null)
     try {
       const loadedHost = await loadHostById(hostId)
       if (!loadedHost) {
@@ -298,11 +297,15 @@ export default function HostOverviewScreen() {
 
   const openTerminal = useCallback(
     (terminal: RemoteTerminalSummary) => {
+      if (terminal.status !== 'alive') {
+        setError(t('overview.onlyLocalStart'))
+        return
+      }
       router.push(
         `/h/${hostId}/t/${encodeURIComponent(terminal.windowId ?? '')}/${encodeURIComponent(terminal.paneId ?? '')}`
       )
     },
-    [hostId, router]
+    [hostId, router, t]
   )
 
   const handleCreateWindow = useCallback(async () => {
@@ -346,6 +349,71 @@ export default function HostOverviewScreen() {
       setCreatingWindow(false)
     }
   }, [canCreateWindow, hostId, router, t])
+
+  const syncOverviewState = useCallback(async () => {
+    const client = clientRef.current
+    if (!client || refreshing) {
+      return
+    }
+    try {
+      const overview = await loadHostOverviewData(client)
+      setOverviewMode(overview.mode)
+      setCanCreateWindow(overview.canCreateWindow)
+      setWindows(overview.windows)
+      setTerminals(
+        overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [refreshing])
+
+  const handleStopPane = useCallback(
+    async (pane: RemotePaneSummary) => {
+      const client = clientRef.current
+      if (!client) {
+        setError(t('overview.notConnected'))
+        return
+      }
+      const paneKey = `${pane.windowId}:${pane.paneId}`
+      setStoppingPaneKey(paneKey)
+      setError(null)
+      try {
+        const result = await stopRemotePane(client, pane.windowId, pane.paneId)
+        setWindows((current) =>
+          current.map((window) =>
+            window.windowId === result.window.windowId ? result.window : window
+          )
+        )
+        setTerminals((current) =>
+          current.map((terminal) =>
+            terminal.windowId === result.pane.windowId && terminal.paneId === result.pane.paneId
+              ? {
+                  ...terminal,
+                  pid: 0,
+                  sessionId: `${result.pane.windowId}:${result.pane.paneId}`,
+                  status: 'exited'
+                }
+              : terminal
+          )
+        )
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setStoppingPaneKey(null)
+      }
+    },
+    [t]
+  )
+
+  useFocusEffect(
+    useCallback(() => {
+      const timer = setInterval(() => {
+        void syncOverviewState()
+      }, OVERVIEW_STATUS_SYNC_MS)
+      return () => clearInterval(timer)
+    }, [syncOverviewState])
+  )
 
   return (
     <View style={styles.container}>
@@ -453,7 +521,15 @@ export default function HostOverviewScreen() {
         }
         renderItem={({ item }) =>
           item.type === 'window'
-            ? renderWindowItem(item.window, startingPaneKey, openWindow, openPane, t)
+            ? renderWindowItem(
+                item.window,
+                startingPaneKey,
+                stoppingPaneKey,
+                openWindow,
+                openPane,
+                handleStopPane,
+                t
+              )
             : renderTerminalItem(item.terminal, openTerminal, t)
         }
       />
@@ -469,7 +545,7 @@ function renderTerminalItem(
   return (
     <TerminalListRow
       terminal={item}
-      disabled={item.status !== 'alive'}
+      badge={item.status === 'alive' ? t('overview.running') : t('overview.stopped')}
       onPress={() => onOpen(item)}
       t={t}
     />
@@ -481,14 +557,18 @@ function PaneCardRow({
   active,
   disabled,
   starting,
+  stopping,
   onPress,
+  onStop,
   t
 }: {
   pane: RemotePaneSummary
   active: boolean
   disabled: boolean
   starting: boolean
+  stopping: boolean
   onPress: () => void
+  onStop: () => void
   t: MobileTranslate
 }) {
   return (
@@ -516,7 +596,19 @@ function PaneCardRow({
           {paneMeta(pane, t)}
         </Text>
       </View>
-      {!pane.running && isStartableLocalPane(pane) ? (
+      {pane.running ? (
+        <Pressable
+          disabled={stopping}
+          style={[styles.stopIcon, stopping && styles.iconButtonDisabled]}
+          onPress={(event) => {
+            event.stopPropagation()
+            onStop()
+          }}
+          accessibilityLabel={t('overview.stopTerminal')}
+        >
+          <Square size={13} color={colors.statusRed} fill={colors.statusRed} />
+        </Pressable>
+      ) : isStartableLocalPane(pane) ? (
         <View style={styles.startIcon}>
           <Play size={13} color={colors.accentBlue} fill={colors.accentBlue} />
         </View>
@@ -528,8 +620,10 @@ function PaneCardRow({
 function renderWindowItem(
   item: RemoteWindowSummary,
   startingPaneKey: string | null,
+  stoppingPaneKey: string | null,
   onOpenWindow: (window: RemoteWindowSummary) => void | Promise<void>,
   onOpenPane: (pane: RemotePaneSummary) => void | Promise<void>,
+  onStopPane: (pane: RemotePaneSummary) => void | Promise<void>,
   t: MobileTranslate
 ) {
   const activePane = getActiveTerminalPane(item)
@@ -573,6 +667,7 @@ function renderWindowItem(
       {item.panes.map((pane) => {
         const paneKey = `${pane.windowId}:${pane.paneId}`
         const starting = startingPaneKey === paneKey
+        const stopping = stoppingPaneKey === paneKey
         const canOpen = pane.running || isStartableLocalPane(pane)
         return (
           <PaneCardRow
@@ -581,7 +676,9 @@ function renderWindowItem(
             active={pane.paneId === item.activePaneId}
             disabled={!canOpen || starting}
             starting={starting}
+            stopping={stopping}
             onPress={() => void onOpenPane(pane)}
+            onStop={() => void onStopPane(pane)}
             t={t}
           />
         )
@@ -878,6 +975,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(59,130,246,0.12)'
+  },
+  stopIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgPanel
   },
   pressed: {
     opacity: 0.74

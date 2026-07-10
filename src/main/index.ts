@@ -592,11 +592,17 @@ if (hasSingleInstanceLock) {
       onPaneProcessStarted: ({ windowId, paneId, pid }) => {
         statusPoller?.addPane(windowId, paneId, pid);
       },
+      onPaneProcessStopped: ({ paneId }) => {
+        statusPoller?.removePane(paneId);
+      },
       onPaneData: ({ windowId, paneId, data, seq }) => {
         forwardPtyData({ windowId, paneId, data, seq });
       },
       onPanePtySubscription: (paneId, unsubscribe) => {
         ptySubscriptionManager?.add(paneId, unsubscribe);
+      },
+      onPanePtyUnsubscribe: (paneId) => {
+        ptySubscriptionManager?.remove(paneId);
       },
       onLocalPaneStarted: async ({ windowId, workingDirectory }) => {
         await projectConfigWatcher.startWatching(windowId, workingDirectory, (updatedConfig) => {
@@ -609,6 +615,12 @@ if (hasSingleInstanceLock) {
         });
       },
       onRemoteWindowCreated: ({ workspace }) => {
+        currentWorkspace = workspace;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('workspace-loaded', workspace);
+        }
+      },
+      onRemoteWindowRuntimeUpdated: ({ workspace }) => {
         currentWorkspace = workspace;
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('workspace-loaded', workspace);

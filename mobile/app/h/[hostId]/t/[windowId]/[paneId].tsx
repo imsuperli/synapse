@@ -15,7 +15,7 @@ import {
 } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Eraser, Keyboard as KeyboardIcon, RotateCw } from 'lucide-react-native'
+import { Eraser, Keyboard as KeyboardIcon, RotateCw, Square } from 'lucide-react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { TerminalWebView, type TerminalWebViewHandle } from '../../../../../src/terminal/TerminalWebView'
 import {
@@ -28,6 +28,7 @@ import {
   requestWindowList,
   sendTerminalInput,
   startRemoteWindow,
+  stopRemotePane,
   type RemotePaneSummary
 } from '../../../../../src/synapse/remote'
 import { MobileTerminalLiveInputStatus } from '../../../../../src/session/MobileTerminalLiveInputStatus'
@@ -56,6 +57,8 @@ type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryI
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
+const TERMINAL_INCREMENTAL_SYNC_MS = 1500
+const TERMINAL_PANE_STATUS_SYNC_MS = 3000
 
 function terminalPaneLabel(pane: RemotePaneSummary, t: MobileTranslate): string {
   return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || t('common.terminal')
@@ -168,6 +171,8 @@ export default function RemoteTerminalScreen() {
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   const [windowPanes, setWindowPanes] = useState<RemotePaneSummary[]>([])
   const [startingTabPaneKey, setStartingTabPaneKey] = useState<string | null>(null)
+  const [stopping, setStopping] = useState(false)
+  const [terminalRunning, setTerminalRunning] = useState(true)
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const liveInputTerminalHandles = useMemo(() => new Set([terminalHandle]), [terminalHandle])
   const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set([terminalHandle]))
@@ -226,11 +231,13 @@ export default function RemoteTerminalScreen() {
         const windows = await requestWindowList(client)
         const currentWindow = windows.find((window) => window.windowId === windowId)
         setWindowPanes(currentWindow?.panes.filter((pane) => pane.kind === 'terminal') ?? [])
+        return currentWindow?.panes.find((pane) => pane.paneId === paneId && pane.kind === 'terminal') ?? null
       } catch {
         setWindowPanes([])
+        return null
       }
     },
-    [windowId]
+    [paneId, windowId]
   )
 
   const loadTerminalHistorySnapshot = useCallback(
@@ -269,8 +276,10 @@ export default function RemoteTerminalScreen() {
         (payload) => {
           const subscription = parseTerminalSubscribeResult(payload)
           if (subscription) {
-            lastSeqRef.current = Math.max(lastSeqRef.current, subscription.lastSeq)
-            subscribeParams.sinceSeq = lastSeqRef.current
+            if (subscription.gap) {
+              lastSeqRef.current = Math.max(lastSeqRef.current, subscription.lastSeq)
+              subscribeParams.sinceSeq = lastSeqRef.current
+            }
             if (subscription.gap && !resyncingRef.current) {
               resyncingRef.current = true
               setLoading(true)
@@ -317,6 +326,66 @@ export default function RemoteTerminalScreen() {
     [loadTerminalHistorySnapshot, measureAndFitLocalTerminal, paneId, windowId]
   )
 
+  const syncTerminalIncrement = useCallback(async () => {
+    const client = clientRef.current
+    if (!client || loading || resyncingRef.current) {
+      return
+    }
+    try {
+      const sinceSeq = lastSeqRef.current
+      const history = await requestTerminalHistory(client, windowId, paneId, sinceSeq)
+      if (history.gap) {
+        if (resyncingRef.current) {
+          return
+        }
+        resyncingRef.current = true
+        setLoading(true)
+        try {
+          await loadTerminalHistorySnapshot(client, runIdRef.current)
+          await measureAndFitLocalTerminal()
+        } finally {
+          resyncingRef.current = false
+          setLoading(false)
+        }
+        return
+      }
+      if (history.lastSeq <= sinceSeq || history.chunks.length === 0) {
+        lastSeqRef.current = Math.max(lastSeqRef.current, history.lastSeq)
+        return
+      }
+      if (lastSeqRef.current !== sinceSeq) {
+        return
+      }
+      terminalRef.current?.write(history.chunks.join(''))
+      lastSeqRef.current = Math.max(lastSeqRef.current, history.lastSeq)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (/terminal not found|terminal_not_found/i.test(message)) {
+        setTerminalRunning(false)
+        setError(t('terminal.stoppedOnDesktop'))
+      }
+    }
+  }, [
+    loadTerminalHistorySnapshot,
+    loading,
+    measureAndFitLocalTerminal,
+    paneId,
+    t,
+    windowId
+  ])
+
+  const syncPaneStatus = useCallback(async () => {
+    const client = clientRef.current
+    if (!client) {
+      return
+    }
+    const currentPane = await loadWindowPaneTabs(client)
+    if (currentPane && !currentPane.running) {
+      setTerminalRunning(false)
+      setError(t('terminal.stoppedOnDesktop'))
+    }
+  }, [loadWindowPaneTabs, t])
+
   const openTerminal = useCallback(async () => {
     cleanup()
     const runId = runIdRef.current
@@ -327,6 +396,8 @@ export default function RemoteTerminalScreen() {
     setLogs([])
     setWindowPanes([])
     setStartingTabPaneKey(null)
+    setStopping(false)
+    setTerminalRunning(true)
 
     try {
       const loadedHost = await loadHostById(hostId)
@@ -417,6 +488,25 @@ export default function RemoteTerminalScreen() {
     }
   }, [paneId, windowId])
 
+  const handleStop = useCallback(async () => {
+    const client = clientRef.current
+    if (!client || stopping) {
+      return
+    }
+    setStopping(true)
+    setError(null)
+    try {
+      await stopRemotePane(client, windowId, paneId)
+      setTerminalRunning(false)
+      setError(t('terminal.stopped'))
+      router.replace(`/h/${hostId}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setStopping(false)
+    }
+  }, [hostId, paneId, router, stopping, t, windowId])
+
   const handlePaneTabPress = useCallback(
     async (pane: RemotePaneSummary) => {
       if (pane.paneId === paneId) {
@@ -460,7 +550,7 @@ export default function RemoteTerminalScreen() {
     [measureAndFitLocalTerminal]
   )
 
-  const canSend = connectionState === 'connected' && !loading
+  const canSend = connectionState === 'connected' && !loading && terminalRunning && !stopping
 
   const sendLiveTerminalInput = useCallback(
     async (handle: string, bytes: string): Promise<boolean> => {
@@ -576,6 +666,26 @@ export default function RemoteTerminalScreen() {
     }
   }, [insets.bottom, stopAccessoryRepeat])
 
+  useEffect(() => {
+    if (loading || connectionState !== 'connected') {
+      return
+    }
+    const timer = setInterval(() => {
+      void syncTerminalIncrement()
+    }, TERMINAL_INCREMENTAL_SYNC_MS)
+    return () => clearInterval(timer)
+  }, [connectionState, loading, syncTerminalIncrement])
+
+  useEffect(() => {
+    if (connectionState !== 'connected') {
+      return
+    }
+    const timer = setInterval(() => {
+      void syncPaneStatus()
+    }, TERMINAL_PANE_STATUS_SYNC_MS)
+    return () => clearInterval(timer)
+  }, [connectionState, syncPaneStatus])
+
   const keyboardLift = keyboardHeight > 0 ? keyboardHeight : 0
   const passiveDictationState = { isStarting: false, isRecording: false, isProcessing: false }
 
@@ -594,6 +704,14 @@ export default function RemoteTerminalScreen() {
           </Pressable>
           <Pressable style={styles.iconButton} onPress={() => void handleClear()}>
             <Eraser size={18} color={colors.textPrimary} />
+          </Pressable>
+          <Pressable
+            style={[styles.iconButton, stopping && styles.iconButtonDisabled]}
+            disabled={stopping}
+            onPress={() => void handleStop()}
+            accessibilityLabel={t('overview.stopTerminal')}
+          >
+            <Square size={17} color={colors.statusRed} fill={colors.statusRed} />
           </Pressable>
         </View>
       </View>
@@ -817,6 +935,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgRaised,
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  iconButtonDisabled: {
+    opacity: 0.52
   },
   paneTabs: {
     borderBottomWidth: StyleSheet.hairlineWidth,

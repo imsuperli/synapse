@@ -39,6 +39,8 @@ describe('RemoteDispatcher', () => {
         listWindows: ReturnType<typeof vi.fn>;
         listPanes: ReturnType<typeof vi.fn>;
         startWindow?: ReturnType<typeof vi.fn>;
+        closeWindow?: ReturnType<typeof vi.fn>;
+        closePane?: ReturnType<typeof vi.fn>;
       };
     } = {},
   ) {
@@ -220,6 +222,30 @@ describe('RemoteDispatcher', () => {
     });
     expect(harness.processManager.clearPtyHistory).toHaveBeenCalledWith('pane-1');
     expect(harness.processManager.writeToPty).not.toHaveBeenCalled();
+  });
+
+  it('returns incremental terminal history after sinceSeq', async () => {
+    const harness = createHarness();
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_HISTORY, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 4,
+    });
+
+    expect(response).toEqual({
+      id: 'req-1',
+      ok: true,
+      result: {
+        windowId: 'win-1',
+        paneId: 'pane-1',
+        chunks: [' world'],
+        firstSeq: 4,
+        lastSeq: 5,
+        gap: false,
+      },
+    });
+    expect(harness.processManager.getPtyHistoryEntriesSince).toHaveBeenCalledWith('pane-1', 4);
   });
 
   it('rejects control methods for read-only mobile devices', async () => {
@@ -590,6 +616,56 @@ describe('RemoteDispatcher', () => {
     });
   });
 
+  it('stops windows and panes through the state provider for window-control devices', async () => {
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      startWindow: vi.fn(),
+      createWindow: vi.fn(),
+      closeWindow: vi.fn(() => ({
+        window: {
+          windowId: 'win-1',
+          name: 'Project',
+          panes: [],
+        },
+        stoppedPanes: [],
+      })),
+      closePane: vi.fn(() => ({
+        window: {
+          windowId: 'win-1',
+          name: 'Project',
+          panes: [],
+        },
+        pane: {
+          windowId: 'win-1',
+          paneId: 'pane-1',
+          kind: 'terminal',
+          running: false,
+        },
+      })),
+    };
+    const harness = createHarness('mobile.window-control', { stateProvider });
+
+    const windowResponse = await dispatch(harness, REMOTE_METHODS.WINDOW_CLOSE, {
+      windowId: 'win-1',
+    });
+    const paneResponse = await dispatch(harness, REMOTE_METHODS.PANE_CLOSE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+    });
+
+    expect(windowResponse).toMatchObject({
+      ok: true,
+      result: { window: { windowId: 'win-1' } },
+    });
+    expect(paneResponse).toMatchObject({
+      ok: true,
+      result: { pane: { paneId: 'pane-1', running: false } },
+    });
+    expect(stateProvider.closeWindow).toHaveBeenCalledWith({ windowId: 'win-1' });
+    expect(stateProvider.closePane).toHaveBeenCalledWith({ windowId: 'win-1', paneId: 'pane-1' });
+  });
+
   it('does not advertise window methods when no state provider is registered', async () => {
     const harness = createHarness('mobile.window-control');
 
@@ -639,6 +715,7 @@ describe('RemoteDispatcher', () => {
         methods: expect.arrayContaining([
           REMOTE_METHODS.WINDOW_LIST,
           REMOTE_METHODS.WINDOW_START,
+          REMOTE_METHODS.PANE_CLOSE,
           REMOTE_METHODS.DEVICE_REVOKE,
         ]),
       },

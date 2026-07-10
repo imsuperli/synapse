@@ -291,6 +291,72 @@ describe('RemoteStateProvider', () => {
       provider.startWindow({ windowId: 'win-1', paneId: 'pane-terminal' }),
     ).rejects.toThrow('remote_start_ssh_not_supported');
   });
+
+  it('stops a single pane while keeping the window record restartable', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createRunningTerminalWindow('win-local', 'Local'));
+    const stopWindowPanes = vi.fn();
+    const onWindowRuntimeUpdated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes,
+      onWindowRuntimeUpdated,
+    });
+
+    const result = await provider.closePane({
+      windowId: 'win-local',
+      paneId: 'win-local-pane',
+    });
+
+    expect(stopWindowPanes).toHaveBeenCalledWith({
+      windowId: 'win-local',
+      paneIds: ['win-local-pane'],
+    });
+    expect(result.pane).toMatchObject({
+      paneId: 'win-local-pane',
+      running: false,
+      pid: null,
+      sessionId: null,
+      status: WindowStatus.Completed,
+    });
+    expect(workspace.windows.find((window) => window.id === 'win-local')?.layout).toMatchObject({
+      pane: {
+        status: WindowStatus.Completed,
+        pid: null,
+        sessionId: undefined,
+      },
+    });
+    expect(onWindowRuntimeUpdated).toHaveBeenCalledWith({
+      window: workspace.windows.find((window) => window.id === 'win-local'),
+      workspace,
+    });
+  });
+
+  it('stops every terminal pane in a window', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createRunningTerminalWindow('win-local', 'Local'));
+    const stopWindowPanes = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes,
+    });
+
+    const result = await provider.closeWindow({ windowId: 'win-local' });
+
+    expect(stopWindowPanes).toHaveBeenCalledWith({
+      windowId: 'win-local',
+      paneIds: ['win-local-pane'],
+    });
+    expect(result.stoppedPanes).toEqual([
+      expect.objectContaining({
+        paneId: 'win-local-pane',
+        running: false,
+        status: WindowStatus.Completed,
+      }),
+    ]);
+  });
 });
 
 function createWorkspace(): Workspace {
@@ -388,4 +454,14 @@ function createTerminalWindow(id: string, name: string): Window {
       },
     },
   };
+}
+
+function createRunningTerminalWindow(id: string, name: string): Window {
+  const window = createTerminalWindow(id, name);
+  if (window.layout.type === 'pane') {
+    window.layout.pane.status = WindowStatus.WaitingForInput;
+    window.layout.pane.pid = 999;
+    window.layout.pane.sessionId = 'session-999';
+  }
+  return window;
 }

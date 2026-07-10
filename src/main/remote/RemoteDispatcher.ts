@@ -19,7 +19,9 @@ import {
   TerminalSubscribeParamsSchema,
 } from '../../shared/remote/terminal-protocol';
 import {
+  PaneCloseParamsSchema,
   PaneListParamsSchema,
+  WindowCloseParamsSchema,
   WindowCreateParamsSchema,
   WindowListParamsSchema,
   WindowStartParamsSchema,
@@ -195,7 +197,7 @@ export class RemoteDispatcher {
       params: TerminalHistoryParamsSchema,
       handler: (params) => {
         const typed = TerminalHistoryParamsSchema.parse(params);
-        return this.terminalController.getHistory(typed.windowId, typed.paneId);
+        return this.terminalController.getHistory(typed.windowId, typed.paneId, typed.sinceSeq);
       },
     });
 
@@ -282,11 +284,27 @@ export class RemoteDispatcher {
         },
       });
 
+      this.methods.set(REMOTE_METHODS.WINDOW_CLOSE, {
+        params: WindowCloseParamsSchema,
+        handler: (params) => {
+          const typed = WindowCloseParamsSchema.parse(params);
+          return stateProvider.closeWindow(typed);
+        },
+      });
+
       this.methods.set(REMOTE_METHODS.PANE_LIST, {
         params: PaneListParamsSchema,
         handler: (params) => {
           const typed = PaneListParamsSchema.parse(params);
           return stateProvider.listPanes(typed);
+        },
+      });
+
+      this.methods.set(REMOTE_METHODS.PANE_CLOSE, {
+        params: PaneCloseParamsSchema,
+        handler: (params) => {
+          const typed = PaneCloseParamsSchema.parse(params);
+          return stateProvider.closePane(typed);
         },
       });
     }

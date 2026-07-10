@@ -441,9 +441,9 @@ export function RemoteSettingsTab() {
       >
         <div className="space-y-3 px-4 py-3">
           {pairing?.available ? (
-            <div className="grid gap-4 rounded-[14px] border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_42%,transparent)] p-4 md:grid-cols-[minmax(0,384px)_minmax(0,1fr)]">
+            <div className="grid gap-4 rounded-[14px] border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_42%,transparent)] p-4 md:grid-cols-[minmax(0,256px)_minmax(0,1fr)]">
               {pairing.qrDataUrl && (
-                <div className="mx-auto flex w-full max-w-96 items-center justify-center rounded-xl bg-white p-3 shadow-sm md:mx-0">
+                <div className="mx-auto flex w-full max-w-60 items-center justify-center rounded-xl bg-white p-2 shadow-sm md:mx-0">
                   <img
                     src={pairing.qrDataUrl}
                     alt={t('settings.remote.qrAlt')}

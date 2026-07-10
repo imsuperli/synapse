@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import WebSocket, { type RawData } from 'ws';
 import type { ProcessManager } from '../services/ProcessManager';
+import { ProcessStatus } from '../types/process';
 import type { Workspace } from '../types/workspace';
 import type { Window } from '../../shared/types/window';
 import { WindowStatus } from '../../shared/types/window';
@@ -37,10 +38,13 @@ type RemoteGatewayOptions = {
   wsPort?: number;
   getCurrentWorkspace?: () => Workspace | null;
   onPaneProcessStarted?: (payload: { windowId: string; paneId: string; pid: number }) => void;
+  onPaneProcessStopped?: (payload: { windowId: string; paneId: string }) => void;
   onPaneData?: (payload: { windowId: string; paneId: string; data: string; seq?: number }) => void;
   onPanePtySubscription?: (paneId: string, unsubscribe: () => void) => void;
+  onPanePtyUnsubscribe?: (paneId: string) => void;
   onLocalPaneStarted?: (payload: { windowId: string; workingDirectory: string }) => void | Promise<void>;
   onRemoteWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
+  onRemoteWindowRuntimeUpdated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
   transportOptions?: Partial<RemoteWebSocketTransportOptions>;
 };
 
@@ -67,10 +71,13 @@ export class RemoteGateway {
   private readonly transportOptions: Partial<RemoteWebSocketTransportOptions>;
   private readonly getCurrentWorkspace: (() => Workspace | null) | undefined;
   private readonly onPaneProcessStarted: ((payload: { windowId: string; paneId: string; pid: number }) => void) | undefined;
+  private readonly onPaneProcessStopped: ((payload: { windowId: string; paneId: string }) => void) | undefined;
   private readonly onPaneData: ((payload: { windowId: string; paneId: string; data: string; seq?: number }) => void) | undefined;
   private readonly onPanePtySubscription: ((paneId: string, unsubscribe: () => void) => void) | undefined;
+  private readonly onPanePtyUnsubscribe: ((paneId: string) => void) | undefined;
   private readonly onLocalPaneStarted: ((payload: { windowId: string; workingDirectory: string }) => void | Promise<void>) | undefined;
   private readonly onRemoteWindowCreated: ((payload: { window: Window; workspace: Workspace }) => void | Promise<void>) | undefined;
+  private readonly onRemoteWindowRuntimeUpdated: ((payload: { window: Window; workspace: Workspace }) => void | Promise<void>) | undefined;
   private readonly settingsStore: RemoteSettingsStore;
   private readonly deviceRegistry: RemoteDeviceRegistry;
   private readonly keypair: RemoteE2EEKeypair;
@@ -92,10 +99,13 @@ export class RemoteGateway {
     this.transportOptions = options.transportOptions ?? {};
     this.getCurrentWorkspace = options.getCurrentWorkspace;
     this.onPaneProcessStarted = options.onPaneProcessStarted;
+    this.onPaneProcessStopped = options.onPaneProcessStopped;
     this.onPaneData = options.onPaneData;
     this.onPanePtySubscription = options.onPanePtySubscription;
+    this.onPanePtyUnsubscribe = options.onPanePtyUnsubscribe;
     this.onLocalPaneStarted = options.onLocalPaneStarted;
     this.onRemoteWindowCreated = options.onRemoteWindowCreated;
+    this.onRemoteWindowRuntimeUpdated = options.onRemoteWindowRuntimeUpdated;
     this.settingsStore = new RemoteSettingsStore(this.userDataPath);
     this.deviceRegistry = new RemoteDeviceRegistry(this.userDataPath);
     this.keypair = loadOrCreateRemoteKeypair(this.userDataPath);
@@ -104,7 +114,9 @@ export class RemoteGateway {
           getCurrentWorkspace: options.getCurrentWorkspace,
           processManager: this.processManager,
           startLocalTerminalPane: (params) => this.startLocalTerminalPane(params),
+          stopWindowPanes: (params) => this.stopWindowPanes(params),
           onWindowCreated: (payload) => this.onRemoteWindowCreated?.(payload),
+          onWindowRuntimeUpdated: (payload) => this.onRemoteWindowRuntimeUpdated?.(payload),
         })
       : undefined;
     this.dispatcher = new RemoteDispatcher({
@@ -215,6 +227,23 @@ export class RemoteGateway {
       status: WindowStatus.WaitingForInput,
       command: shellCommand,
     };
+  }
+
+  private async stopWindowPanes(params: { windowId: string; paneIds: string[] }): Promise<void> {
+    const uniquePaneIds = Array.from(new Set(params.paneIds.filter(Boolean)));
+    for (const paneId of uniquePaneIds) {
+      this.onPanePtyUnsubscribe?.(paneId);
+      this.onPaneProcessStopped?.({ windowId: params.windowId, paneId });
+      const pid = this.processManager.getPidByPane(params.windowId, paneId);
+      if (pid === null) {
+        continue;
+      }
+      const processInfo = this.processManager.getProcessStatus(pid);
+      if (processInfo?.status === ProcessStatus.Exited) {
+        continue;
+      }
+      await this.processManager.killProcess(pid);
+    }
   }
 
   async startFromSavedSettings(): Promise<void> {

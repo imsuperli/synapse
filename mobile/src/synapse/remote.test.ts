@@ -14,15 +14,19 @@ import {
   connectToHost,
   createRemoteWindow,
   parseWindowCreateResult,
+  parsePaneCloseResult,
   parseTerminalClearResult,
   parseTerminalHistory,
   parseTerminalList,
   parseTerminalOutputEvent,
   parseTerminalSubscribeResult,
+  parseWindowCloseResult,
   requestTerminalHistory,
   requestTerminalList,
   sendTerminalInput,
-  startRemoteWindow
+  startRemoteWindow,
+  stopRemotePane,
+  stopRemoteWindow
 } from './remote'
 import type { RpcClient } from '../transport/rpc-client'
 import type { RpcResponse } from '../transport/types'
@@ -207,6 +211,7 @@ describe('Synapse remote terminal helpers', () => {
     })
 
     await requestTerminalHistory(client, 'w1', 'p1')
+    await requestTerminalHistory(client, 'w1', 'p1', 12)
     await sendTerminalInput(client, 'w1', 'p1', 'ls\n')
     await clearTerminal(client, 'w1', 'p1')
 
@@ -214,12 +219,17 @@ describe('Synapse remote terminal helpers', () => {
       windowId: 'w1',
       paneId: 'p1'
     })
-    expect(client.sendRequest).toHaveBeenNthCalledWith(2, 'terminal.send', {
+    expect(client.sendRequest).toHaveBeenNthCalledWith(2, 'terminal.history', {
+      windowId: 'w1',
+      paneId: 'p1',
+      sinceSeq: 12
+    })
+    expect(client.sendRequest).toHaveBeenNthCalledWith(3, 'terminal.send', {
       windowId: 'w1',
       paneId: 'p1',
       data: 'ls\n'
     })
-    expect(client.sendRequest).toHaveBeenNthCalledWith(3, 'terminal.clear', {
+    expect(client.sendRequest).toHaveBeenNthCalledWith(4, 'terminal.clear', {
       windowId: 'w1',
       paneId: 'p1'
     })
@@ -321,6 +331,73 @@ describe('Synapse remote terminal helpers', () => {
       pane: { windowId: 'w-new', paneId: 'p-new', running: true }
     })
     expect(client.sendRequest).toHaveBeenCalledWith('window.create', {})
+  })
+
+  it('stops remote windows and panes through the window close RPCs', async () => {
+    const windowClosePayload = {
+      window: {
+        windowId: 'w1',
+        name: 'Workspace',
+        activePaneId: 'p1',
+        paneCount: 1,
+        terminalPaneCount: 1,
+        panes: [
+          {
+            windowId: 'w1',
+            paneId: 'p1',
+            kind: 'terminal',
+            backend: 'local',
+            status: 'completed',
+            running: false,
+            pid: null,
+            sessionId: null,
+            cwd: '/repo',
+            command: 'bash'
+          }
+        ]
+      },
+      stoppedPanes: [
+        {
+          windowId: 'w1',
+          paneId: 'p1',
+          kind: 'terminal',
+          backend: 'local',
+          status: 'completed',
+          running: false,
+          pid: null,
+          sessionId: null,
+          cwd: '/repo',
+          command: 'bash'
+        }
+      ]
+    }
+    const paneClosePayload = {
+      window: windowClosePayload.window,
+      pane: windowClosePayload.stoppedPanes[0]
+    }
+    expect(parseWindowCloseResult(windowClosePayload)).toMatchObject({
+      window: { windowId: 'w1' },
+      stoppedPanes: [{ paneId: 'p1', running: false }]
+    })
+    expect(parsePaneCloseResult(paneClosePayload)).toMatchObject({
+      window: { windowId: 'w1' },
+      pane: { paneId: 'p1', running: false }
+    })
+
+    const windowClient = mockClient({ id: 'rpc-1', ok: true, result: windowClosePayload })
+    const paneClient = mockClient({ id: 'rpc-2', ok: true, result: paneClosePayload })
+
+    await expect(stopRemoteWindow(windowClient, 'w1')).resolves.toMatchObject({
+      window: { windowId: 'w1' }
+    })
+    await expect(stopRemotePane(paneClient, 'w1', 'p1')).resolves.toMatchObject({
+      pane: { paneId: 'p1', running: false }
+    })
+    expect(windowClient.sendRequest).toHaveBeenCalledWith('window.close', { windowId: 'w1' })
+    expect(paneClient.sendRequest).toHaveBeenCalledWith('pane.close', {
+      windowId: 'w1',
+      paneId: 'p1'
+    })
   })
 
   it('rejects malformed window create responses', () => {
