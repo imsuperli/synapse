@@ -162,6 +162,20 @@ function replaceWindowInGroups(
   }))
 }
 
+function filterSelectableWindowIds(
+  selectedWindowIds: string[],
+  windows: RemoteWindowSummary[],
+  groups: RemoteWindowGroupSummary[]
+): string[] {
+  const liveWindowIds = new Set(windows.map((window) => window.windowId))
+  const groupedWindowIds = new Set(
+    groups.flatMap((group) => group.windows.map((window) => window.windowId))
+  )
+  return selectedWindowIds.filter(
+    (windowId) => liveWindowIds.has(windowId) && !groupedWindowIds.has(windowId)
+  )
+}
+
 export default function HostOverviewScreen() {
   const params = useLocalSearchParams<{ hostId?: string }>()
   const hostId = getParam(params.hostId)
@@ -191,9 +205,21 @@ export default function HostOverviewScreen() {
     () => normalizeTerminalSearchQuery(searchQuery),
     [searchQuery]
   )
+  const groupedWindowIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const group of groups) {
+      for (const window of group.windows) {
+        ids.add(window.windowId)
+      }
+    }
+    return ids
+  }, [groups])
   const visibleWindows = useMemo(
-    () => filterWindows(windows, normalizedSearchQuery),
-    [normalizedSearchQuery, windows]
+    () => filterWindows(
+      windows.filter((window) => !groupedWindowIds.has(window.windowId)),
+      normalizedSearchQuery
+    ),
+    [groupedWindowIds, normalizedSearchQuery, windows]
   )
   const visibleGroups = useMemo(
     () =>
@@ -273,10 +299,9 @@ export default function HostOverviewScreen() {
       setCanCreateWindow(overview.canCreateWindow)
       setWindows(overview.windows)
       setGroups(overview.groups)
-      setSelectedGroupWindowIds((current) => {
-        const liveWindowIds = new Set(overview.windows.map((window) => window.windowId))
-        return current.filter((windowId) => liveWindowIds.has(windowId))
-      })
+      setSelectedGroupWindowIds((current) =>
+        filterSelectableWindowIds(current, overview.windows, overview.groups)
+      )
       setTerminals(
         overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
       )
@@ -504,13 +529,13 @@ export default function HostOverviewScreen() {
       setCanCreateWindow(overview.canCreateWindow)
       setWindows(overview.windows)
       setGroups(overview.groups)
-      setSelectedGroupWindowIds((current) => {
-        const liveWindowIds = new Set(overview.windows.map((window) => window.windowId))
-        return current.filter((windowId) => liveWindowIds.has(windowId))
-      })
+      setSelectedGroupWindowIds((current) =>
+        filterSelectableWindowIds(current, overview.windows, overview.groups)
+      )
       setTerminals(
         overview.terminals.filter((terminal) => terminal.windowId && terminal.paneId)
       )
+      setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -579,7 +604,7 @@ export default function HostOverviewScreen() {
               styles.iconButton,
               (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
             ]}
-            disabled={creatingWindow}
+            disabled={!canCreateWindow || creatingWindow}
             onPress={() => void handleCreateWindow()}
             accessibilityLabel={t('overview.newTerminal')}
           >

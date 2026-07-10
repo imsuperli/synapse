@@ -28,6 +28,15 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('startTerminalSubscription(client, runId)')
   })
 
+  it('reloads terminal history and subscriptions when the desktop restarts the same pane', () => {
+    expect(routeSource).toContain('function terminalPaneRuntimeKey(pane: RemotePaneSummary | null): string | null')
+    expect(routeSource).toContain('const currentPaneRuntimeKeyRef = useRef<string | null>(null)')
+    expect(routeSource).toContain('const previousRuntimeKey = currentPaneRuntimeKeyRef.current')
+    expect(routeSource).toContain('previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey')
+    expect(routeSource).toContain('await reloadCurrentTerminalStream(client)')
+    expect(routeSource).toContain('lastSeqRef.current = 0')
+  })
+
   it('ignores duplicate sequenced terminal events after replay or reconnect', () => {
     expect(routeSource).toContain('event.seq > 0 && event.seq <= lastSeqRef.current')
     expect(routeSource).toContain('lastSeqRef.current = Math.max(lastSeqRef.current, event.seq)')
@@ -60,6 +69,15 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('startRemoteWindow(client, pane.windowId, pane.paneId)')
     expect(routeSource).not.toContain('pane.focus')
     expect(routeSource).not.toContain('window.activate')
+  })
+
+  it('renders window tabs for grouped windows before falling back to same-window pane tabs', () => {
+    expect(routeSource).toContain('const showGroupWindowTabs = groupWindowTabs.length > 1')
+    expect(routeSource).toContain('showGroupWindowTabs ?')
+    expect(routeSource).toContain('groupWindowTabs.map((window) => {')
+    expect(routeSource).toContain('getActiveTerminalPane(window.panes, window.activePaneId)')
+    expect(routeSource).toContain('handleGroupWindowTabPress(window)')
+    expect(routeSource).toContain(': windowPanes.length > 1 ?')
   })
 
   it('cleans up subscriptions and sockets when leaving the terminal screen', () => {
