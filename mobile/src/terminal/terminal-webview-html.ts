@@ -722,7 +722,7 @@ window.onerror = function(msg) {
     pumpWrites(terminalGeneration);
   }
 
-  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode) {
+  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
     textScaleMode = normalizeTextScaleMode(nextTextScaleMode);
     if (typeof nextFontScale === 'number' && nextFontScale > 0) currentTextScale = nextFontScale;
     // Why: a width-reflow re-stream rewraps the same content at new cols.
@@ -751,7 +751,7 @@ window.onerror = function(msg) {
       sgrMouseMode: false,
       sgrMousePixelsMode: false
     };
-    var replayData = normalizeInitialData(initialData);
+    var replayData = preserveFullInitialData ? initialData : normalizeInitialData(initialData);
     // Why: normalizeInitialData can discard pre-alt-screen bytes. Keep the
     // mirrored modes aligned with exactly what this mobile xterm replays.
     updateMouseModeFromData(replayData);
@@ -785,7 +785,7 @@ window.onerror = function(msg) {
       fontSize: fontPxForScale(isViewportZoomTextScale() ? 1 : currentTextScale),
       fontWeight: '300',
       fontWeightBold: '500',
-      scrollback: 5000,
+      scrollback: 30000,
       disableStdin: true,
       cursorBlink: false,
       cursorStyle: 'bar',
@@ -981,7 +981,7 @@ window.onerror = function(msg) {
       if (handledMessageIds.length > 256) handledMessageIds.shift();
     }
     if (msg.type === 'init') {
-      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks, msg.textScaleMode);
+      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks, msg.textScaleMode, msg.preserveFullInitialData);
     } else if (msg.type === 'set-font-scale') {
       textScaleMode = normalizeTextScaleMode(msg.textScaleMode);
       // Why: ignore RN echoing back the value a pinch just set (msg.fontScale ===

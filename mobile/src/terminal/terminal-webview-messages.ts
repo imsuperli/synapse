@@ -18,6 +18,9 @@ export type TerminalWebViewCommand =
       // Why: width-reflow re-streams replay the same content rewrapped at new
       // cols; preserve the reader's scroll position instead of jumping to bottom.
       preserveScroll?: boolean
+      // Remote terminal history is a raw PTY stream. Do not trim bytes before the
+      // last alternate-screen enter sequence, or dynamic CLIs can lose context.
+      preserveFullInitialData?: boolean
     }
   | {
       type: 'set-font-scale'

@@ -292,7 +292,9 @@ export default function RemoteTerminalScreen() {
         viewport.cols,
         viewport.rows,
         history.chunks.join(''),
-        false
+        false,
+        undefined,
+        true
       )
       await terminalRef.current?.awaitReady()
       if (runIdRef.current !== runId || clientRef.current !== client) {

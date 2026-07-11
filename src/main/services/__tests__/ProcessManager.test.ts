@@ -648,6 +648,67 @@ describe('ProcessManager', () => {
       }
     });
 
+    it('keeps remote histories separate for panes with the same pane id in different windows', async () => {
+      const ptyModule = getPtyModule();
+      const dataListeners: Array<(data: string) => void> = [];
+      let nextPid = 4520;
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...makeMockPtyProcess(nextPid++),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListeners.push(handler);
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-a',
+          paneId: 'pane-shared',
+        });
+
+        dataListeners[0]?.('win-a-output');
+
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-b',
+          paneId: 'pane-shared',
+        });
+
+        expect(processManager.getPtyHistory('win-a', 'pane-shared')).toEqual({
+          chunks: ['win-a-output'],
+          firstSeq: 1,
+          lastSeq: 1,
+          evictedBeforeSeq: 0,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+        expect(processManager.getPtyHistory('win-b', 'pane-shared')).toEqual({
+          chunks: [],
+          firstSeq: 0,
+          lastSeq: 0,
+          evictedBeforeSeq: 0,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+
+        dataListeners[1]?.('win-b-output');
+
+        expect(processManager.getPtyHistoryEntriesSince('win-a', 'pane-shared', 0)).toMatchObject({
+          entries: [{ seq: 1, data: 'win-a-output' }],
+          lastSeq: 1,
+          gap: false,
+        });
+        expect(processManager.getPtyHistoryEntriesSince('win-b', 'pane-shared', 0)).toMatchObject({
+          entries: [{ seq: 1, data: 'win-b-output' }],
+          lastSeq: 1,
+          gap: false,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
     it('clears pane history when the session exits', async () => {
       const ptyModule = getPtyModule();
       const dataListeners: Array<(data: string) => void> = [];

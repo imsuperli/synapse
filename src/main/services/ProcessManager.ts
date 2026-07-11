@@ -93,8 +93,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   private cachedSpawnEnvAt: number;
   private cachedSpawnEnvShellKey: string | null;
   private readonly SPAWN_ENV_CACHE_TTL_MS = 30000;
-  private readonly PANE_HISTORY_CHUNK_LIMIT = 50000;
-  private readonly PANE_HISTORY_CHAR_LIMIT = 2_000_000;
+  private readonly PANE_HISTORY_CHUNK_LIMIT = 250_000;
+  private readonly PANE_HISTORY_CHAR_LIMIT = 20_000_000;
   private readonly getSettings: (() => Settings | null | undefined) | null;
   private tmuxCompatService: ITmuxCompatService | null;
   private sshKnownHostsStore: ISSHKnownHostsStore | null;
@@ -307,7 +307,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
     // 鍒濆鍖栬緭鍑虹紦鍐插尯锛岀敤浜庣紦瀛樻棭鏈熻緭鍑猴紙閬垮厤绔炴€佹潯浠跺鑷存暟鎹涪澶憋級
     this.ptyOutputBuffers.set(pid, []);
-    this.resetPaneHistory(config.paneId);
+    this.resetPaneHistory(config.windowId, config.paneId);
 
     // Start tracking this PID before registering listeners (avoids race condition)
     this.statusDetector.trackPid(pid, { virtual: backend === 'ssh' });
@@ -317,7 +317,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       if (this.tmuxCompatService && config.windowId && config.paneId) {
         this.tmuxCompatService.observePaneOutput(config.windowId, config.paneId, data);
       }
-      const seq = this.appendPaneHistory(config.paneId, data);
+      const seq = this.appendPaneHistory(config.windowId, config.paneId, data);
       const buffer = this.ptyOutputBuffers.get(pid);
       if (buffer) {
         buffer.push({ data, seq });
@@ -807,8 +807,22 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     lastSeq: number;
     evictedBeforeSeq: number;
     keyboardState: PtyKeyboardProtocolState;
+  };
+  getPtyHistory(windowId: string, paneId: string): {
+    chunks: string[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    keyboardState: PtyKeyboardProtocolState;
+  };
+  getPtyHistory(windowIdOrPaneId: string, paneId?: string): {
+    chunks: string[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    keyboardState: PtyKeyboardProtocolState;
   } {
-    const history = this.paneHistoryBuffers.get(paneId);
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
     if (!history) {
       return {
         chunks: [],
@@ -830,7 +844,29 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
   getPtyHistoryEntriesSince(
     paneId: string,
-    sinceSeq: number = 0,
+    sinceSeq?: number,
+  ): {
+    entries: PaneHistoryEntry[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    gap: boolean;
+  };
+  getPtyHistoryEntriesSince(
+    windowId: string,
+    paneId: string,
+    sinceSeq?: number,
+  ): {
+    entries: PaneHistoryEntry[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    gap: boolean;
+  };
+  getPtyHistoryEntriesSince(
+    windowIdOrPaneId: string,
+    paneIdOrSinceSeq: string | number = 0,
+    maybeSinceSeq?: number,
   ): {
     entries: PaneHistoryEntry[];
     firstSeq: number;
@@ -838,7 +874,9 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     evictedBeforeSeq: number;
     gap: boolean;
   } {
-    const history = this.paneHistoryBuffers.get(paneId);
+    const paneId = typeof paneIdOrSinceSeq === 'string' ? paneIdOrSinceSeq : undefined;
+    const sinceSeq = typeof paneIdOrSinceSeq === 'number' ? paneIdOrSinceSeq : maybeSinceSeq ?? 0;
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
     if (!history) {
       return {
         entries: [],
@@ -859,8 +897,10 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     };
   }
 
-  clearPtyHistory(paneId: string): void {
-    const history = this.paneHistoryBuffers.get(paneId);
+  clearPtyHistory(paneId: string): void;
+  clearPtyHistory(windowId: string, paneId: string): void;
+  clearPtyHistory(windowIdOrPaneId: string, paneId?: string): void {
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
     if (!history) {
       return;
     }
@@ -871,8 +911,10 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     history.nextSeq = Math.max(history.nextSeq, history.lastSeq + 1);
   }
 
-  getLatestPaneOutputSeq(paneId: string): number {
-    return this.paneHistoryBuffers.get(paneId)?.lastSeq ?? 0;
+  getLatestPaneOutputSeq(paneId: string): number;
+  getLatestPaneOutputSeq(windowId: string, paneId: string): number;
+  getLatestPaneOutputSeq(windowIdOrPaneId: string, paneId?: string): number {
+    return this.getPaneHistoryBuffer(windowIdOrPaneId, paneId)?.lastSeq ?? 0;
   }
 
   /**
@@ -1718,11 +1760,16 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       }
     }
 
+    const history = this.paneHistoryBuffers.get(oldKey);
+    if (history && oldKey !== newKey) {
+      this.paneHistoryBuffers.delete(oldKey);
+      this.paneHistoryBuffers.set(newKey, history);
+    }
     if (paneId !== newPaneId) {
-      const history = this.paneHistoryBuffers.get(paneId);
-      if (history) {
+      const legacyHistory = this.paneHistoryBuffers.get(paneId);
+      if (legacyHistory) {
         this.paneHistoryBuffers.delete(paneId);
-        this.paneHistoryBuffers.set(newPaneId, history);
+        this.paneHistoryBuffers.set(newPaneId, legacyHistory);
       }
     }
 
@@ -1759,6 +1806,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.ptyOutputBuffers.delete(pid);
     this.ptys.delete(pid);
     if (processInfo.paneId) {
+      this.paneHistoryBuffers.delete(this.getPaneKey(processInfo.windowId, processInfo.paneId));
       this.paneHistoryBuffers.delete(processInfo.paneId);
     }
 
@@ -1776,12 +1824,13 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.scheduleProcessCleanup(pid);
   }
 
-  private resetPaneHistory(paneId?: string): void {
+  private resetPaneHistory(windowId?: string, paneId?: string): void {
     if (!paneId) {
       return;
     }
 
-    this.paneHistoryBuffers.set(paneId, {
+    this.paneHistoryBuffers.delete(paneId);
+    this.paneHistoryBuffers.set(this.getPaneKey(windowId, paneId), {
       entries: [],
       totalLength: 0,
       nextSeq: 1,
@@ -1791,9 +1840,15 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     });
   }
 
-  getPaneTerminalDimensions(paneId: string): { cols?: number; rows?: number } {
+  getPaneTerminalDimensions(paneId: string): { cols?: number; rows?: number };
+  getPaneTerminalDimensions(windowId: string, paneId: string): { cols?: number; rows?: number };
+  getPaneTerminalDimensions(windowIdOrPaneId: string, paneId?: string): { cols?: number; rows?: number } {
     for (const processInfo of this.processes.values()) {
-      if (processInfo.paneId !== paneId || processInfo.status === ProcessStatus.Exited) {
+      if (
+        processInfo.status === ProcessStatus.Exited ||
+        processInfo.paneId !== (paneId ?? windowIdOrPaneId) ||
+        (paneId && processInfo.windowId !== windowIdOrPaneId)
+      ) {
         continue;
       }
       const cols = processInfo.terminalCols;
@@ -1806,12 +1861,13 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     return {};
   }
 
-  private appendPaneHistory(paneId: string | undefined, data: string): number | undefined {
+  private appendPaneHistory(windowId: string | undefined, paneId: string | undefined, data: string): number | undefined {
     if (!paneId || !data) {
       return undefined;
     }
 
-    const history = this.paneHistoryBuffers.get(paneId) ?? {
+    const historyKey = this.getPaneKey(windowId, paneId);
+    const history = this.paneHistoryBuffers.get(historyKey) ?? {
       entries: [],
       totalLength: 0,
       nextSeq: 1,
@@ -1838,8 +1894,28 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       history.evictedBeforeSeq = Math.max(history.evictedBeforeSeq, removed.seq);
     }
 
-    this.paneHistoryBuffers.set(paneId, history);
+    this.paneHistoryBuffers.set(historyKey, history);
     return seq;
+  }
+
+  private getPaneHistoryBuffer(windowIdOrPaneId: string, paneId?: string): PaneHistoryBuffer | undefined {
+    if (paneId) {
+      return this.paneHistoryBuffers.get(this.getPaneKey(windowIdOrPaneId, paneId));
+    }
+
+    const legacyHistory = this.paneHistoryBuffers.get(windowIdOrPaneId);
+    if (legacyHistory) {
+      return legacyHistory;
+    }
+
+    for (const processInfo of this.processes.values()) {
+      if (processInfo.paneId !== windowIdOrPaneId || processInfo.status === ProcessStatus.Exited) {
+        continue;
+      }
+      return this.paneHistoryBuffers.get(this.getPaneKey(processInfo.windowId, processInfo.paneId));
+    }
+
+    return undefined;
   }
 
   private scheduleProcessCleanup(pid: number): void {

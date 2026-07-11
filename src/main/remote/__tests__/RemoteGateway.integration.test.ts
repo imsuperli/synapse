@@ -4,6 +4,7 @@ import { join } from 'path';
 import WebSocket, { type RawData } from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_METHODS } from '../../../shared/remote/methods';
+import { ProcessStatus } from '../../types/process';
 import { parsePairingCode } from '../../../shared/remote/pairing';
 import {
   decrypt,
@@ -214,7 +215,74 @@ describe('RemoteGateway integration', () => {
       },
     });
   });
+
+  it('does not clear pane state when the requested window and pane have no live process', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    const processManager = {
+      ...createProcessManager(),
+      getPidByPane: vi.fn(() => null),
+      getProcessStatus: vi.fn(),
+      killProcess: vi.fn(),
+    };
+    const onPanePtyUnsubscribe = vi.fn();
+    const onPaneProcessStopped = vi.fn();
+    gateway = new RemoteGateway({
+      processManager: processManager as any,
+      userDataPath: tempDir,
+      onPanePtyUnsubscribe,
+      onPaneProcessStopped,
+    });
+
+    await (gateway as unknown as StopWindowPanesHarness).stopWindowPanes({
+      windowId: 'win-requested',
+      paneIds: ['pane-shared'],
+    });
+
+    expect(processManager.getPidByPane).toHaveBeenCalledWith('win-requested', 'pane-shared');
+    expect(processManager.getProcessStatus).not.toHaveBeenCalled();
+    expect(processManager.killProcess).not.toHaveBeenCalled();
+    expect(onPanePtyUnsubscribe).not.toHaveBeenCalled();
+    expect(onPaneProcessStopped).not.toHaveBeenCalled();
+  });
+
+  it('stops and clears only panes that resolve by the requested window and pane ids', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    const processManager = {
+      ...createProcessManager(),
+      getPidByPane: vi.fn((windowId: string, paneId?: string) =>
+        windowId === 'win-1' && paneId === 'pane-1' ? 1001 : null,
+      ),
+      getProcessStatus: vi.fn(() => ({ status: ProcessStatus.Alive })),
+      killProcess: vi.fn(async () => undefined),
+    };
+    const onPanePtyUnsubscribe = vi.fn();
+    const onPaneProcessStopped = vi.fn();
+    gateway = new RemoteGateway({
+      processManager: processManager as any,
+      userDataPath: tempDir,
+      onPanePtyUnsubscribe,
+      onPaneProcessStopped,
+    });
+
+    await (gateway as unknown as StopWindowPanesHarness).stopWindowPanes({
+      windowId: 'win-1',
+      paneIds: ['pane-1', 'pane-1', 'pane-other'],
+    });
+
+    expect(processManager.getPidByPane).toHaveBeenCalledWith('win-1', 'pane-1');
+    expect(processManager.getPidByPane).toHaveBeenCalledWith('win-1', 'pane-other');
+    expect(processManager.killProcess).toHaveBeenCalledTimes(1);
+    expect(processManager.killProcess).toHaveBeenCalledWith(1001);
+    expect(onPanePtyUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(onPanePtyUnsubscribe).toHaveBeenCalledWith('pane-1');
+    expect(onPaneProcessStopped).toHaveBeenCalledTimes(1);
+    expect(onPaneProcessStopped).toHaveBeenCalledWith({ windowId: 'win-1', paneId: 'pane-1' });
+  });
 });
+
+type StopWindowPanesHarness = {
+  stopWindowPanes(params: { windowId: string; paneIds: string[] }): Promise<void>;
+};
 
 function createProcessManager() {
   return {

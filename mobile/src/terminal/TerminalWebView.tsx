@@ -264,7 +264,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         rows: number,
         initialData?: string,
         preserveScroll?: boolean,
-        oscLinks?: TerminalOscLinkRange[]
+        oscLinks?: TerminalOscLinkRange[],
+        preserveFullInitialData?: boolean
       ) {
         // Why: arm a fresh ready promise BEFORE posting init. The WebView
         // resolves it via the 'ready' notify at the end of its rAF chain.
@@ -291,7 +292,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
           terminalTheme,
           fontScale: textScale,
           textScaleMode,
-          preserveScroll
+          preserveScroll,
+          preserveFullInitialData
         })
       },
       resize(cols: number, rows: number) {

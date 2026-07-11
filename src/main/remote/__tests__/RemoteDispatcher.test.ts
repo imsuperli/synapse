@@ -94,7 +94,7 @@ describe('RemoteDispatcher', () => {
       getPaneTerminalDimensions: vi.fn(() => ({ cols: 132, rows: 34 })),
       clearPtyHistory: vi.fn(),
       getLatestPaneOutputSeq: vi.fn(() => 5),
-      getPtyHistoryEntriesSince: vi.fn((_paneId: string, sinceSeq: number = 0) => ({
+      getPtyHistoryEntriesSince: vi.fn((_windowId: string, _paneId: string, sinceSeq: number = 0) => ({
         entries: [
           { seq: 4, data: 'hello' },
           { seq: 5, data: ' world' },
@@ -225,7 +225,7 @@ describe('RemoteDispatcher', () => {
         lastSeq: 5,
       },
     });
-    expect(harness.processManager.clearPtyHistory).toHaveBeenCalledWith('pane-1');
+    expect(harness.processManager.clearPtyHistory).toHaveBeenCalledWith('win-1', 'pane-1');
     expect(harness.processManager.writeToPty).not.toHaveBeenCalled();
   });
 
@@ -252,7 +252,7 @@ describe('RemoteDispatcher', () => {
         rows: 34,
       },
     });
-    expect(harness.processManager.getPtyHistoryEntriesSince).toHaveBeenCalledWith('pane-1', 4);
+    expect(harness.processManager.getPtyHistoryEntriesSince).toHaveBeenCalledWith('win-1', 'pane-1', 4);
   });
 
   it('rejects control methods for read-only mobile devices', async () => {

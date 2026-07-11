@@ -138,4 +138,47 @@ describe('registerPaneHandlers', () => {
     expect(processManager.killProcess).toHaveBeenCalledWith(321);
     expect(response).toEqual({ success: true, data: undefined });
   });
+
+  it('does not clear pane state when close-pane cannot resolve the requested window and pane', async () => {
+    const processManager = {
+      spawnTerminal: vi.fn(),
+      subscribePtyData: vi.fn(),
+      listProcesses: vi.fn().mockReturnValue([
+        {
+          windowId: 'win-other',
+          paneId: 'pane-2',
+          pid: 654,
+        },
+      ]),
+      killProcess: vi.fn(),
+    };
+    const statusPoller = {
+      addPane: vi.fn(),
+      removePane: vi.fn(),
+    };
+    const ptySubscriptionManager = {
+      add: vi.fn(),
+      remove: vi.fn(),
+    };
+    const ctx = {
+      mainWindow: null,
+      processManager,
+      statusPoller,
+      ptySubscriptionManager,
+    } as unknown as HandlerContext;
+
+    registerPaneHandlers(ctx);
+    const closePaneHandler = getRegisteredHandler('close-pane');
+
+    const response = await closePaneHandler({}, {
+      windowId: 'win-1',
+      paneId: 'pane-2',
+    }) as { success: boolean };
+
+    expect(processManager.killProcess).not.toHaveBeenCalled();
+    expect(ptySubscriptionManager.remove).not.toHaveBeenCalled();
+    expect(statusPoller.removePane).not.toHaveBeenCalled();
+    expect(disposeAgentTaskForPaneMock).not.toHaveBeenCalled();
+    expect(response).toEqual({ success: true, data: undefined });
+  });
 });

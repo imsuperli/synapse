@@ -26,6 +26,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('parseTerminalSubscribeResult(payload)')
     expect(routeSource).toContain('loadTerminalHistorySnapshot(client, runId)')
     expect(routeSource).toContain('terminalRef.current?.resetZoom()')
+    expect(routeSource).toContain('undefined,\n        true')
   })
 
   it('resynchronizes from history when the terminal subscription reports a gap', () => {

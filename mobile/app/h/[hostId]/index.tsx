@@ -15,6 +15,7 @@ import {
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import {
   Check,
+  Filter,
   Layers,
   Play,
   Plus,
@@ -50,6 +51,7 @@ import type { RpcClient } from '../../../src/transport/rpc-client'
 import type { ConnectionLogEntry, ConnectionState, HostProfile } from '../../../src/transport/types'
 import { colors, radii, spacing, typography } from '../../../src/theme/mobile-theme'
 import { useMobileI18n, type MobileTranslate } from '../../../src/i18n'
+import { BottomDrawer } from '../../../src/components/BottomDrawer'
 
 function getParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
@@ -64,6 +66,10 @@ type OverviewItem =
   | { type: 'window'; window: RemoteWindowSummary }
   | { type: 'terminal'; terminal: RemoteTerminalSummary }
 
+type TerminalListFilter = 'recent' | 'local' | 'remote'
+
+const TERMINAL_LIST_FILTERS: TerminalListFilter[] = ['recent', 'local', 'remote']
+
 function paneTitle(pane: RemotePaneSummary, t: MobileTranslate): string {
   return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || t('common.terminal')
 }
@@ -76,6 +82,99 @@ function backendLabel(backend: string | null | undefined, t: MobileTranslate): s
       return t('overview.backendSsh')
     default:
       return backend ?? t('overview.backendLocal')
+  }
+}
+
+function terminalListFilterLabel(filter: TerminalListFilter, t: MobileTranslate): string {
+  switch (filter) {
+    case 'local':
+      return t('overview.filterLocal')
+    case 'remote':
+      return t('overview.filterRemote')
+    case 'recent':
+    default:
+      return t('overview.filterRecent')
+  }
+}
+
+function backendMatchesTerminalListFilter(
+  backend: string | null | undefined,
+  filter: TerminalListFilter
+): boolean {
+  if (filter === 'recent') {
+    return true
+  }
+  const normalizedBackend = backend ?? 'local'
+  return filter === 'local' ? normalizedBackend === 'local' : normalizedBackend !== 'local'
+}
+
+function terminalMatchesTerminalListFilter(
+  terminal: RemoteTerminalSummary,
+  filter: TerminalListFilter
+): boolean {
+  return backendMatchesTerminalListFilter(terminal.backend, filter)
+}
+
+function paneMatchesTerminalListFilter(
+  pane: RemotePaneSummary,
+  filter: TerminalListFilter
+): boolean {
+  return pane.kind === 'terminal' && backendMatchesTerminalListFilter(pane.backend, filter)
+}
+
+function windowWithFilteredPanes(
+  window: RemoteWindowSummary,
+  panes: RemotePaneSummary[]
+): RemoteWindowSummary | null {
+  const terminalPanes = panes.filter((pane) => pane.kind === 'terminal')
+  if (terminalPanes.length === 0) {
+    return null
+  }
+  return {
+    ...window,
+    activePaneId: panes.some((pane) => pane.paneId === window.activePaneId)
+      ? window.activePaneId
+      : terminalPanes[0]?.paneId ?? '',
+    paneCount: panes.length,
+    terminalPaneCount: terminalPanes.length,
+    panes
+  }
+}
+
+function filterWindowForTerminalListFilter(
+  window: RemoteWindowSummary,
+  filter: TerminalListFilter
+): RemoteWindowSummary | null {
+  if (filter === 'recent') {
+    return windowWithFilteredPanes(
+      window,
+      window.panes.filter((pane) => pane.kind === 'terminal')
+    )
+  }
+  return windowWithFilteredPanes(
+    window,
+    window.panes.filter((pane) => paneMatchesTerminalListFilter(pane, filter))
+  )
+}
+
+function filterGroupForTerminalListFilter(
+  group: RemoteWindowGroupSummary,
+  filter: TerminalListFilter
+): RemoteWindowGroupSummary | null {
+  const windows = group.windows.flatMap((window) => {
+    const filtered = filterWindowForTerminalListFilter(window, filter)
+    return filtered ? [filtered] : []
+  })
+  if (windows.length === 0) {
+    return null
+  }
+  return {
+    ...group,
+    activeWindowId: windows.some((window) => window.windowId === group.activeWindowId)
+      ? group.activeWindowId
+      : windows[0]?.windowId ?? '',
+    windowCount: windows.length,
+    windows
   }
 }
 
@@ -148,6 +247,75 @@ function windowTopBorderColor(window: RemoteWindowSummary): string {
   return colors.borderSubtle
 }
 
+function windowHasRunningTerminal(window: RemoteWindowSummary): boolean {
+  return window.panes.some((pane) => pane.kind === 'terminal' && pane.running)
+}
+
+function groupHasRunningTerminal(group: RemoteWindowGroupSummary): boolean {
+  return group.windows.some(windowHasRunningTerminal)
+}
+
+function timeValue(value: string | null | undefined): number {
+  if (!value) {
+    return 0
+  }
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function windowSortTime(window: RemoteWindowSummary): number {
+  return timeValue(window.lastActiveAt || window.createdAt)
+}
+
+function groupSortTime(group: RemoteWindowGroupSummary): number {
+  return Math.max(
+    timeValue(group.lastActiveAt || group.createdAt),
+    ...group.windows.map(windowSortTime)
+  )
+}
+
+function compareWindowsRunningFirst(a: RemoteWindowSummary, b: RemoteWindowSummary): number {
+  const runningDelta = Number(windowHasRunningTerminal(b)) - Number(windowHasRunningTerminal(a))
+  if (runningDelta !== 0) {
+    return runningDelta
+  }
+  return windowSortTime(b) - windowSortTime(a)
+}
+
+function compareTerminalsRunningFirst(a: RemoteTerminalSummary, b: RemoteTerminalSummary): number {
+  return Number(b.status === 'alive') - Number(a.status === 'alive')
+}
+
+function overviewItemRunning(item: OverviewItem): boolean {
+  if (item.type === 'group') {
+    return groupHasRunningTerminal(item.group)
+  }
+  if (item.type === 'window') {
+    return windowHasRunningTerminal(item.window)
+  }
+  return item.terminal.status === 'alive'
+}
+
+function overviewItemSortTime(item: OverviewItem): number {
+  if (item.type === 'group') {
+    return groupSortTime(item.group)
+  }
+  if (item.type === 'window') {
+    return windowSortTime(item.window)
+  }
+  return 0
+}
+
+function compareOverviewItemsRunningFirst(a: OverviewItem, b: OverviewItem): number {
+  const aRunning = overviewItemRunning(a)
+  const bRunning = overviewItemRunning(b)
+  const runningDelta = Number(bRunning) - Number(aRunning)
+  if (runningDelta !== 0) {
+    return runningDelta
+  }
+  return overviewItemSortTime(b) - overviewItemSortTime(a)
+}
+
 function replaceWindowInGroups(
   groups: RemoteWindowGroupSummary[],
   replacement: RemoteWindowSummary
@@ -213,7 +381,7 @@ export default function HostOverviewScreen() {
   const router = useRouter()
   const { t } = useMobileI18n()
   const { width: screenWidth } = useWindowDimensions()
-  const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
+  const [, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [terminals, setTerminals] = useState<RemoteTerminalSummary[]>([])
   const [windows, setWindows] = useState<RemoteWindowSummary[]>([])
   const [groups, setGroups] = useState<RemoteWindowGroupSummary[]>([])
@@ -221,6 +389,8 @@ export default function HostOverviewScreen() {
   const [canCreateWindow, setCanCreateWindow] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchVisible, setSearchVisible] = useState(false)
+  const [showFilterModal, setShowFilterModal] = useState(false)
+  const [terminalListFilter, setTerminalListFilter] = useState<TerminalListFilter>('recent')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [creatingWindow, setCreatingWindow] = useState(false)
@@ -253,50 +423,82 @@ export default function HostOverviewScreen() {
     }
     return ids
   }, [groups])
+  const filterActiveCount = terminalListFilter === 'recent' ? 0 : 1
+  const filterLabel = terminalListFilterLabel(terminalListFilter, t)
+  const ungroupedFilteredWindows = useMemo(
+    () =>
+      windows
+        .filter((window) => !groupedWindowIds.has(window.windowId))
+        .flatMap((window) => {
+          const filteredWindow = filterWindowForTerminalListFilter(window, terminalListFilter)
+          return filteredWindow ? [filteredWindow] : []
+        }),
+    [groupedWindowIds, terminalListFilter, windows]
+  )
   const groupableWindowCount = useMemo(
-    () => windows.filter((window) => !groupedWindowIds.has(window.windowId)).length,
-    [groupedWindowIds, windows]
+    () => ungroupedFilteredWindows.length,
+    [ungroupedFilteredWindows]
   )
   const visibleWindows = useMemo(
-    () => filterWindows(
-      windows.filter((window) => !groupedWindowIds.has(window.windowId)),
-      normalizedSearchQuery
-    ),
-    [groupedWindowIds, normalizedSearchQuery, windows]
+    () =>
+      filterWindows(
+        ungroupedFilteredWindows,
+        normalizedSearchQuery
+      ).sort(compareWindowsRunningFirst),
+    [normalizedSearchQuery, ungroupedFilteredWindows]
   )
   const visibleGroups = useMemo(
     () =>
       groups
         .flatMap((group) => {
-          if (!normalizedSearchQuery) {
-            return [group]
+          const filteredGroup = filterGroupForTerminalListFilter(group, terminalListFilter)
+          if (!filteredGroup) {
+            return []
           }
-          const matchesGroupName = group.name.toLowerCase().includes(normalizedSearchQuery)
-          const filteredWindows = filterWindows(group.windows, normalizedSearchQuery)
+          if (!normalizedSearchQuery) {
+            return [filteredGroup]
+          }
+          const matchesGroupName = filteredGroup.name.toLowerCase().includes(normalizedSearchQuery)
+          const filteredWindows = filterWindows(filteredGroup.windows, normalizedSearchQuery)
           if (!matchesGroupName && filteredWindows.length === 0) {
             return []
           }
           return [
             {
-              ...group,
-              windows: matchesGroupName ? group.windows : filteredWindows
+              ...filteredGroup,
+              windows: (matchesGroupName ? filteredGroup.windows : filteredWindows)
+                .slice()
+                .sort(compareWindowsRunningFirst)
             }
           ]
+        })
+        .sort((a, b) => {
+          const runningDelta = Number(groupHasRunningTerminal(b)) - Number(groupHasRunningTerminal(a))
+          if (runningDelta !== 0) {
+            return runningDelta
+          }
+          return groupSortTime(b) - groupSortTime(a)
         }),
-    [groups, normalizedSearchQuery]
+    [groups, normalizedSearchQuery, terminalListFilter]
   )
   const visibleTerminals = useMemo(
-    () => filterTerminals(terminals, normalizedSearchQuery),
-    [normalizedSearchQuery, terminals]
+    () =>
+      filterTerminals(
+        terminals.filter((terminal) => terminalMatchesTerminalListFilter(terminal, terminalListFilter)),
+        normalizedSearchQuery
+      ).sort(compareTerminalsRunningFirst),
+    [normalizedSearchQuery, terminalListFilter, terminals]
   )
   const overviewItems = useMemo<OverviewItem[]>(
-    () =>
-      overviewMode === 'windows'
-        ? [
-            ...visibleGroups.map((group) => ({ type: 'group' as const, group })),
-            ...visibleWindows.map((window) => ({ type: 'window' as const, window }))
-          ]
-        : visibleTerminals.map((terminal) => ({ type: 'terminal', terminal })),
+    () => {
+      if (overviewMode === 'windows') {
+        return [
+          ...visibleGroups.map((group) => ({ type: 'group' as const, group })),
+          ...visibleWindows.map((window) => ({ type: 'window' as const, window }))
+        ].sort(compareOverviewItemsRunningFirst)
+      }
+      return visibleTerminals.map((terminal) => ({ type: 'terminal', terminal }))
+    },
     [overviewMode, visibleGroups, visibleTerminals, visibleWindows]
   )
   const hasSearchQuery = normalizedSearchQuery.length > 0
@@ -813,112 +1015,125 @@ export default function HostOverviewScreen() {
     <>
       <Stack.Screen
         options={{
-          headerTitle: '',
-          headerRight: () => (
-            <View style={styles.navActions}>
-              <View
-                style={[
-                  styles.navStatusDot,
-                  connectionState === 'connected'
-                    ? styles.statusGreen
-                    : connectionState === 'auth-failed'
-                      ? styles.statusRed
-                      : styles.statusAmber
-                ]}
-              />
-              {!groupSelectionMode ? (
-                <Pressable
-                  style={[
-                    styles.navNewTerminalButton,
-                    (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
-                  ]}
-                  disabled={!canCreateWindow || creatingWindow}
-                  onPress={() => void handleCreateWindow()}
-                  accessibilityLabel={t('overview.newTerminal')}
-                >
-                  {creatingWindow ? (
-                    <ActivityIndicator color={colors.textPrimary} />
-                  ) : (
-                    <>
-                      <Plus size={17} color={colors.textPrimary} />
-                      <Text style={styles.navNewTerminalButtonText}>
-                        {t('overview.newTerminalShort')}
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
-              ) : null}
-              {overviewMode === 'windows' || groupSelectionMode ? (
-                <Pressable
-                  style={[
-                    styles.navIconButton,
-                    ((!groupSelectionMode && !canUseGroupSelection) ||
-                      (groupSelectionMode && selectedGroupWindowIds.length < 2) ||
-                      creatingGroup) &&
-                      styles.iconButtonDisabled
-                  ]}
-                  disabled={
-                    (!groupSelectionMode && !canUseGroupSelection) ||
-                    (groupSelectionMode && selectedGroupWindowIds.length < 2) ||
-                    creatingGroup
-                  }
-                  onPress={() => void handleGroupAction()}
-                  accessibilityLabel={
-                    groupSelectionMode
-                      ? t('overview.confirmCreateGroup')
-                      : t('overview.groupSelection')
-                  }
-                >
-                  {creatingGroup ? (
-                    <ActivityIndicator color={colors.textPrimary} />
-                  ) : groupSelectionMode ? (
-                    <Check size={18} color={colors.textPrimary} />
-                  ) : (
-                    <Layers size={18} color={colors.textPrimary} />
-                  )}
-                </Pressable>
-              ) : null}
-              {groupSelectionMode ? (
-                <Pressable
-                  style={styles.navIconButton}
-                  onPress={cancelGroupSelection}
-                  accessibilityLabel={t('overview.cancelGroupSelection')}
-                >
-                  <X size={18} color={colors.textPrimary} />
-                </Pressable>
-              ) : (
-                <>
-                  <Pressable style={styles.navIconButton} onPress={() => void loadAndConnect()}>
-                    <RotateCw size={18} color={colors.textPrimary} />
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      styles.navIconButton,
-                      (searchVisible || hasSearchQuery) && styles.iconButtonActive
-                    ]}
-                    onPress={() => setSearchVisible((visible) => !visible)}
-                    accessibilityLabel={t('overview.searchPlaceholder')}
-                  >
-                    <Search size={18} color={colors.textPrimary} />
-                  </Pressable>
-                  <Pressable
-                    style={styles.navIconButton}
-                    onPress={() => router.push(`/h/${hostId}/settings`)}
-                  >
-                    <Settings size={18} color={colors.textPrimary} />
-                  </Pressable>
-                </>
-              )}
-            </View>
-          )
+          headerTitle: t('overview.windowsTitle')
         }}
       />
       <View style={styles.container}>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-      <Text style={styles.sectionTitle}>
-        {overviewMode === 'windows' ? t('overview.windowsTitle') : t('overview.terminalsTitle')}
-      </Text>
+      <View style={styles.actionToolbar}>
+        <Pressable
+          style={[
+            styles.filterChip,
+            filterActiveCount > 0 && styles.filterChipActive
+          ]}
+          onPress={() => setShowFilterModal(true)}
+          accessibilityRole="button"
+          accessibilityLabel={`${t('overview.filter')}: ${filterLabel}`}
+        >
+          <Filter
+            size={13}
+            color={filterActiveCount > 0 ? colors.textPrimary : colors.textSecondary}
+          />
+          <Text
+            style={[
+              styles.filterChipText,
+              filterActiveCount > 0 && styles.filterChipTextActive
+            ]}
+            numberOfLines={1}
+          >
+            {t('overview.filter')}{filterActiveCount > 0 ? ` ${filterActiveCount}` : ''}
+          </Text>
+        </Pressable>
+        <View style={styles.toolbarActions}>
+          {groupSelectionMode ? (
+            <>
+              <Pressable
+                style={[
+                  styles.navIconButton,
+                  (selectedGroupWindowIds.length < 2 || creatingGroup) &&
+                    styles.iconButtonDisabled
+                ]}
+                disabled={selectedGroupWindowIds.length < 2 || creatingGroup}
+                onPress={() => void handleGroupAction()}
+                accessibilityLabel={t('overview.confirmCreateGroup')}
+              >
+                {creatingGroup ? (
+                  <ActivityIndicator color={colors.textPrimary} size="small" />
+                ) : (
+                  <Check size={18} color={colors.textPrimary} />
+                )}
+              </Pressable>
+              <Pressable
+                style={styles.navIconButton}
+                onPress={cancelGroupSelection}
+                accessibilityLabel={t('overview.cancelGroupSelection')}
+              >
+                <X size={18} color={colors.textPrimary} />
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Pressable
+                style={[
+                  styles.navIconButton,
+                  (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
+                ]}
+                disabled={!canCreateWindow || creatingWindow}
+                onPress={() => void handleCreateWindow()}
+                accessibilityLabel={t('overview.newTerminal')}
+              >
+                {creatingWindow ? (
+                  <ActivityIndicator color={colors.textPrimary} size="small" />
+                ) : (
+                  <Plus size={18} color={colors.textPrimary} />
+                )}
+              </Pressable>
+              {overviewMode === 'windows' ? (
+                <Pressable
+                  style={[
+                    styles.navIconButton,
+                    (!canUseGroupSelection || creatingGroup) && styles.iconButtonDisabled
+                  ]}
+                  disabled={!canUseGroupSelection || creatingGroup}
+                  onPress={() => void handleGroupAction()}
+                  accessibilityLabel={t('overview.groupSelection')}
+                >
+                  {creatingGroup ? (
+                    <ActivityIndicator color={colors.textPrimary} size="small" />
+                  ) : (
+                    <Layers size={18} color={colors.textPrimary} />
+                  )}
+                </Pressable>
+              ) : null}
+              <Pressable
+                style={styles.navIconButton}
+                onPress={() => void loadAndConnect()}
+                accessibilityLabel={t('common.retry')}
+              >
+                <RotateCw size={18} color={colors.textPrimary} />
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.navIconButton,
+                  (searchVisible || hasSearchQuery) && styles.iconButtonActive
+                ]}
+                onPress={() => setSearchVisible((visible) => !visible)}
+                accessibilityLabel={t('overview.searchPlaceholder')}
+              >
+                <Search size={18} color={colors.textPrimary} />
+              </Pressable>
+              <Pressable
+                style={styles.navIconButton}
+                onPress={() => router.push(`/h/${hostId}/settings`)}
+                accessibilityLabel={t('nav.hostSettings')}
+              >
+                <Settings size={18} color={colors.textPrimary} />
+              </Pressable>
+            </>
+          )}
+        </View>
+      </View>
       {overviewMode === 'windows' && groupSelectionMode ? (
         <Text style={styles.selectionHint}>
           {selectedGroupWindowIds.length >= 2
@@ -1019,6 +1234,50 @@ export default function HostOverviewScreen() {
             : renderTerminalItem(item.terminal, openTerminal, t)
         }
       />
+      <BottomDrawer visible={showFilterModal} onClose={() => setShowFilterModal(false)}>
+        <View style={styles.filterModalHeader}>
+          <Text style={styles.filterModalTitle}>{t('overview.filterTitle')}</Text>
+          {filterActiveCount > 0 ? (
+            <Pressable
+              onPress={() => {
+                setTerminalListFilter('recent')
+                setSelectedGroupWindowIds([])
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={t('overview.filterReset')}
+            >
+              <Text style={styles.clearFiltersText}>{t('overview.filterReset')}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <Text style={styles.filterSectionLabel}>{t('overview.filterScope')}</Text>
+        <View style={styles.filterGroup}>
+          {TERMINAL_LIST_FILTERS.map((filter, index) => {
+            const selected = filter === terminalListFilter
+            return (
+              <View key={filter}>
+                {index > 0 ? <View style={styles.filterSeparator} /> : null}
+                <Pressable
+                  style={styles.filterRow}
+                  onPress={() => {
+                    if (filter !== terminalListFilter) {
+                      setTerminalListFilter(filter)
+                      setSelectedGroupWindowIds([])
+                    }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                >
+                  <Text style={styles.filterRowText}>
+                    {terminalListFilterLabel(filter, t)}
+                  </Text>
+                  {selected ? <Check size={14} color={colors.textPrimary} /> : null}
+                </Pressable>
+              </View>
+            )
+          })}
+        </View>
+      </BottomDrawer>
       {pairedHosts.length > 1 ? (
         <View style={styles.hostSwitcherDock} pointerEvents="box-none">
           {hostSwitcherOpen ? (
@@ -1403,9 +1662,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bgBase,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs,
     paddingBottom: spacing.lg,
-    gap: spacing.md
+    gap: spacing.sm
   },
   hostSwitcherDock: {
     position: 'absolute',
@@ -1501,34 +1760,109 @@ const styles = StyleSheet.create({
     fontSize: typography.metaSize,
     lineHeight: 18
   },
-  navActions: {
+  actionToolbar: {
+    minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6
+    justifyContent: 'space-between',
+    gap: spacing.xs
+  },
+  toolbarActions: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.xs
+  },
+  filterChip: {
+    height: 32,
+    minWidth: 68,
+    maxWidth: 96,
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm + 2,
+    borderRadius: radii.button,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel
+  },
+  filterChipActive: {
+    borderColor: colors.textSecondary,
+    backgroundColor: colors.bgRaised
+  },
+  filterChipText: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: colors.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: '700'
+  },
+  filterChipTextActive: {
+    color: colors.textPrimary
+  },
+  filterModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    paddingHorizontal: spacing.xs,
+    marginBottom: spacing.md
+  },
+  filterModalTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700'
+  },
+  clearFiltersText: {
+    color: colors.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: '700'
+  },
+  filterSectionLabel: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.xs
+  },
+  filterGroup: {
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.row,
+    backgroundColor: colors.bgPanel,
+    marginBottom: spacing.md
+  },
+  filterRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm
+  },
+  filterRowText: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textPrimary,
+    fontSize: typography.bodySize,
+    fontWeight: '600'
+  },
+  filterSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.borderSubtle,
+    marginHorizontal: spacing.md
   },
   navIconButton: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     borderRadius: radii.button,
     backgroundColor: colors.bgRaised,
     alignItems: 'center',
     justifyContent: 'center'
-  },
-  navNewTerminalButton: {
-    minWidth: 58,
-    height: 34,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    borderRadius: radii.button,
-    backgroundColor: colors.bgRaised,
-    paddingHorizontal: spacing.sm
-  },
-  navNewTerminalButtonText: {
-    color: colors.textPrimary,
-    fontSize: typography.metaSize,
-    fontWeight: '700'
   },
   iconButtonActive: {
     borderWidth: 1,
@@ -1537,35 +1871,10 @@ const styles = StyleSheet.create({
   iconButtonDisabled: {
     opacity: 0.52
   },
-  navStatusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    marginRight: 2
-  },
-  statusGreen: {
-    backgroundColor: colors.statusGreen
-  },
-  statusAmber: {
-    backgroundColor: colors.statusAmber
-  },
-  statusRed: {
-    backgroundColor: colors.statusRed
-  },
-  statusText: {
-    color: colors.textSecondary,
-    fontSize: typography.metaSize,
-    fontWeight: '700'
-  },
   errorText: {
     color: colors.statusRed,
     fontSize: typography.bodySize,
     lineHeight: 20
-  },
-  sectionTitle: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '700'
   },
   selectionHint: {
     color: colors.textMuted,
@@ -1599,6 +1908,7 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: spacing.md,
+    paddingTop: spacing.xs,
     paddingBottom: spacing.md
   },
   windowCard: {

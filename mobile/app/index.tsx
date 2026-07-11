@@ -144,12 +144,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bgBase,
-    padding: spacing.lg
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg
   },
   header: {
     alignItems: 'stretch',
-    gap: spacing.md,
-    marginBottom: spacing.lg
+    gap: spacing.sm,
+    marginBottom: spacing.sm
   },
   headerCopy: {
     minWidth: 0
@@ -162,7 +164,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.textPrimary,
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700'
   },
   subtitle: {

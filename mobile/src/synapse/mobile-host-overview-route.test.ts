@@ -9,14 +9,36 @@ const routeSource = readFileSync(
 describe('Synapse Mobile host overview route wiring', () => {
   it('keeps grouped windows out of the standalone window card list', () => {
     expect(routeSource).toContain('const groupedWindowIds = useMemo(() => {')
-    expect(routeSource).toContain('windows.filter((window) => !groupedWindowIds.has(window.windowId))')
+    expect(routeSource).toContain('.filter((window) => !groupedWindowIds.has(window.windowId))')
     expect(routeSource).toContain('...visibleGroups.map((group) => ({ type: \'group\' as const, group }))')
     expect(routeSource).toContain('...visibleWindows.map((window) => ({ type: \'window\' as const, window }))')
   })
 
   it('shows all group members when the search query matches the group name', () => {
-    expect(routeSource).toContain('const matchesGroupName = group.name.toLowerCase().includes(normalizedSearchQuery)')
-    expect(routeSource).toContain('windows: matchesGroupName ? group.windows : filteredWindows')
+    expect(routeSource).toContain('const filteredGroup = filterGroupForTerminalListFilter(group, terminalListFilter)')
+    expect(routeSource).toContain('const matchesGroupName = filteredGroup.name.toLowerCase().includes(normalizedSearchQuery)')
+    expect(routeSource).toContain('windows: (matchesGroupName ? filteredGroup.windows : filteredWindows)')
+  })
+
+  it('filters overview cards by recent, local, and remote terminal backend', () => {
+    expect(routeSource).toContain("type TerminalListFilter = 'recent' | 'local' | 'remote'")
+    expect(routeSource).toContain("const TERMINAL_LIST_FILTERS: TerminalListFilter[] = ['recent', 'local', 'remote']")
+    expect(routeSource).toContain('function terminalListFilterLabel(filter: TerminalListFilter, t: MobileTranslate): string')
+    expect(routeSource).toContain('function filterWindowForTerminalListFilter(')
+    expect(routeSource).toContain('function filterGroupForTerminalListFilter(')
+    expect(routeSource).toContain("const [terminalListFilter, setTerminalListFilter] = useState<TerminalListFilter>('recent')")
+    expect(routeSource).toContain('filterWindowForTerminalListFilter(window, terminalListFilter)')
+    expect(routeSource).toContain('terminalMatchesTerminalListFilter(terminal, terminalListFilter)')
+    expect(routeSource).toContain('<BottomDrawer visible={showFilterModal} onClose={() => setShowFilterModal(false)}>')
+  })
+
+  it('sorts running terminals and windows ahead of stopped items', () => {
+    expect(routeSource).toContain('function compareWindowsRunningFirst(')
+    expect(routeSource).toContain('function compareTerminalsRunningFirst(')
+    expect(routeSource).toContain('function compareOverviewItemsRunningFirst(')
+    expect(routeSource).toContain('sort(compareWindowsRunningFirst)')
+    expect(routeSource).toContain('sort(compareTerminalsRunningFirst)')
+    expect(routeSource).toContain('sort(compareOverviewItemsRunningFirst)')
   })
 
   it('disables mobile window creation when the paired host scope cannot create windows', () => {
@@ -82,8 +104,8 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('const groupableWindowCount = useMemo(')
     expect(routeSource).toContain("const canUseGroupSelection = overviewMode === 'windows' && groupableWindowCount >= 2")
     expect(routeSource).toContain('if (!canUseGroupSelection) {')
-    expect(routeSource).toContain("overviewMode === 'windows' || groupSelectionMode ?")
-    expect(routeSource).toContain('!groupSelectionMode && !canUseGroupSelection')
+    expect(routeSource).toContain("overviewMode === 'windows' ? (")
+    expect(routeSource).toContain('!canUseGroupSelection || creatingGroup')
   })
 
   it('renders a side-docked host switcher that verifies connection before routing', () => {
@@ -100,12 +122,15 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain("pairedHosts.length > 1 ?")
   })
 
-  it('places overview actions in the native header and removes the duplicate desktop status row', () => {
+  it('places overview actions in the second toolbar row and keeps the native header simple', () => {
     expect(routeSource).toContain('<Stack.Screen')
-    expect(routeSource).toContain("headerTitle: ''")
-    expect(routeSource).toContain('headerRight: () => (')
-    expect(routeSource).toContain('styles.navNewTerminalButton')
-    expect(routeSource).toContain('styles.navStatusDot')
+    expect(routeSource).toContain("headerTitle: t('overview.windowsTitle')")
+    expect(routeSource).toContain('styles.actionToolbar')
+    expect(routeSource).toContain('styles.filterChip')
+    expect(routeSource).toContain('styles.toolbarActions')
+    expect(routeSource).not.toContain('headerRight: () => (')
+    expect(routeSource).not.toContain('styles.navNewTerminalButton')
+    expect(routeSource).not.toContain('styles.navStatusDot')
     expect(routeSource).not.toContain("<Text style={styles.title}>{t('nav.desktop')}</Text>")
     expect(routeSource).not.toContain('connectionLabel(connectionState, t)')
     expect(routeSource).not.toContain('hostEndpointLabel')

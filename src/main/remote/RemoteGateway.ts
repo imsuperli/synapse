@@ -240,17 +240,16 @@ export class RemoteGateway {
   private async stopWindowPanes(params: { windowId: string; paneIds: string[] }): Promise<void> {
     const uniquePaneIds = Array.from(new Set(params.paneIds.filter(Boolean)));
     for (const paneId of uniquePaneIds) {
-      this.onPanePtyUnsubscribe?.(paneId);
-      this.onPaneProcessStopped?.({ windowId: params.windowId, paneId });
       const pid = this.processManager.getPidByPane(params.windowId, paneId);
       if (pid === null) {
         continue;
       }
       const processInfo = this.processManager.getProcessStatus(pid);
-      if (processInfo?.status === ProcessStatus.Exited) {
-        continue;
+      if (processInfo?.status !== ProcessStatus.Exited) {
+        await this.processManager.killProcess(pid);
       }
-      await this.processManager.killProcess(pid);
+      this.onPanePtyUnsubscribe?.(paneId);
+      this.onPaneProcessStopped?.({ windowId: params.windowId, paneId });
     }
   }
 

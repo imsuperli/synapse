@@ -45,9 +45,9 @@ export class RemoteTerminalController {
 
   getHistory(windowId: string, paneId: string, sinceSeq?: number): TerminalHistoryResult {
     this.requirePid(windowId, paneId);
-    const dimensions = this.processManager.getPaneTerminalDimensions(paneId);
+    const dimensions = this.processManager.getPaneTerminalDimensions(windowId, paneId);
     if (typeof sinceSeq === 'number') {
-      const history = this.processManager.getPtyHistoryEntriesSince(paneId, sinceSeq);
+      const history = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, sinceSeq);
       return {
         windowId,
         paneId,
@@ -58,7 +58,7 @@ export class RemoteTerminalController {
         ...dimensions,
       };
     }
-    const history = this.processManager.getPtyHistory(paneId);
+    const history = this.processManager.getPtyHistory(windowId, paneId);
     return {
       windowId,
       paneId,
@@ -103,7 +103,7 @@ export class RemoteTerminalController {
         emit(payload);
       }
     });
-    const replay = this.processManager.getPtyHistoryEntriesSince(paneId, replaySinceSeq);
+    const replay = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, replaySinceSeq);
     replayLastSeq = Math.max(replaySinceSeq, replay.lastSeq);
     const closeSubscription = () => {
       if (closed) {
@@ -172,12 +172,12 @@ export class RemoteTerminalController {
 
   clear(windowId: string, paneId: string): TerminalClearResult {
     this.requirePid(windowId, paneId);
-    this.processManager.clearPtyHistory(paneId);
+    this.processManager.clearPtyHistory(windowId, paneId);
     return {
       windowId,
       paneId,
       cleared: true,
-      lastSeq: this.processManager.getLatestPaneOutputSeq(paneId),
+      lastSeq: this.processManager.getLatestPaneOutputSeq(windowId, paneId),
     };
   }
 

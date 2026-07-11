@@ -119,7 +119,7 @@ describe('TerminalWebView text zoom', () => {
   it('resets pending Claude status dot selector state when the terminal lifecycle resets', () => {
     const initStart = terminalHtmlSource.indexOf('function init(')
     const initReplay = terminalHtmlSource.indexOf(
-      'var replayData = normalizeInitialData(initialData)'
+      'var replayData = preserveFullInitialData ? initialData : normalizeInitialData(initialData)'
     )
     const clearStart = terminalHtmlSource.indexOf("} else if (msg.type === 'clear') {")
     const clearEnd = terminalHtmlSource.indexOf("} else if (msg.type === 'measure')", clearStart)
