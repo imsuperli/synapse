@@ -200,7 +200,12 @@ export class RemoteDispatcher {
       params: TerminalHistoryParamsSchema,
       handler: (params) => {
         const typed = TerminalHistoryParamsSchema.parse(params);
-        return this.terminalController.getHistory(typed.windowId, typed.paneId, typed.sinceSeq);
+        return this.terminalController.getHistory(typed.windowId, typed.paneId, {
+          sinceSeq: typed.sinceSeq,
+          beforeSeq: typed.beforeSeq,
+          limitBytes: typed.limitBytes,
+          limitChunks: typed.limitChunks,
+        });
       },
     });
 

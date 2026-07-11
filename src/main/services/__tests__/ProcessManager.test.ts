@@ -158,6 +158,7 @@ describe('ProcessManager', () => {
           lastSeq: 5,
           evictedBeforeSeq: 2,
           gap: true,
+          hasMoreBefore: false,
         });
 
         expect(processManager.getPtyHistoryEntriesSince('pane-history-evict', 3)).toMatchObject({
@@ -166,6 +167,17 @@ describe('ProcessManager', () => {
             { seq: 5, data: 'chunk-5' },
           ],
           gap: false,
+        });
+
+        expect(processManager.getPtyHistoryEntriesBefore('pane-history-evict', 5, {
+          limitBytes: 8,
+        })).toEqual({
+          entries: [{ seq: 4, data: 'chunk-4' }],
+          firstSeq: 4,
+          lastSeq: 4,
+          evictedBeforeSeq: 2,
+          gap: false,
+          hasMoreBefore: true,
         });
       } finally {
         spawnSpy.mockRestore();
@@ -798,6 +810,7 @@ describe('ProcessManager', () => {
           lastSeq: 2,
           evictedBeforeSeq: 2,
           gap: false,
+          hasMoreBefore: false,
         });
 
         dataListeners.forEach((listener) => listener('after-clear'));
@@ -815,6 +828,7 @@ describe('ProcessManager', () => {
           lastSeq: 3,
           evictedBeforeSeq: 2,
           gap: false,
+          hasMoreBefore: false,
         });
       } finally {
         spawnSpy.mockRestore();

@@ -35,6 +35,9 @@ export type TerminalSelectionEvents = {
   // Why: pinch-to-zoom in the terminal snaps to a text-size preset and reports it
   // here so the app persists it and keeps Settings + other panes in sync.
   onTextScaleChange?: (scale: number) => void
+  // Why: remote terminal history is paged. The WebView owns scroll gestures,
+  // so it notifies RN when the user asks for output above the loaded buffer.
+  onHistoryTopReached?: () => void
 }
 
 export type TerminalWebViewHandle = {

@@ -8,7 +8,7 @@ const routeSource = readFileSync(
 
 describe('Synapse Mobile terminal route wiring', () => {
   it('loads terminal history before subscribing to live output without resizing the desktop PTY', () => {
-    const historyIndex = routeSource.indexOf('requestTerminalHistory(client, windowId, paneId)')
+    const historyIndex = routeSource.indexOf('requestTerminalHistory(client, windowId, paneId, {')
     const subscribeIndex = routeSource.indexOf("client.subscribe(\n        'terminal.subscribe'")
     const viewportIndex = routeSource.indexOf('const viewport = normalizeTerminalViewport(history, viewportRef.current)')
     const initIndex = routeSource.indexOf('terminalRef.current?.init(\n        viewport.cols,\n        viewport.rows,')
@@ -18,6 +18,8 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(viewportIndex).toBeGreaterThan(historyIndex)
     expect(initIndex).toBeGreaterThan(viewportIndex)
     expect(routeSource).toContain('sinceSeq: lastSeqRef.current')
+    expect(routeSource).toContain('beforeSeq: TERMINAL_HISTORY_RECENT_BEFORE_SEQ')
+    expect(routeSource).toContain('limitBytes: TERMINAL_HISTORY_PAGE_BYTES')
     expect(routeSource).not.toContain('viewport: viewportRef.current')
     expect(routeSource).not.toContain('resizeTerminal(client')
     expect(routeSource).not.toContain('terminal.resize(')
@@ -27,6 +29,18 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('loadTerminalHistorySnapshot(client, runId)')
     expect(routeSource).toContain('terminalRef.current?.resetZoom()')
     expect(routeSource).toContain('undefined,\n        true')
+  })
+
+  it('loads older terminal history when the WebView reaches the top of scrollback', () => {
+    expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_BYTES = 768 * 1024')
+    expect(routeSource).toContain('const loadedFirstSeqRef = useRef(0)')
+    expect(routeSource).toContain('const historyChunksRef = useRef<string[]>([])')
+    expect(routeSource).toContain('const hasMoreHistoryBeforeRef = useRef(false)')
+    expect(routeSource).toContain('const handleHistoryTopReached = useCallback(() => {')
+    expect(routeSource).toContain('beforeSeq,\n          limitBytes: TERMINAL_HISTORY_PAGE_BYTES')
+    expect(routeSource).toContain('historyChunksRef.current = [...history.chunks, ...historyChunksRef.current]')
+    expect(routeSource).toContain('onHistoryTopReached={handleHistoryTopReached}')
+    expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
   })
 
   it('resynchronizes from history when the terminal subscription reports a gap', () => {

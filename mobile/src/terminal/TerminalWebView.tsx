@@ -56,7 +56,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     onTerminalTap,
     onFileTap,
     onOpenUrl,
-    onTextScaleChange
+    onTextScaleChange,
+    onHistoryTopReached
   },
   ref
 ) {
@@ -205,6 +206,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         if (scale > 0) {
           onTextScaleChange?.(scale)
         }
+      } else if (msg.type === 'history-top') {
+        onHistoryTopReached?.()
       } else if (msg.type === 'mobile-clip-cancel-by-pinch') {
         // eslint-disable-next-line no-console
         console.warn('[mobile-clip] selection cancelled by pinch')
@@ -226,7 +229,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       onTerminalTap,
       onFileTap,
       onOpenUrl,
-      onTextScaleChange
+      onTextScaleChange,
+      onHistoryTopReached
     ]
   )
 

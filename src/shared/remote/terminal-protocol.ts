@@ -20,6 +20,8 @@ export type TerminalHistoryResult = {
   firstSeq: number;
   lastSeq: number;
   gap: boolean;
+  hasMoreBefore: boolean;
+  evictedBeforeSeq: number;
   cols?: number;
   rows?: number;
   keyboardState?: unknown;
@@ -39,6 +41,9 @@ export const TerminalPaneRefSchema = z.object({
 
 export const TerminalHistoryParamsSchema = TerminalPaneRefSchema.extend({
   sinceSeq: z.number().int().nonnegative().optional(),
+  beforeSeq: z.number().int().positive().optional(),
+  limitBytes: z.number().int().positive().max(5_000_000).optional(),
+  limitChunks: z.number().int().positive().max(250_000).optional(),
 }).strict();
 
 export const TerminalSubscribeParamsSchema = TerminalPaneRefSchema.extend({

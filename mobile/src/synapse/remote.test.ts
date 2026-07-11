@@ -165,6 +165,8 @@ describe('Synapse remote terminal helpers', () => {
         firstSeq: 2,
         lastSeq: 4,
         gap: true,
+        hasMoreBefore: true,
+        evictedBeforeSeq: 1,
         cols: 144,
         rows: 36,
         keyboardState: { bracketedPasteMode: true }
@@ -176,6 +178,8 @@ describe('Synapse remote terminal helpers', () => {
       firstSeq: 2,
       lastSeq: 4,
       gap: true,
+      hasMoreBefore: true,
+      evictedBeforeSeq: 1,
       cols: 144,
       rows: 36,
       keyboardState: { bracketedPasteMode: true }
@@ -255,7 +259,8 @@ describe('Synapse remote terminal helpers', () => {
     })
 
     await requestTerminalHistory(client, 'w1', 'p1')
-    await requestTerminalHistory(client, 'w1', 'p1', 12)
+    await requestTerminalHistory(client, 'w1', 'p1', { sinceSeq: 12 })
+    await requestTerminalHistory(client, 'w1', 'p1', { beforeSeq: 12, limitBytes: 4096 })
     await sendTerminalInput(client, 'w1', 'p1', 'ls\n')
     await clearTerminal(client, 'w1', 'p1')
 
@@ -268,12 +273,18 @@ describe('Synapse remote terminal helpers', () => {
       paneId: 'p1',
       sinceSeq: 12
     })
-    expect(client.sendRequest).toHaveBeenNthCalledWith(3, 'terminal.send', {
+    expect(client.sendRequest).toHaveBeenNthCalledWith(3, 'terminal.history', {
+      windowId: 'w1',
+      paneId: 'p1',
+      beforeSeq: 12,
+      limitBytes: 4096
+    })
+    expect(client.sendRequest).toHaveBeenNthCalledWith(4, 'terminal.send', {
       windowId: 'w1',
       paneId: 'p1',
       data: 'ls\n'
     })
-    expect(client.sendRequest).toHaveBeenNthCalledWith(4, 'terminal.clear', {
+    expect(client.sendRequest).toHaveBeenNthCalledWith(5, 'terminal.clear', {
       windowId: 'w1',
       paneId: 'p1'
     })

@@ -16,6 +16,7 @@ type MockProcessManager = {
   clearPtyHistory: ReturnType<typeof vi.fn>;
   getLatestPaneOutputSeq: ReturnType<typeof vi.fn>;
   getPtyHistoryEntriesSince: ReturnType<typeof vi.fn>;
+  getPtyHistoryEntriesBefore: ReturnType<typeof vi.fn>;
   subscribePtyData: ReturnType<typeof vi.fn>;
   writeToPty: ReturnType<typeof vi.fn>;
   resizePty: ReturnType<typeof vi.fn>;
@@ -102,7 +103,19 @@ describe('RemoteDispatcher', () => {
         firstSeq: 4,
         lastSeq: 5,
         evictedBeforeSeq: 0,
+        hasMoreBefore: false,
         gap: false,
+      })),
+      getPtyHistoryEntriesBefore: vi.fn((_windowId: string, _paneId: string, beforeSeq: number = Number.MAX_SAFE_INTEGER) => ({
+        entries: [
+          { seq: 4, data: 'hello' },
+          { seq: 5, data: ' world' },
+        ].filter((entry) => entry.seq < beforeSeq),
+        firstSeq: 4,
+        lastSeq: 5,
+        evictedBeforeSeq: 0,
+        gap: false,
+        hasMoreBefore: false,
       })),
       subscribePtyData: vi.fn((_pid: number, callback: (data: string, seq?: number) => void) => {
         outputCallback = callback;
@@ -248,11 +261,62 @@ describe('RemoteDispatcher', () => {
         firstSeq: 4,
         lastSeq: 5,
         gap: false,
+        hasMoreBefore: false,
+        evictedBeforeSeq: 0,
         cols: 132,
         rows: 34,
       },
     });
     expect(harness.processManager.getPtyHistoryEntriesSince).toHaveBeenCalledWith('win-1', 'pane-1', 4);
+  });
+
+  it('returns older terminal history before beforeSeq with page limits', async () => {
+    const harness = createHarness();
+    harness.processManager.getPtyHistoryEntriesBefore.mockReturnValueOnce({
+      entries: [
+        { seq: 2, data: 'older' },
+        { seq: 3, data: ' page' },
+      ],
+      firstSeq: 2,
+      lastSeq: 3,
+      evictedBeforeSeq: 0,
+      gap: false,
+      hasMoreBefore: true,
+    });
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_HISTORY, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      beforeSeq: 4,
+      limitBytes: 4096,
+      limitChunks: 20,
+    });
+
+    expect(response).toEqual({
+      id: 'req-1',
+      ok: true,
+      result: {
+        windowId: 'win-1',
+        paneId: 'pane-1',
+        chunks: ['older', ' page'],
+        firstSeq: 2,
+        lastSeq: 3,
+        gap: false,
+        hasMoreBefore: true,
+        evictedBeforeSeq: 0,
+        cols: 132,
+        rows: 34,
+      },
+    });
+    expect(harness.processManager.getPtyHistoryEntriesBefore).toHaveBeenCalledWith(
+      'win-1',
+      'pane-1',
+      4,
+      {
+        limitBytes: 4096,
+        limitChunks: 20,
+      },
+    );
   });
 
   it('rejects control methods for read-only mobile devices', async () => {

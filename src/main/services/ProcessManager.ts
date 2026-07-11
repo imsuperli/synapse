@@ -56,6 +56,20 @@ type PaneHistoryBuffer = {
   keyboardState: TrackedKeyboardProtocolState;
 };
 
+type PaneHistoryEntriesResult = {
+  entries: PaneHistoryEntry[];
+  firstSeq: number;
+  lastSeq: number;
+  evictedBeforeSeq: number;
+  gap: boolean;
+  hasMoreBefore: boolean;
+};
+
+type PaneHistoryReadLimits = {
+  limitBytes?: number;
+  limitChunks?: number;
+};
+
 // 灏濊瘯瀵煎叆 node-pty锛屽鏋滃け璐ュ垯浣跨敤 mock
 let pty: any;
 try {
@@ -845,35 +859,17 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   getPtyHistoryEntriesSince(
     paneId: string,
     sinceSeq?: number,
-  ): {
-    entries: PaneHistoryEntry[];
-    firstSeq: number;
-    lastSeq: number;
-    evictedBeforeSeq: number;
-    gap: boolean;
-  };
+  ): PaneHistoryEntriesResult;
   getPtyHistoryEntriesSince(
     windowId: string,
     paneId: string,
     sinceSeq?: number,
-  ): {
-    entries: PaneHistoryEntry[];
-    firstSeq: number;
-    lastSeq: number;
-    evictedBeforeSeq: number;
-    gap: boolean;
-  };
+  ): PaneHistoryEntriesResult;
   getPtyHistoryEntriesSince(
     windowIdOrPaneId: string,
     paneIdOrSinceSeq: string | number = 0,
     maybeSinceSeq?: number,
-  ): {
-    entries: PaneHistoryEntry[];
-    firstSeq: number;
-    lastSeq: number;
-    evictedBeforeSeq: number;
-    gap: boolean;
-  } {
+  ): PaneHistoryEntriesResult {
     const paneId = typeof paneIdOrSinceSeq === 'string' ? paneIdOrSinceSeq : undefined;
     const sinceSeq = typeof paneIdOrSinceSeq === 'number' ? paneIdOrSinceSeq : maybeSinceSeq ?? 0;
     const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
@@ -884,6 +880,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
         lastSeq: 0,
         evictedBeforeSeq: 0,
         gap: false,
+        hasMoreBefore: false,
       };
     }
 
@@ -894,6 +891,80 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       lastSeq: history.lastSeq,
       evictedBeforeSeq: history.evictedBeforeSeq,
       gap: history.evictedBeforeSeq > sinceSeq,
+      hasMoreBefore: false,
+    };
+  }
+
+  getPtyHistoryEntriesBefore(
+    paneId: string,
+    beforeSeq?: number,
+    limits?: PaneHistoryReadLimits,
+  ): PaneHistoryEntriesResult;
+  getPtyHistoryEntriesBefore(
+    windowId: string,
+    paneId: string,
+    beforeSeq?: number,
+    limits?: PaneHistoryReadLimits,
+  ): PaneHistoryEntriesResult;
+  getPtyHistoryEntriesBefore(
+    windowIdOrPaneId: string,
+    paneIdOrBeforeSeq?: string | number,
+    beforeSeqOrLimits?: number | PaneHistoryReadLimits,
+    maybeLimits?: PaneHistoryReadLimits,
+  ): PaneHistoryEntriesResult {
+    const paneId = typeof paneIdOrBeforeSeq === 'string' ? paneIdOrBeforeSeq : undefined;
+    const beforeSeq = typeof paneIdOrBeforeSeq === 'number'
+      ? paneIdOrBeforeSeq
+      : typeof beforeSeqOrLimits === 'number'
+        ? beforeSeqOrLimits
+        : Number.MAX_SAFE_INTEGER;
+    const limits = (
+      typeof paneIdOrBeforeSeq === 'number'
+        ? beforeSeqOrLimits
+        : maybeLimits
+    ) as PaneHistoryReadLimits | undefined;
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
+    if (!history) {
+      return {
+        entries: [],
+        firstSeq: 0,
+        lastSeq: 0,
+        evictedBeforeSeq: 0,
+        gap: false,
+        hasMoreBefore: false,
+      };
+    }
+
+    const maxBytes = normalizeHistoryLimit(limits?.limitBytes, Number.POSITIVE_INFINITY);
+    const maxChunks = normalizeHistoryLimit(limits?.limitChunks, Number.POSITIVE_INFINITY);
+    const firstAvailableSeq = getPaneHistoryFirstSeq(history);
+    const selected: PaneHistoryEntry[] = [];
+    let totalLength = 0;
+    for (let index = history.entries.length - 1; index >= 0; index -= 1) {
+      const entry = history.entries[index]!;
+      if (entry.seq >= beforeSeq) {
+        continue;
+      }
+      if (selected.length >= maxChunks) {
+        break;
+      }
+      if (selected.length > 0 && totalLength + entry.data.length > maxBytes) {
+        break;
+      }
+      selected.push(entry);
+      totalLength += entry.data.length;
+    }
+
+    selected.reverse();
+    const firstReturnedSeq = selected[0]?.seq ?? 0;
+    const hasMoreBefore = selected.length > 0 && firstReturnedSeq > firstAvailableSeq;
+    return {
+      entries: selected,
+      firstSeq: firstReturnedSeq,
+      lastSeq: selected.at(-1)?.seq ?? 0,
+      evictedBeforeSeq: history.evictedBeforeSeq,
+      gap: history.evictedBeforeSeq > 0 && !hasMoreBefore,
+      hasMoreBefore,
     };
   }
 
@@ -1946,6 +2017,13 @@ function getPaneHistoryFirstSeq(history: PaneHistoryBuffer): number {
     return firstEntry.seq;
   }
   return history.lastSeq > 0 ? history.lastSeq + 1 : 0;
+}
+
+function normalizeHistoryLimit(value: number | undefined, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return fallback;
 }
 
 function isSSHPortForwardSession(value: unknown): value is {

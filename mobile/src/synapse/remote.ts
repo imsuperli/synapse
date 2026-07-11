@@ -60,9 +60,18 @@ export type TerminalHistoryResult = {
   firstSeq: number
   lastSeq: number
   gap: boolean
+  hasMoreBefore: boolean
+  evictedBeforeSeq: number
   cols?: number
   rows?: number
   keyboardState?: unknown
+}
+
+export type TerminalHistoryRequestOptions = {
+  sinceSeq?: number
+  beforeSeq?: number
+  limitBytes?: number
+  limitChunks?: number
 }
 
 export type TerminalOutputEvent = {
@@ -257,12 +266,15 @@ export async function requestTerminalHistory(
   client: RpcClient,
   windowId: string,
   paneId: string,
-  sinceSeq?: number
+  options: TerminalHistoryRequestOptions = {}
 ): Promise<TerminalHistoryResult> {
   const response = await client.sendRequest('terminal.history', {
     windowId,
     paneId,
-    ...(typeof sinceSeq === 'number' ? { sinceSeq } : {})
+    ...(typeof options.sinceSeq === 'number' ? { sinceSeq: options.sinceSeq } : {}),
+    ...(typeof options.beforeSeq === 'number' ? { beforeSeq: options.beforeSeq } : {}),
+    ...(typeof options.limitBytes === 'number' ? { limitBytes: options.limitBytes } : {}),
+    ...(typeof options.limitChunks === 'number' ? { limitChunks: options.limitChunks } : {})
   })
   if (!response.ok) {
     throw new Error(response.error.message)
@@ -646,6 +658,8 @@ export function parseTerminalHistory(value: unknown): TerminalHistoryResult {
     firstSeq: typeof result.firstSeq === 'number' ? result.firstSeq : 0,
     lastSeq: typeof result.lastSeq === 'number' ? result.lastSeq : 0,
     gap: result.gap === true,
+    hasMoreBefore: result.hasMoreBefore === true,
+    evictedBeforeSeq: typeof result.evictedBeforeSeq === 'number' ? result.evictedBeforeSeq : 0,
     ...(typeof result.cols === 'number' && result.cols > 0 ? { cols: result.cols } : {}),
     ...(typeof result.rows === 'number' && result.rows > 0 ? { rows: result.rows } : {}),
     keyboardState: result.keyboardState

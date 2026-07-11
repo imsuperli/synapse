@@ -320,6 +320,7 @@ window.onerror = function(msg) {
   // once when the first live data chunk arrives so a wider line that pushes
   // scrollWidth past the previously-measured value gets re-scaled to fit.
   var firstDataPending = false;
+  var lastHistoryTopNotifyAt = 0;
 
   // Diagnostic logger — bridges WebView console.log to RN via postMessage.
   // Tag with [fit] so it's easy to filter in the Expo/Metro logs.
@@ -868,6 +869,13 @@ window.onerror = function(msg) {
     if (window.ReactNativeWebView) {
       window.ReactNativeWebView.postMessage(JSON.stringify(msg));
     }
+  }
+
+  function notifyHistoryTopReached() {
+    var now = Date.now();
+    if (now - lastHistoryTopNotifyAt < 900) return;
+    lastHistoryTopNotifyAt = now;
+    notify({ type: 'history-top' });
   }
 
   function engineErrorText(err) {
@@ -1422,6 +1430,7 @@ window.onerror = function(msg) {
     var effectiveCellH = getCellHeight() * getTotalScale();
     if (effectiveCellH <= 0) return false;
     if (!canScrollNormalBufferDelta(deltaY)) {
+      if (deltaY < 0) notifyHistoryTopReached();
       resetSmoothScrollOffset();
       return false;
     }
@@ -1448,6 +1457,7 @@ window.onerror = function(msg) {
   function enqueueNormalBufferScrollDelta(deltaY) {
     if (!term || deltaY === 0) return false;
     if (!canScrollNormalBufferDelta(deltaY)) {
+      if (deltaY < 0) notifyHistoryTopReached();
       resetSmoothScrollOffset();
       return false;
     }

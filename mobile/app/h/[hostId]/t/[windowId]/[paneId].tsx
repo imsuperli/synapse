@@ -60,6 +60,9 @@ const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 30
 const TERMINAL_INCREMENTAL_SYNC_MS = 1500
 const TERMINAL_PANE_STATUS_SYNC_MS = 3000
+const TERMINAL_HISTORY_PAGE_BYTES = 768 * 1024
+const TERMINAL_HISTORY_PAGE_CHUNKS = 20_000
+const TERMINAL_HISTORY_RECENT_BEFORE_SEQ = Number.MAX_SAFE_INTEGER
 
 type TerminalViewport = {
   cols: number
@@ -182,7 +185,11 @@ export default function RemoteTerminalScreen() {
   const unsubscribeRef = useRef<(() => void) | null>(null)
   const runIdRef = useRef(0)
   const lastSeqRef = useRef(0)
+  const loadedFirstSeqRef = useRef(0)
+  const historyChunksRef = useRef<string[]>([])
+  const hasMoreHistoryBeforeRef = useRef(false)
   const resyncingRef = useRef(false)
+  const loadingOlderHistoryRef = useRef(false)
   const viewportRef = useRef<TerminalViewport>({
     cols: DEFAULT_COLS,
     rows: DEFAULT_ROWS
@@ -209,6 +216,8 @@ export default function RemoteTerminalScreen() {
   const [stopping, setStopping] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(true)
   const [terminalTextScale, setTerminalTextScale] = useState(1)
+  const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
+  const [historyNotice, setHistoryNotice] = useState<string | null>(null)
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const liveInputTerminalHandles = useMemo(() => new Set([terminalHandle]), [terminalHandle])
   const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set([terminalHandle]))
@@ -240,6 +249,7 @@ export default function RemoteTerminalScreen() {
   const cleanup = useCallback(() => {
     runIdRef.current += 1
     resyncingRef.current = false
+    loadingOlderHistoryRef.current = false
     terminalIncrementSyncInFlightRef.current = false
     paneStatusSyncInFlightRef.current = false
     unsubscribeRef.current?.()
@@ -248,6 +258,7 @@ export default function RemoteTerminalScreen() {
     clientRef.current = null
     clearTerminalLiveInputFocusTimer(liveInputFocusTimerRef)
     stopAccessoryRepeat()
+    setLoadingOlderHistory(false)
   }, [stopAccessoryRepeat])
 
   const refitTerminalToPhone = useCallback(() => {
@@ -281,11 +292,19 @@ export default function RemoteTerminalScreen() {
 
   const loadTerminalHistorySnapshot = useCallback(
     async (client: RpcClient, runId: number) => {
-      const history = await requestTerminalHistory(client, windowId, paneId)
+      const history = await requestTerminalHistory(client, windowId, paneId, {
+        beforeSeq: TERMINAL_HISTORY_RECENT_BEFORE_SEQ,
+        limitBytes: TERMINAL_HISTORY_PAGE_BYTES,
+        limitChunks: TERMINAL_HISTORY_PAGE_CHUNKS
+      })
       if (runIdRef.current !== runId || clientRef.current !== client) {
         return null
       }
       lastSeqRef.current = history.lastSeq
+      loadedFirstSeqRef.current = history.firstSeq
+      historyChunksRef.current = history.chunks
+      hasMoreHistoryBeforeRef.current = history.hasMoreBefore
+      setHistoryNotice(history.gap && !history.hasMoreBefore ? t('terminal.historyStartReached') : null)
       const viewport = normalizeTerminalViewport(history, viewportRef.current)
       viewportRef.current = viewport
       terminalRef.current?.init(
@@ -302,7 +321,7 @@ export default function RemoteTerminalScreen() {
       }
       return history
     },
-    [paneId, windowId]
+    [paneId, t, windowId]
   )
 
   const startTerminalSubscription = useCallback(
@@ -363,6 +382,7 @@ export default function RemoteTerminalScreen() {
           }
           lastSeqRef.current = Math.max(lastSeqRef.current, event.seq)
           subscribeParams.sinceSeq = lastSeqRef.current
+          historyChunksRef.current.push(event.data)
           terminalRef.current?.write(event.data)
         }
       )
@@ -391,7 +411,7 @@ export default function RemoteTerminalScreen() {
     }
     try {
       const sinceSeq = lastSeqRef.current
-      const history = await requestTerminalHistory(client, windowId, paneId, sinceSeq)
+      const history = await requestTerminalHistory(client, windowId, paneId, { sinceSeq })
       if (runIdRef.current !== runId || clientRef.current !== client) {
         return
       }
@@ -436,6 +456,7 @@ export default function RemoteTerminalScreen() {
         return
       }
       terminalRef.current?.write(history.chunks.join(''))
+      historyChunksRef.current.push(...history.chunks)
       lastSeqRef.current = Math.max(lastSeqRef.current, history.lastSeq)
     } catch (err) {
       if (runIdRef.current !== runId || clientRef.current !== client) {
@@ -545,6 +566,12 @@ export default function RemoteTerminalScreen() {
     setStartingTabPaneKey(null)
     setStopping(false)
     setTerminalRunning(true)
+    setLoadingOlderHistory(false)
+    setHistoryNotice(null)
+    loadedFirstSeqRef.current = 0
+    historyChunksRef.current = []
+    hasMoreHistoryBeforeRef.current = false
+    loadingOlderHistoryRef.current = false
     currentPaneRuntimeKeyRef.current = null
 
     try {
@@ -642,7 +669,11 @@ export default function RemoteTerminalScreen() {
       }
       if (result.windowId === windowId && result.paneId === paneId) {
         lastSeqRef.current = Math.max(lastSeqRef.current, result.lastSeq)
+        loadedFirstSeqRef.current = result.lastSeq
       }
+      historyChunksRef.current = []
+      hasMoreHistoryBeforeRef.current = false
+      setHistoryNotice(null)
       terminalRef.current?.clear()
     } catch (err) {
       if (runIdRef.current === runId && clientRef.current === client) {
@@ -904,6 +935,72 @@ export default function RemoteTerminalScreen() {
     void saveTerminalTextScale(scale)
   }, [])
 
+  const handleHistoryTopReached = useCallback(() => {
+    const client = clientRef.current
+    if (
+      !client ||
+      loading ||
+      resyncingRef.current ||
+      loadingOlderHistoryRef.current ||
+      !hasMoreHistoryBeforeRef.current
+    ) {
+      return
+    }
+    const beforeSeq = loadedFirstSeqRef.current
+    if (beforeSeq <= 1) {
+      hasMoreHistoryBeforeRef.current = false
+      setHistoryNotice(t('terminal.historyStartReached'))
+      return
+    }
+    const runId = runIdRef.current
+    loadingOlderHistoryRef.current = true
+    setLoadingOlderHistory(true)
+    setHistoryNotice(null)
+    void (async () => {
+      try {
+        const history = await requestTerminalHistory(client, windowId, paneId, {
+          beforeSeq,
+          limitBytes: TERMINAL_HISTORY_PAGE_BYTES,
+          limitChunks: TERMINAL_HISTORY_PAGE_CHUNKS
+        })
+        if (runIdRef.current !== runId || clientRef.current !== client) {
+          return
+        }
+        hasMoreHistoryBeforeRef.current = history.hasMoreBefore
+        if (history.chunks.length === 0) {
+          if (!history.hasMoreBefore) {
+            setHistoryNotice(t('terminal.historyStartReached'))
+          }
+          return
+        }
+        historyChunksRef.current = [...history.chunks, ...historyChunksRef.current]
+        loadedFirstSeqRef.current = history.firstSeq
+        if (history.gap && !history.hasMoreBefore) {
+          setHistoryNotice(t('terminal.historyStartReached'))
+        }
+        const viewport = viewportRef.current
+        terminalRef.current?.init(
+          viewport.cols,
+          viewport.rows,
+          historyChunksRef.current.join(''),
+          true,
+          undefined,
+          true
+        )
+        await terminalRef.current?.awaitReady()
+      } catch (err) {
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setError(terminalErrorMessage(err, t))
+        }
+      } finally {
+        if (runIdRef.current === runId && clientRef.current === client) {
+          loadingOlderHistoryRef.current = false
+          setLoadingOlderHistory(false)
+        }
+      }
+    })()
+  }, [loading, paneId, t, windowId])
+
   useEffect(() => {
     const updateKeyboardHeight = (event: KeyboardEvent) => {
       setKeyboardHeight(Math.max(0, event.endCoordinates.height - insets.bottom))
@@ -1068,7 +1165,16 @@ export default function RemoteTerminalScreen() {
           onTerminalInput={handleTerminalInput}
           onEngineError={setError}
           onTextScaleChange={handleTextScaleChange}
+          onHistoryTopReached={handleHistoryTopReached}
         />
+        {loadingOlderHistory || historyNotice ? (
+          <View style={styles.historyBanner}>
+            {loadingOlderHistory ? <ActivityIndicator size="small" color={colors.textSecondary} /> : null}
+            <Text style={styles.historyBannerText}>
+              {loadingOlderHistory ? t('terminal.loadingOlderHistory') : historyNotice}
+            </Text>
+          </View>
+        ) : null}
         {loading ? (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator color={colors.textSecondary} />
@@ -1269,6 +1375,28 @@ const styles = StyleSheet.create({
   terminalFrame: {
     flex: 1,
     backgroundColor: colors.terminalBg
+  },
+  historyBanner: {
+    position: 'absolute',
+    top: spacing.sm,
+    alignSelf: 'center',
+    maxWidth: '88%',
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.button,
+    backgroundColor: 'rgba(23, 23, 23, 0.86)',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    zIndex: 12
+  },
+  historyBannerText: {
+    color: colors.textSecondary,
+    fontSize: typography.metaSize,
+    fontWeight: '600'
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,

@@ -144,6 +144,12 @@ describe('TerminalWebView scroll routing', () => {
     expect(source).toContain('updateScrollIndicator(true);')
   })
 
+  it('notifies React Native when normal scrollback reaches the loaded top', () => {
+    expect(source).toContain("notify({ type: 'history-top' });")
+    expect(source).toContain('if (now - lastHistoryTopNotifyAt < 900) return;')
+    expect(source).toContain('if (deltaY < 0) notifyHistoryTopReached();')
+  })
+
   it('does not apply fractional smooth scroll transforms to terminal content', () => {
     const updateTransformBlock = sliceBetween(
       'function updateTransform()',

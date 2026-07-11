@@ -21,6 +21,13 @@ export type TerminalClearResult = {
   lastSeq: number;
 };
 
+type TerminalHistoryOptions = {
+  sinceSeq?: number;
+  beforeSeq?: number;
+  limitBytes?: number;
+  limitChunks?: number;
+};
+
 export class RemoteTerminalController {
   private readonly subscriptions = new Map<string, () => void>();
 
@@ -43,11 +50,11 @@ export class RemoteTerminalController {
       }));
   }
 
-  getHistory(windowId: string, paneId: string, sinceSeq?: number): TerminalHistoryResult {
+  getHistory(windowId: string, paneId: string, options: TerminalHistoryOptions = {}): TerminalHistoryResult {
     this.requirePid(windowId, paneId);
     const dimensions = this.processManager.getPaneTerminalDimensions(windowId, paneId);
-    if (typeof sinceSeq === 'number') {
-      const history = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, sinceSeq);
+    if (typeof options.sinceSeq === 'number') {
+      const history = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, options.sinceSeq);
       return {
         windowId,
         paneId,
@@ -55,6 +62,34 @@ export class RemoteTerminalController {
         firstSeq: history.firstSeq,
         lastSeq: history.lastSeq,
         gap: history.gap,
+        hasMoreBefore: history.hasMoreBefore,
+        evictedBeforeSeq: history.evictedBeforeSeq,
+        ...dimensions,
+      };
+    }
+    if (
+      typeof options.beforeSeq === 'number'
+      || typeof options.limitBytes === 'number'
+      || typeof options.limitChunks === 'number'
+    ) {
+      const history = this.processManager.getPtyHistoryEntriesBefore(
+        windowId,
+        paneId,
+        options.beforeSeq,
+        {
+          limitBytes: options.limitBytes,
+          limitChunks: options.limitChunks,
+        },
+      );
+      return {
+        windowId,
+        paneId,
+        chunks: history.entries.map((entry) => entry.data),
+        firstSeq: history.firstSeq,
+        lastSeq: history.lastSeq,
+        gap: history.gap,
+        hasMoreBefore: history.hasMoreBefore,
+        evictedBeforeSeq: history.evictedBeforeSeq,
         ...dimensions,
       };
     }
@@ -66,6 +101,8 @@ export class RemoteTerminalController {
       firstSeq: history.firstSeq,
       lastSeq: history.lastSeq,
       gap: history.evictedBeforeSeq > 0,
+      hasMoreBefore: false,
+      evictedBeforeSeq: history.evictedBeforeSeq,
       ...dimensions,
       keyboardState: history.keyboardState,
     };
