@@ -187,6 +187,8 @@ export default function RemoteTerminalScreen() {
   const lastSeqRef = useRef(0)
   const loadedFirstSeqRef = useRef(0)
   const historyChunksRef = useRef<string[]>([])
+  const screenSnapshotDataRef = useRef('')
+  const screenSnapshotTailChunkCountRef = useRef(0)
   const hasMoreHistoryBeforeRef = useRef(false)
   const resyncingRef = useRef(false)
   const loadingOlderHistoryRef = useRef(false)
@@ -265,6 +267,19 @@ export default function RemoteTerminalScreen() {
     terminalRef.current?.resetZoom()
   }, [])
 
+  const buildTerminalInitialData = useCallback(() => {
+    const screenSnapshotData = screenSnapshotDataRef.current
+    if (!screenSnapshotData) {
+      return historyChunksRef.current.join('')
+    }
+    const tailChunkCount = Math.min(
+      screenSnapshotTailChunkCountRef.current,
+      historyChunksRef.current.length
+    )
+    const screenSnapshotInsertAt = historyChunksRef.current.length - tailChunkCount
+    return `${historyChunksRef.current.slice(0, screenSnapshotInsertAt).join('')}${screenSnapshotData}${historyChunksRef.current.slice(screenSnapshotInsertAt).join('')}`
+  }, [])
+
   const loadWindowPaneTabs = useCallback(
     async (client: RpcClient, expectedRunId = runIdRef.current) => {
       try {
@@ -312,10 +327,12 @@ export default function RemoteTerminalScreen() {
         history.screenSnapshot.paneId === paneId
         ? history.screenSnapshot.data
         : ''
+      screenSnapshotDataRef.current = screenSnapshotData
+      screenSnapshotTailChunkCountRef.current = 0
       terminalRef.current?.init(
         viewport.cols,
         viewport.rows,
-        `${history.chunks.join('')}${screenSnapshotData}`,
+        buildTerminalInitialData(),
         false,
         undefined,
         true
@@ -326,7 +343,7 @@ export default function RemoteTerminalScreen() {
       }
       return history
     },
-    [paneId, t, windowId]
+    [buildTerminalInitialData, paneId, t, windowId]
   )
 
   const startTerminalSubscription = useCallback(
@@ -388,6 +405,9 @@ export default function RemoteTerminalScreen() {
           lastSeqRef.current = Math.max(lastSeqRef.current, event.seq)
           subscribeParams.sinceSeq = lastSeqRef.current
           historyChunksRef.current.push(event.data)
+          if (screenSnapshotDataRef.current) {
+            screenSnapshotTailChunkCountRef.current += 1
+          }
           terminalRef.current?.write(event.data)
         }
       )
@@ -462,6 +482,9 @@ export default function RemoteTerminalScreen() {
       }
       terminalRef.current?.write(history.chunks.join(''))
       historyChunksRef.current.push(...history.chunks)
+      if (screenSnapshotDataRef.current) {
+        screenSnapshotTailChunkCountRef.current += history.chunks.length
+      }
       lastSeqRef.current = Math.max(lastSeqRef.current, history.lastSeq)
     } catch (err) {
       if (runIdRef.current !== runId || clientRef.current !== client) {
@@ -575,6 +598,8 @@ export default function RemoteTerminalScreen() {
     setHistoryNotice(null)
     loadedFirstSeqRef.current = 0
     historyChunksRef.current = []
+    screenSnapshotDataRef.current = ''
+    screenSnapshotTailChunkCountRef.current = 0
     hasMoreHistoryBeforeRef.current = false
     loadingOlderHistoryRef.current = false
     currentPaneRuntimeKeyRef.current = null
@@ -677,6 +702,8 @@ export default function RemoteTerminalScreen() {
         loadedFirstSeqRef.current = result.lastSeq
       }
       historyChunksRef.current = []
+      screenSnapshotDataRef.current = ''
+      screenSnapshotTailChunkCountRef.current = 0
       hasMoreHistoryBeforeRef.current = false
       setHistoryNotice(null)
       terminalRef.current?.clear()
@@ -987,7 +1014,7 @@ export default function RemoteTerminalScreen() {
         terminalRef.current?.init(
           viewport.cols,
           viewport.rows,
-          historyChunksRef.current.join(''),
+          buildTerminalInitialData(),
           true,
           undefined,
           true
@@ -1004,7 +1031,7 @@ export default function RemoteTerminalScreen() {
         }
       }
     })()
-  }, [loading, paneId, t, windowId])
+  }, [buildTerminalInitialData, loading, paneId, t, windowId])
 
   useEffect(() => {
     const updateKeyboardHeight = (event: KeyboardEvent) => {
