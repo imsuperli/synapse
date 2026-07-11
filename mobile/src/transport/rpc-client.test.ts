@@ -513,6 +513,42 @@ describe('mobile rpc-client connection timeout', () => {
     client.close()
   })
 
+  it('sends terminal unsubscribe after subscription id arrives when disposed early', () => {
+    const client = connect('ws://desktop.invalid', 'token', 'server-key')
+    const socket = mockSockets[0]!
+    const events: unknown[] = []
+
+    socket.open()
+    socket.receive(JSON.stringify({ type: 'e2ee_ready' }))
+    socket.receive('encrypted:{"type":"e2ee_authenticated"}')
+
+    const unsubscribe = client.subscribe(
+      'terminal.subscribe',
+      { windowId: 'win-1', paneId: 'pane-1', sinceSeq: 7 },
+      (event) => events.push(event)
+    )
+    const request = sentRequest(socket, 'terminal.subscribe')
+    unsubscribe()
+    socket.receive(
+      `encrypted:${JSON.stringify({
+        id: request.id,
+        ok: true,
+        result: { subscriptionId: 'terminal-sub-1', firstSeq: 8, lastSeq: 9, gap: false }
+      })}`
+    )
+
+    expect(events).toEqual([])
+    expect(
+      socket.sent.some(
+        (payload) =>
+          payload.includes('"method":"terminal.unsubscribe"') &&
+          payload.includes('"subscriptionId":"terminal-sub-1"')
+      )
+    ).toBe(true)
+
+    client.close()
+  })
+
   it('replays terminal subscribe with the latest viewport after reconnect', () => {
     const client = connect('ws://desktop.invalid', 'token', 'server-key')
     const firstSocket = mockSockets[0]!

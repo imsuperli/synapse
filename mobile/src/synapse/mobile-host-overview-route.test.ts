@@ -75,6 +75,15 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('syncOverviewStateInFlightRef.current = false')
   })
 
+  it('probes and refreshes the host overview when the app returns to foreground', () => {
+    expect(routeSource).toContain('AppState')
+    expect(routeSource).toContain("AppState.addEventListener('change', (state) => {")
+    expect(routeSource).toContain("if (state !== 'active')")
+    expect(routeSource).toContain('clientRef.current?.notifyForeground()')
+    expect(routeSource).toContain('void syncOverviewState()')
+    expect(routeSource).toContain('subscription.remove()')
+  })
+
   it('ignores stale host load and mutation responses after reconnecting or leaving the page', () => {
     expect(routeSource).toContain('const loadGenerationRef = useRef(0)')
     expect(routeSource).toContain('loadGenerationRef.current += 1')

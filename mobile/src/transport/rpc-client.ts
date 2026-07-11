@@ -642,9 +642,14 @@ export function connect(
           if (stream) {
             stream.subscriptionId = result.subscriptionId
             streamListenersBySubscriptionId.set(result.subscriptionId, stream.listener)
-            if (!stream.cancelled) {
-              stream.listener(result)
+            if (stream.cancelled) {
+              if (stream.method === 'terminal.subscribe') {
+                sendTerminalUnsubscribe(result.subscriptionId)
+              }
+              removeStreamListener(response.id)
+              return
             }
+            stream.listener(result)
             return
           }
         }
@@ -1042,6 +1047,14 @@ export function connect(
     })
   }
 
+  function sendTerminalUnsubscribe(subscriptionId: string): void {
+    sendEncrypted({
+      id: nextId(),
+      method: 'terminal.unsubscribe',
+      params: { subscriptionId }
+    })
+  }
+
   openConnection()
 
   return {
@@ -1141,18 +1154,14 @@ export function connect(
           return
         }
         if (stream?.method === 'terminal.subscribe') {
-          // Why: the runtime registers cleanup under the composite key
-          // `${terminal}:${clientId}` so two phones subscribing to the same
-          // terminal handle don't evict each other. Echo that composite key
-          // back on unsubscribe; also include `client.id` so the server can
-          // reconstruct it if a stale build emits a bare-handle id. See
-          // docs/mobile-presence-lock.md.
           if (stream.subscriptionId) {
-            sendEncrypted({
-              id: nextId(),
-              method: 'terminal.unsubscribe',
-              params: { subscriptionId: stream.subscriptionId }
-            })
+            sendTerminalUnsubscribe(stream.subscriptionId)
+            removeStreamListener(id)
+            return
+          }
+          stream.cancelled = true
+          if (stream.sent) {
+            return
           } else {
             const unsubscribeParams = buildTerminalUnsubscribeParams(stream.params)
             if (unsubscribeParams) {

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Pressable,
   RefreshControl,
@@ -1008,6 +1009,19 @@ export default function HostOverviewScreen() {
         void syncOverviewState()
       }, OVERVIEW_STATUS_SYNC_MS)
       return () => clearInterval(timer)
+    }, [syncOverviewState])
+  )
+
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = AppState.addEventListener('change', (state) => {
+        if (state !== 'active') {
+          return
+        }
+        clientRef.current?.notifyForeground()
+        void syncOverviewState()
+      })
+      return () => subscription.remove()
     }, [syncOverviewState])
   )
 
