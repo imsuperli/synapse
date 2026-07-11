@@ -183,6 +183,63 @@ describe('ProcessManager', () => {
         spawnSpy.mockRestore();
       }
     });
+
+    it('stores and clears renderer terminal screen snapshots', () => {
+      processManager.updateTerminalScreenSnapshot({
+        windowId: 'win-snapshot',
+        paneId: 'pane-snapshot',
+        cols: 120.8,
+        rows: 30.2,
+        cursorX: 4.9,
+        cursorY: 8.1,
+        alternate: true,
+        data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+        capturedAt: '2026-07-11T10:30:00.000Z',
+      });
+
+      expect(processManager.getTerminalScreenSnapshot('win-snapshot', 'pane-snapshot')).toMatchObject({
+        windowId: 'win-snapshot',
+        paneId: 'pane-snapshot',
+        cols: 120,
+        rows: 30,
+        cursorX: 4,
+        cursorY: 8,
+        alternate: true,
+      });
+
+      processManager.clearTerminalScreenSnapshot('win-snapshot', 'pane-snapshot');
+
+      expect(processManager.getTerminalScreenSnapshot('win-snapshot', 'pane-snapshot')).toBeUndefined();
+    });
+
+    it('clears renderer terminal screen snapshots when alternate screen is inactive', () => {
+      processManager.updateTerminalScreenSnapshot({
+        windowId: 'win-clear-snapshot',
+        paneId: 'pane-clear-snapshot',
+        cols: 120,
+        rows: 30,
+        cursorX: 4,
+        cursorY: 8,
+        alternate: true,
+        data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+        capturedAt: '2026-07-11T10:30:00.000Z',
+      });
+      expect(processManager.getTerminalScreenSnapshot('win-clear-snapshot', 'pane-clear-snapshot')).toBeDefined();
+
+      processManager.updateTerminalScreenSnapshot({
+        windowId: 'win-clear-snapshot',
+        paneId: 'pane-clear-snapshot',
+        cols: 120,
+        rows: 30,
+        cursorX: 0,
+        cursorY: 0,
+        alternate: false,
+        data: '',
+        capturedAt: '2026-07-11T10:30:01.000Z',
+      });
+
+      expect(processManager.getTerminalScreenSnapshot('win-clear-snapshot', 'pane-clear-snapshot')).toBeUndefined();
+    });
   });
 
   describe('spawnTerminal', () => {

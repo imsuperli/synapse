@@ -6,6 +6,7 @@ import { Pane, WindowStatus } from '../types/window';
 import { useI18n } from '../i18n';
 import { subscribeToPanePtyData } from '../api/ptyDataBus';
 import type { PtyDataPayload, PtyHistorySnapshot, PtyKeyboardProtocolState } from '../../shared/types/electron-api';
+import type { TerminalScreenSnapshot } from '../../shared/remote/terminal-protocol';
 import { ensureTerminalFontsLoaded, TERMINAL_FONT_FAMILY } from '../utils/terminalFonts';
 import { onTerminalSettingsUpdated } from '../utils/terminalSettingsEvents';
 import { installTerminalImeFix, type ImeCompositionState } from '../utils/terminalImeFix';
@@ -57,6 +58,8 @@ const REPLAY_PROTOCOL_QUERY_PATTERN = new RegExp(
 );
 const XTERM_FOCUS_IN_REPORT = '\u001b[I';
 const XTERM_FOCUS_OUT_REPORT = '\u001b[O';
+const TERMINAL_SCREEN_SNAPSHOT_MIN_INTERVAL_MS = 250;
+const ALTERNATE_SCREEN_MODE_PATTERN = /\x1b\[\?(?:[0-9;]*;)?(?:47|1047|1048|1049)(?:;[0-9;]*)?[hl]/;
 
 function getDefaultSSHClipboardImageShortcut(platform: string | undefined): SSHClipboardImageShortcut {
   return platform === 'darwin' ? 'ctrl-v' : 'alt-v';
@@ -118,6 +121,51 @@ function getReplaySessionKey(windowId: string, paneId: string, pid: number | nul
   }
 
   return `${windowId}:${paneId}:${pid}`;
+}
+
+function sanitizeTerminalSnapshotLine(text: string): string {
+  return text.replace(/\x1b/g, '\u241b').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+}
+
+function createAlternateTerminalScreenSnapshot(
+  windowId: string,
+  paneId: string,
+  terminal: Terminal,
+): TerminalScreenSnapshot | null {
+  const buffer = terminal.buffer?.active;
+  if (!buffer || buffer.type !== 'alternate') {
+    return null;
+  }
+
+  const cols = Math.max(1, Math.floor(terminal.cols || 1));
+  const rows = Math.max(1, Math.floor(terminal.rows || 1));
+  const cursorX = clampNumber(buffer.cursorX ?? 0, 0, Math.max(0, cols - 1));
+  const cursorY = clampNumber(buffer.cursorY ?? 0, 0, Math.max(0, rows - 1));
+  const lines: string[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    const line = buffer.getLine(row);
+    lines.push(sanitizeTerminalSnapshotLine(line?.translateToString(true, 0, cols) ?? ''));
+  }
+
+  return {
+    windowId,
+    paneId,
+    cols,
+    rows,
+    cursorX,
+    cursorY,
+    alternate: true,
+    data: `\x1b[?1049h\x1b[2J\x1b[H${lines.join('\r\n')}\x1b[${cursorY + 1};${cursorX + 1}H`,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+function shouldCaptureTerminalScreenSnapshot(
+  terminal: Terminal,
+  data: string,
+  hasSnapshot: boolean,
+): boolean {
+  return terminal.buffer?.active?.type === 'alternate' || hasSnapshot || ALTERNATE_SCREEN_MODE_PATTERN.test(data);
 }
 
 export function __resetTerminalPaneReplaySessionCacheForTests(): void {
@@ -782,6 +830,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const outputChunksRef = useRef<string[]>([]);
   const outputBufferSizeRef = useRef(0);
   const outputFlushFrameRef = useRef<number | null>(null);
+  const screenSnapshotFrameRef = useRef<number | null>(null);
+  const lastScreenSnapshotSentAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const lastScreenSnapshotSignatureRef = useRef('');
   const lastLiveOutputQueuedAtRef = useRef(Number.NEGATIVE_INFINITY);
   const resizeFrameRef = useRef<number | null>(null);
   const repaintFrameRef = useRef<number | null>(null);
@@ -905,6 +956,65 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     lastSyncedTerminalSizeRef.current = { cols, rows };
     window.electronAPI.ptyResize(windowId, pane.id, cols, rows);
+  }, [pane.id, windowId]);
+
+  const scheduleTerminalScreenSnapshot = useCallback(() => {
+    if (screenSnapshotFrameRef.current !== null) {
+      return;
+    }
+
+    let didRunSynchronously = false;
+    const frameId = requestAnimationFrame(() => {
+      didRunSynchronously = true;
+      screenSnapshotFrameRef.current = null;
+      const terminal = terminalRef.current;
+      if (!terminal || !window.electronAPI?.updateTerminalScreenSnapshot) {
+        return;
+      }
+
+      const now = nowMs();
+      const snapshot = createAlternateTerminalScreenSnapshot(windowId, pane.id, terminal);
+      if (!snapshot) {
+        if (lastScreenSnapshotSignatureRef.current) {
+          window.electronAPI.updateTerminalScreenSnapshot({
+            windowId,
+            paneId: pane.id,
+            cols: Math.max(1, Math.floor(terminal.cols || 1)),
+            rows: Math.max(1, Math.floor(terminal.rows || 1)),
+            cursorX: 0,
+            cursorY: 0,
+            alternate: false,
+            data: '',
+            capturedAt: new Date().toISOString(),
+          });
+          lastScreenSnapshotSentAtRef.current = now;
+        }
+        lastScreenSnapshotSignatureRef.current = '';
+        return;
+      }
+
+      if (now - lastScreenSnapshotSentAtRef.current < TERMINAL_SCREEN_SNAPSHOT_MIN_INTERVAL_MS) {
+        return;
+      }
+
+      const signature = [
+        snapshot.cols,
+        snapshot.rows,
+        snapshot.cursorX,
+        snapshot.cursorY,
+        snapshot.data,
+      ].join(':');
+      if (signature === lastScreenSnapshotSignatureRef.current) {
+        return;
+      }
+
+      lastScreenSnapshotSignatureRef.current = signature;
+      lastScreenSnapshotSentAtRef.current = now;
+      window.electronAPI.updateTerminalScreenSnapshot(snapshot);
+    });
+    if (!didRunSynchronously) {
+      screenSnapshotFrameRef.current = frameId;
+    }
   }, [pane.id, windowId]);
 
   const rememberTerminalViewportY = useCallback((viewportY: number | null) => {
@@ -1638,8 +1748,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         cancelAnimationFrame(outputFlushFrameRef.current);
         outputFlushFrameRef.current = null;
       }
+      if (screenSnapshotFrameRef.current !== null) {
+        cancelAnimationFrame(screenSnapshotFrameRef.current);
+        screenSnapshotFrameRef.current = null;
+      }
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
+      lastScreenSnapshotSignatureRef.current = '';
+      lastScreenSnapshotSentAtRef.current = Number.NEGATIVE_INFINITY;
       lastKnownViewportYRef.current = null;
       lastKnownBaseYRef.current = null;
       terminalRef.current?.reset();
@@ -1919,7 +2035,18 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       const guardedData = liveOsc8GuardRef.current.sanitize(data);
       if (guardedData) {
-        currentTerminal.write(guardedData);
+        const shouldCaptureSnapshot = shouldCaptureTerminalScreenSnapshot(
+          currentTerminal,
+          guardedData,
+          Boolean(lastScreenSnapshotSignatureRef.current),
+        );
+        if (shouldCaptureSnapshot) {
+          currentTerminal.write(guardedData, () => {
+            scheduleTerminalScreenSnapshot();
+          });
+        } else {
+          currentTerminal.write(guardedData);
+        }
         scheduleStaleRenderSurfaceRecovery();
       }
     };
@@ -2011,7 +2138,18 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           return;
         }
 
-        currentTerminal.write(guardedData, () => resolve());
+        currentTerminal.write(guardedData, () => {
+          if (
+            shouldCaptureTerminalScreenSnapshot(
+              currentTerminal,
+              guardedData,
+              Boolean(lastScreenSnapshotSignatureRef.current),
+            )
+          ) {
+            scheduleTerminalScreenSnapshot();
+          }
+          resolve();
+        });
       });
     });
 
@@ -2380,6 +2518,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         cancelAnimationFrame(staleRenderRecoveryFrameRef.current);
         staleRenderRecoveryFrameRef.current = null;
       }
+      if (screenSnapshotFrameRef.current !== null) {
+        cancelAnimationFrame(screenSnapshotFrameRef.current);
+        screenSnapshotFrameRef.current = null;
+      }
       isVisibleSurfaceRecoveryPendingRef.current = false;
 
       clearQueuedOutput();
@@ -2404,6 +2546,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     handleTerminalLinkLeave,
     hideSelectionAiOverlay,
     rememberTerminalViewportY,
+    scheduleTerminalScreenSnapshot,
     scheduleStaleRenderSurfaceRecovery,
     showSelectionAiOverlay,
     syncPtySize,

@@ -31,8 +31,12 @@ const { terminalInstances, ptyCallbacks, terminalDataCallbacks, terminalScrollCa
     };
     buffer: {
       active: {
+        type?: 'normal' | 'alternate';
         viewportY: number;
         baseY: number;
+        cursorX?: number;
+        cursorY?: number;
+        getLine?: (row: number) => { translateToString: (trimRight?: boolean, startColumn?: number, endColumn?: number) => string } | undefined;
       };
     };
     _core: {
@@ -204,8 +208,12 @@ vi.mock('@xterm/xterm', () => ({
       },
       buffer: {
         active: {
+          type: 'normal' as const,
           viewportY: 0,
           baseY: 0,
+          cursorX: 0,
+          cursorY: 0,
+          getLine: vi.fn(() => undefined),
         },
       },
       cols: 120,
@@ -285,6 +293,7 @@ describe('TerminalPane history replay', () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockReset();
     vi.mocked(window.electronAPI.ptyWrite).mockReset();
     vi.mocked(window.electronAPI.ptyResize).mockReset();
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockReset();
     requestAnimationFrameMock.mockClear();
     cancelAnimationFrameMock.mockClear();
     vi.stubGlobal('requestAnimationFrame', requestAnimationFrameMock);
@@ -546,6 +555,139 @@ describe('TerminalPane history replay', () => {
 
     expect(terminalInstances[0].write).toHaveBeenCalledWith('a');
     expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+  });
+
+  it('publishes alternate screen snapshots after live output without writing back to the PTY', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-alt"
+        pane={{
+          id: 'pane-alt',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(ptyCallbacks).toHaveLength(1);
+    });
+
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'alternate' as const,
+      cursorX: 7,
+      cursorY: 2,
+      getLine: vi.fn((row: number) => ({
+        translateToString: () => (row === 0 ? 'Codex task' : row === 2 ? 'working 12s' : ''),
+      })),
+    });
+    terminalInstances[0].cols = 20;
+    terminalInstances[0].rows = 4;
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockClear();
+    vi.mocked(window.electronAPI.ptyWrite).mockClear();
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt', paneId: 'pane-alt', data: '\u001b[?1049hworking', seq: 1 });
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          windowId: 'win-alt',
+          paneId: 'pane-alt',
+          cols: 20,
+          rows: 4,
+          cursorX: 7,
+          cursorY: 2,
+          alternate: true,
+          data: expect.stringContaining('Codex task\r\n\r\nworking 12s'),
+        }),
+      );
+    });
+    expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining('\u001b[?1049h\u001b[2J\u001b[H'),
+      }),
+    );
+    expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining('\u001b[3;8H'),
+      }),
+    );
+    expect(window.electronAPI.ptyWrite).not.toHaveBeenCalled();
+  });
+
+  it('clears alternate screen snapshots immediately when the terminal returns to the normal buffer', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-alt-clear"
+        pane={{
+          id: 'pane-alt-clear',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(ptyCallbacks).toHaveLength(1);
+    });
+
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'alternate' as const,
+      cursorX: 0,
+      cursorY: 0,
+      getLine: vi.fn(() => ({
+        translateToString: () => 'working',
+      })),
+    });
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockClear();
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt-clear', paneId: 'pane-alt-clear', data: '\u001b[?1049hworking', seq: 1 });
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ alternate: true }),
+      );
+    });
+
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'normal' as const,
+      cursorX: 0,
+      cursorY: 0,
+      getLine: vi.fn(() => undefined),
+    });
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt-clear', paneId: 'pane-alt-clear', data: '\u001b[?1049l', seq: 2 });
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          windowId: 'win-alt-clear',
+          paneId: 'pane-alt-clear',
+          alternate: false,
+          data: '',
+        }),
+      );
+    });
   });
 
   it('tracks ssh cwd updates as runtime-only without triggering auto-save', async () => {

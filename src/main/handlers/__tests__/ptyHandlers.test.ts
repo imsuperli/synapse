@@ -23,6 +23,12 @@ function getRegisteredHandler(channel: string) {
   return call?.[1] as (event: unknown, payload: unknown) => Promise<unknown>;
 }
 
+function getRegisteredListener(channel: string) {
+  const call = mockIpcOn.mock.calls.find(([name]) => name === channel);
+  expect(call, `IPC listener ${channel} should be registered`).toBeTruthy();
+  return call?.[1] as (event: unknown, payload: unknown) => void;
+}
+
 describe('registerPtyHandlers', () => {
   beforeEach(() => {
     mockIpcHandle.mockReset();
@@ -64,6 +70,39 @@ describe('registerPtyHandlers', () => {
         evictedBeforeSeq: 0,
       },
     });
+  });
+
+  it('records renderer terminal screen snapshots without writing to the PTY', () => {
+    const processManager = {
+      getPidByPane: vi.fn(),
+      listProcesses: vi.fn(),
+      writeToPty: vi.fn(),
+      resizePty: vi.fn(),
+      getPtyHistory: vi.fn(),
+      updateTerminalScreenSnapshot: vi.fn(),
+    };
+    const ctx = {
+      processManager,
+    } as unknown as HandlerContext;
+
+    registerPtyHandlers(ctx);
+    const snapshotListener = getRegisteredListener('terminal-screen-snapshot:update');
+    const snapshot = {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      cols: 120,
+      rows: 30,
+      cursorX: 2,
+      cursorY: 5,
+      alternate: true,
+      data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+      capturedAt: '2026-07-11T10:30:00.000Z',
+    };
+
+    snapshotListener({}, snapshot);
+
+    expect(processManager.updateTerminalScreenSnapshot).toHaveBeenCalledWith(snapshot);
+    expect(processManager.writeToPty).not.toHaveBeenCalled();
   });
 
   it('forwards PTY writes to tmux compat when protocol replies are current', async () => {

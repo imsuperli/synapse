@@ -53,6 +53,7 @@ export class RemoteTerminalController {
   getHistory(windowId: string, paneId: string, options: TerminalHistoryOptions = {}): TerminalHistoryResult {
     this.requirePid(windowId, paneId);
     const dimensions = this.processManager.getPaneTerminalDimensions(windowId, paneId);
+    const screenSnapshot = this.processManager.getTerminalScreenSnapshot(windowId, paneId);
     if (typeof options.sinceSeq === 'number') {
       const history = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, options.sinceSeq);
       return {
@@ -65,6 +66,7 @@ export class RemoteTerminalController {
         hasMoreBefore: history.hasMoreBefore,
         evictedBeforeSeq: history.evictedBeforeSeq,
         ...dimensions,
+        ...(screenSnapshot ? { screenSnapshot } : {}),
       };
     }
     if (
@@ -91,6 +93,7 @@ export class RemoteTerminalController {
         hasMoreBefore: history.hasMoreBefore,
         evictedBeforeSeq: history.evictedBeforeSeq,
         ...dimensions,
+        ...(screenSnapshot ? { screenSnapshot } : {}),
       };
     }
     const history = this.processManager.getPtyHistory(windowId, paneId);
@@ -105,6 +108,7 @@ export class RemoteTerminalController {
       evictedBeforeSeq: history.evictedBeforeSeq,
       ...dimensions,
       keyboardState: history.keyboardState,
+      ...(screenSnapshot ? { screenSnapshot } : {}),
     };
   }
 

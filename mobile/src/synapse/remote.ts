@@ -65,6 +65,19 @@ export type TerminalHistoryResult = {
   cols?: number
   rows?: number
   keyboardState?: unknown
+  screenSnapshot?: TerminalScreenSnapshot
+}
+
+export type TerminalScreenSnapshot = {
+  windowId: string
+  paneId: string
+  cols: number
+  rows: number
+  cursorX: number
+  cursorY: number
+  alternate: boolean
+  data: string
+  capturedAt: string
 }
 
 export type TerminalHistoryRequestOptions = {
@@ -662,7 +675,41 @@ export function parseTerminalHistory(value: unknown): TerminalHistoryResult {
     evictedBeforeSeq: typeof result.evictedBeforeSeq === 'number' ? result.evictedBeforeSeq : 0,
     ...(typeof result.cols === 'number' && result.cols > 0 ? { cols: result.cols } : {}),
     ...(typeof result.rows === 'number' && result.rows > 0 ? { rows: result.rows } : {}),
-    keyboardState: result.keyboardState
+    keyboardState: result.keyboardState,
+    ...(parseTerminalScreenSnapshot(result.screenSnapshot) ?? {})
+  }
+}
+
+function parseTerminalScreenSnapshot(value: unknown): { screenSnapshot: TerminalScreenSnapshot } | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const snapshot = value as Record<string, unknown>
+  if (
+    typeof snapshot.windowId !== 'string' ||
+    typeof snapshot.paneId !== 'string' ||
+    typeof snapshot.cols !== 'number' ||
+    typeof snapshot.rows !== 'number' ||
+    typeof snapshot.cursorX !== 'number' ||
+    typeof snapshot.cursorY !== 'number' ||
+    typeof snapshot.alternate !== 'boolean' ||
+    typeof snapshot.data !== 'string' ||
+    typeof snapshot.capturedAt !== 'string'
+  ) {
+    return null
+  }
+  return {
+    screenSnapshot: {
+      windowId: snapshot.windowId,
+      paneId: snapshot.paneId,
+      cols: snapshot.cols,
+      rows: snapshot.rows,
+      cursorX: snapshot.cursorX,
+      cursorY: snapshot.cursorY,
+      alternate: snapshot.alternate,
+      data: snapshot.data,
+      capturedAt: snapshot.capturedAt
+    }
   }
 }
 

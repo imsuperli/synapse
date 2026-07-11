@@ -65,6 +65,7 @@ import type {
   McpServerConfigSnapshot,
   TaskArtifactRecord,
 } from './task';
+import type { TerminalScreenSnapshot } from '../remote/terminal-protocol';
 
 export interface IpcResponse<T = void> {
   success: boolean;
@@ -1633,6 +1634,7 @@ export interface PtyHistorySnapshot {
   lastSeq: number;
   evictedBeforeSeq: number;
   keyboardState?: PtyKeyboardProtocolState;
+  screenSnapshot?: TerminalScreenSnapshot;
 }
 
 export interface RestoreResultPayload {
@@ -1967,6 +1969,7 @@ export interface ElectronAPI {
   ) => Promise<IpcResponse<void>>;
   ptyResize: (windowId: string, paneId: string | undefined, cols: number, rows: number) => Promise<IpcResponse<void>>;
   getPtyHistory: (paneId: string) => Promise<IpcResponse<PtyHistorySnapshot>>;
+  updateTerminalScreenSnapshot: (snapshot: TerminalScreenSnapshot) => void;
   onPtyData: (callback: ElectronEventHandler<PtyDataPayload>) => void;
   offPtyData: (callback: ElectronEventHandler<PtyDataPayload>) => void;
 

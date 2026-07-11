@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import { HandlerContext } from './HandlerContext';
 import { successResponse, errorResponse } from './HandlerResponse';
 import type { PtyWriteMetadata } from '../../shared/types/electron-api';
+import type { TerminalScreenSnapshot } from '../../shared/remote/terminal-protocol';
 
 /**
  * 注册 PTY 通信相关的 IPC handlers
@@ -117,4 +118,32 @@ export function registerPtyHandlers(ctx: HandlerContext) {
       return errorResponse(error);
     }
   });
+
+  ipcMain.on('terminal-screen-snapshot:update', (_event, payload) => {
+    if (!processManager || !isTerminalScreenSnapshotPayload(payload)) {
+      return;
+    }
+
+    processManager.updateTerminalScreenSnapshot(payload);
+  });
+}
+
+function isTerminalScreenSnapshotPayload(value: unknown): value is TerminalScreenSnapshot {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const snapshot = value as Partial<TerminalScreenSnapshot>;
+  return (
+    typeof snapshot.windowId === 'string' &&
+    snapshot.windowId.length > 0 &&
+    typeof snapshot.paneId === 'string' &&
+    snapshot.paneId.length > 0 &&
+    typeof snapshot.data === 'string' &&
+    typeof snapshot.cols === 'number' &&
+    typeof snapshot.rows === 'number' &&
+    typeof snapshot.cursorX === 'number' &&
+    typeof snapshot.cursorY === 'number' &&
+    typeof snapshot.alternate === 'boolean' &&
+    typeof snapshot.capturedAt === 'string'
+  );
 }

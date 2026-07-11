@@ -290,6 +290,7 @@ function createProcessManager() {
     getPidByPane: vi.fn(() => null),
     getPtyHistory: vi.fn(),
     getPaneTerminalDimensions: vi.fn(() => ({})),
+    getTerminalScreenSnapshot: vi.fn(() => undefined),
     getLatestPaneOutputSeq: vi.fn(() => 0),
     getPtyHistoryEntriesSince: vi.fn(() => ({
       entries: [],

@@ -307,10 +307,15 @@ export default function RemoteTerminalScreen() {
       setHistoryNotice(history.gap && !history.hasMoreBefore ? t('terminal.historyStartReached') : null)
       const viewport = normalizeTerminalViewport(history, viewportRef.current)
       viewportRef.current = viewport
+      const screenSnapshotData = history.screenSnapshot?.alternate &&
+        history.screenSnapshot.windowId === windowId &&
+        history.screenSnapshot.paneId === paneId
+        ? history.screenSnapshot.data
+        : ''
       terminalRef.current?.init(
         viewport.cols,
         viewport.rows,
-        history.chunks.join(''),
+        `${history.chunks.join('')}${screenSnapshotData}`,
         false,
         undefined,
         true

@@ -169,7 +169,18 @@ describe('Synapse remote terminal helpers', () => {
         evictedBeforeSeq: 1,
         cols: 144,
         rows: 36,
-        keyboardState: { bracketedPasteMode: true }
+        keyboardState: { bracketedPasteMode: true },
+        screenSnapshot: {
+          windowId: 'w1',
+          paneId: 'p1',
+          cols: 144,
+          rows: 36,
+          cursorX: 4,
+          cursorY: 8,
+          alternate: true,
+          data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+          capturedAt: '2026-07-11T10:30:00.000Z'
+        }
       })
     ).toEqual({
       windowId: 'w1',
@@ -182,7 +193,18 @@ describe('Synapse remote terminal helpers', () => {
       evictedBeforeSeq: 1,
       cols: 144,
       rows: 36,
-      keyboardState: { bracketedPasteMode: true }
+      keyboardState: { bracketedPasteMode: true },
+      screenSnapshot: {
+        windowId: 'w1',
+        paneId: 'p1',
+        cols: 144,
+        rows: 36,
+        cursorX: 4,
+        cursorY: 8,
+        alternate: true,
+        data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+        capturedAt: '2026-07-11T10:30:00.000Z'
+      }
     })
   })
 

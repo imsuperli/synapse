@@ -13,6 +13,7 @@ type MockProcessManager = {
   getPidByPane: ReturnType<typeof vi.fn>;
   getPtyHistory: ReturnType<typeof vi.fn>;
   getPaneTerminalDimensions: ReturnType<typeof vi.fn>;
+  getTerminalScreenSnapshot: ReturnType<typeof vi.fn>;
   clearPtyHistory: ReturnType<typeof vi.fn>;
   getLatestPaneOutputSeq: ReturnType<typeof vi.fn>;
   getPtyHistoryEntriesSince: ReturnType<typeof vi.fn>;
@@ -93,6 +94,7 @@ describe('RemoteDispatcher', () => {
         keyboardState: { applicationCursorKeysMode: false },
       })),
       getPaneTerminalDimensions: vi.fn(() => ({ cols: 132, rows: 34 })),
+      getTerminalScreenSnapshot: vi.fn(() => undefined),
       clearPtyHistory: vi.fn(),
       getLatestPaneOutputSeq: vi.fn(() => 5),
       getPtyHistoryEntriesSince: vi.fn((_windowId: string, _paneId: string, sinceSeq: number = 0) => ({
@@ -317,6 +319,39 @@ describe('RemoteDispatcher', () => {
         limitChunks: 20,
       },
     );
+  });
+
+  it('includes the latest renderer screen snapshot in terminal history responses', async () => {
+    const harness = createHarness();
+    harness.processManager.getTerminalScreenSnapshot.mockReturnValueOnce({
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      cols: 120,
+      rows: 30,
+      cursorX: 4,
+      cursorY: 10,
+      alternate: true,
+      data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+      capturedAt: '2026-07-11T10:30:00.000Z',
+    });
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_HISTORY, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 4,
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        screenSnapshot: {
+          windowId: 'win-1',
+          paneId: 'pane-1',
+          alternate: true,
+          data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+        },
+      },
+    });
   });
 
   it('rejects control methods for read-only mobile devices', async () => {

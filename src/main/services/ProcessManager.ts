@@ -20,6 +20,7 @@ import { StatusDetectorImpl, IStatusDetector } from './StatusDetector';
 import { WindowStatus } from '../../shared/types/window';
 import { ActiveSSHPortForward, ForwardedPortConfig, SSHSftpDirectoryListing, SSHSessionMetrics } from '../../shared/types/ssh';
 import type { PtyKeyboardProtocolState } from '../../shared/types/electron-api';
+import type { TerminalScreenSnapshot } from '../../shared/remote/terminal-protocol';
 import { getLatestEnvironmentVariables } from '../utils/environment';
 import { ITmuxCompatService, TmuxPaneId } from '../../shared/types/tmux';
 import { getTmuxShimDir } from '../utils/tmux-shim-path';
@@ -97,6 +98,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   private ptyOutputBuffers: Map<number, PtyOutputChunk[]>; // 缂撳瓨 PTY 鍒濆杈撳嚭
   private ptyDataSubscribers: Map<number, Set<(chunk: PtyOutputChunk) => void>>;
   private paneHistoryBuffers: Map<string, PaneHistoryBuffer>;
+  private terminalScreenSnapshots: Map<string, TerminalScreenSnapshot>;
   private paneIndex: Map<string, number>; // "windowId:paneId" 鈫?pid 绱㈠紩锛岀敤浜?O(1) 鏌ユ壘
   private sessionIndex: Map<string, string>; // "windowId:paneId" -> sessionId
   private pidToSessionId: Map<number, string>;
@@ -132,6 +134,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.ptyOutputBuffers = new Map();
     this.ptyDataSubscribers = new Map();
     this.paneHistoryBuffers = new Map();
+    this.terminalScreenSnapshots = new Map();
     this.paneIndex = new Map();
     this.sessionIndex = new Map();
     this.pidToSessionId = new Map();
@@ -988,6 +991,45 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     return this.getPaneHistoryBuffer(windowIdOrPaneId, paneId)?.lastSeq ?? 0;
   }
 
+  updateTerminalScreenSnapshot(snapshot: TerminalScreenSnapshot): void {
+    if (
+      !snapshot.windowId ||
+      !snapshot.paneId ||
+      !Number.isFinite(snapshot.cols) ||
+      !Number.isFinite(snapshot.rows)
+    ) {
+      return;
+    }
+
+    if (!snapshot.alternate) {
+      this.clearTerminalScreenSnapshot(snapshot.windowId, snapshot.paneId);
+      return;
+    }
+
+    this.terminalScreenSnapshots.set(this.getPaneKey(snapshot.windowId, snapshot.paneId), {
+      ...snapshot,
+      cols: Math.max(1, Math.floor(snapshot.cols)),
+      rows: Math.max(1, Math.floor(snapshot.rows)),
+      cursorX: Math.max(0, Math.floor(snapshot.cursorX)),
+      cursorY: Math.max(0, Math.floor(snapshot.cursorY)),
+      data: snapshot.data,
+      capturedAt: snapshot.capturedAt || new Date().toISOString(),
+    });
+  }
+
+  getTerminalScreenSnapshot(windowId: string, paneId: string): TerminalScreenSnapshot | undefined {
+    const snapshot = this.terminalScreenSnapshots.get(this.getPaneKey(windowId, paneId));
+    return snapshot ? { ...snapshot } : undefined;
+  }
+
+  clearTerminalScreenSnapshot(windowId: string | undefined, paneId: string | undefined): void {
+    if (!paneId) {
+      return;
+    }
+    this.terminalScreenSnapshots.delete(this.getPaneKey(windowId, paneId));
+    this.terminalScreenSnapshots.delete(paneId);
+  }
+
   /**
    * 閿€姣?ProcessManager锛岄噴鏀捐祫婧?
    */
@@ -1836,11 +1878,29 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       this.paneHistoryBuffers.delete(oldKey);
       this.paneHistoryBuffers.set(newKey, history);
     }
+    const screenSnapshot = this.terminalScreenSnapshots.get(oldKey);
+    if (screenSnapshot && oldKey !== newKey) {
+      this.terminalScreenSnapshots.delete(oldKey);
+      this.terminalScreenSnapshots.set(newKey, {
+        ...screenSnapshot,
+        windowId: newWindowId,
+        paneId: newPaneId,
+      });
+    }
     if (paneId !== newPaneId) {
       const legacyHistory = this.paneHistoryBuffers.get(paneId);
       if (legacyHistory) {
         this.paneHistoryBuffers.delete(paneId);
         this.paneHistoryBuffers.set(newPaneId, legacyHistory);
+      }
+      const legacyScreenSnapshot = this.terminalScreenSnapshots.get(paneId);
+      if (legacyScreenSnapshot) {
+        this.terminalScreenSnapshots.delete(paneId);
+        this.terminalScreenSnapshots.set(newPaneId, {
+          ...legacyScreenSnapshot,
+          windowId: newWindowId,
+          paneId: newPaneId,
+        });
       }
     }
 
@@ -1879,6 +1939,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     if (processInfo.paneId) {
       this.paneHistoryBuffers.delete(this.getPaneKey(processInfo.windowId, processInfo.paneId));
       this.paneHistoryBuffers.delete(processInfo.paneId);
+      this.clearTerminalScreenSnapshot(processInfo.windowId, processInfo.paneId);
     }
 
     const paneKey = this.getPaneKey(processInfo.windowId, processInfo.paneId);
@@ -1901,6 +1962,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     }
 
     this.paneHistoryBuffers.delete(paneId);
+    this.clearTerminalScreenSnapshot(windowId, paneId);
     this.paneHistoryBuffers.set(this.getPaneKey(windowId, paneId), {
       entries: [],
       totalLength: 0,

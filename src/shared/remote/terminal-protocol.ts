@@ -13,6 +13,18 @@ export type RemoteTerminalSummary = {
   profileId?: string;
 };
 
+export type TerminalScreenSnapshot = {
+  windowId: string;
+  paneId: string;
+  cols: number;
+  rows: number;
+  cursorX: number;
+  cursorY: number;
+  alternate: boolean;
+  data: string;
+  capturedAt: string;
+};
+
 export type TerminalHistoryResult = {
   windowId: string;
   paneId: string;
@@ -25,6 +37,7 @@ export type TerminalHistoryResult = {
   cols?: number;
   rows?: number;
   keyboardState?: unknown;
+  screenSnapshot?: TerminalScreenSnapshot;
 };
 
 export type TerminalSubscribeResult = {

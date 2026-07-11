@@ -442,6 +442,9 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('pty-resize', { windowId, paneId, cols, rows }),
   getPtyHistory: (paneId: string) =>
     ipcRenderer.invoke('get-pty-history', { paneId }),
+  updateTerminalScreenSnapshot: (snapshot) => {
+    ipcRenderer.send('terminal-screen-snapshot:update', snapshot);
+  },
   onPtyData: (callback) => {
     ipcRenderer.on('pty-data', callback);
   },
