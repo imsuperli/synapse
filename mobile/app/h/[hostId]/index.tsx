@@ -1393,6 +1393,7 @@ function PaneCardRow({
   disabled,
   starting,
   stopping,
+  selectionMode = false,
   onPress,
   onStop,
   t
@@ -1402,21 +1403,13 @@ function PaneCardRow({
   disabled: boolean
   starting: boolean
   stopping: boolean
+  selectionMode?: boolean
   onPress: () => void
   onStop: () => void
   t: MobileTranslate
 }) {
-  return (
-    <Pressable
-      disabled={disabled}
-      style={({ pressed }) => [
-        styles.paneRow,
-        active && styles.activePaneRow,
-        disabled && styles.disabledRow,
-        pressed && styles.pressed
-      ]}
-      onPress={onPress}
-    >
+  const content = (
+    <>
       <View style={styles.paneMain}>
         <View style={styles.terminalTitleRow}>
           <Text style={styles.terminalTitle} numberOfLines={1}>
@@ -1436,7 +1429,7 @@ function PaneCardRow({
           { backgroundColor: statusColor(pane.status, pane.running) }
         ]}
       />
-      {pane.running ? (
+      {!selectionMode && pane.running ? (
         <Pressable
           disabled={stopping}
           style={[styles.stopIcon, stopping && styles.iconButtonDisabled]}
@@ -1448,11 +1441,40 @@ function PaneCardRow({
         >
           <Square size={13} color={colors.statusRed} fill={colors.statusRed} />
         </Pressable>
-      ) : isStartableLocalPane(pane) ? (
+      ) : !selectionMode && isStartableLocalPane(pane) ? (
         <View style={styles.startIcon}>
           <Play size={13} color={colors.accentBlue} fill={colors.accentBlue} />
         </View>
       ) : null}
+    </>
+  )
+
+  if (selectionMode) {
+    return (
+      <View
+        style={[
+          styles.paneRow,
+          active && styles.activePaneRow,
+          disabled && styles.disabledRow
+        ]}
+      >
+        {content}
+      </View>
+    )
+  }
+
+  return (
+    <Pressable
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.paneRow,
+        active && styles.activePaneRow,
+        disabled && styles.disabledRow,
+        pressed && styles.pressed
+      ]}
+      onPress={onPress}
+    >
+      {content}
     </Pressable>
   )
 }
@@ -1482,8 +1504,14 @@ function renderWindowItem(
         selectedForGroup && styles.selectedWindowCard,
         pressed && styles.pressed
       ]}
-      onPress={() => void onOpenWindow(item)}
-      disabled={!activePane || deleting}
+      onPress={() => {
+        if (groupSelectionMode) {
+          onToggleGroupSelection(item.windowId)
+          return
+        }
+        void onOpenWindow(item)
+      }}
+      disabled={(groupSelectionMode ? false : !activePane) || deleting}
     >
       <View style={styles.windowHeader}>
         <View style={styles.windowTitleGroup}>
@@ -1541,7 +1569,8 @@ function renderWindowItem(
             key={`${pane.windowId}:${pane.paneId}`}
             pane={pane}
             active={pane.paneId === item.activePaneId}
-            disabled={!canOpen || starting}
+            disabled={groupSelectionMode ? false : !canOpen || starting}
+            selectionMode={groupSelectionMode}
             starting={starting}
             stopping={stopping}
             onPress={() => void onOpenPane(pane)}

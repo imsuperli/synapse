@@ -466,6 +466,31 @@ describe('RemoteStateProvider', () => {
     });
     expect(workspace.groups).toEqual([]);
   });
+
+  it('rejects creating a group with windows already in an active group', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createTerminalWindow('win-local', 'Local'));
+    workspace.windows.push(createTerminalWindow('win-peer', 'Peer'));
+    workspace.windows.push(createTerminalWindow('win-other', 'Other'));
+    workspace.groups = [createGroupFixture('group-1', ['win-local', 'win-peer'])];
+    const onWorkspaceLayoutUpdated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      onWorkspaceLayoutUpdated,
+    });
+
+    await expect(
+      provider.createGroup({
+        name: 'Duplicate Group',
+        windowIds: ['win-local', 'win-other'],
+      }),
+    ).rejects.toThrow('window_already_grouped');
+
+    expect(workspace.groups).toHaveLength(1);
+    expect(workspace.groups[0]?.id).toBe('group-1');
+    expect(onWorkspaceLayoutUpdated).not.toHaveBeenCalled();
+  });
 });
 
 function createWorkspace(): Workspace {

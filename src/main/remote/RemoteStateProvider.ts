@@ -396,6 +396,14 @@ export class RemoteStateProvider {
         throw new Error('window_not_found');
       }
     }
+    const groupedWindowIds = new Set(
+      workspace.groups
+        .filter((group) => !group.archived)
+        .flatMap((group) => getGroupWindowIds(group.layout)),
+    );
+    if (windowIds.some((windowId) => groupedWindowIds.has(windowId))) {
+      throw new Error('window_already_grouped');
+    }
 
     const now = new Date().toISOString();
     const group: WindowGroup = {

@@ -117,6 +117,15 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('!canUseGroupSelection || creatingGroup')
   })
 
+  it('selects window cards instead of opening panes while building a group', () => {
+    expect(routeSource).toContain('if (groupSelectionMode) {\n          onToggleGroupSelection(item.windowId)')
+    expect(routeSource).toContain('disabled={(groupSelectionMode ? false : !activePane) || deleting}')
+    expect(routeSource).toContain('selectionMode={groupSelectionMode}')
+    expect(routeSource).toContain('if (selectionMode) {')
+    expect(routeSource).toContain('!selectionMode && pane.running ?')
+    expect(routeSource).toContain('!selectionMode && isStartableLocalPane(pane) ?')
+  })
+
   it('renders a side-docked host switcher that verifies connection before routing', () => {
     expect(routeSource).toContain("import { loadHosts } from '../../../src/transport/host-store'")
     expect(routeSource).toContain('useWindowDimensions')
