@@ -61,14 +61,15 @@ function authenticate(socket: MockWebSocket): void {
   socket.receive('encrypted:{"type":"e2ee_authenticated"}')
 }
 
-function sentRequest(socket: MockWebSocket, method: string): { id: string } {
+function sentRequest(socket: MockWebSocket, method: string): { id: string; params?: unknown } {
   for (const payload of socket.sent) {
     const decoded = JSON.parse(payload.replace(/^encrypted:/, '')) as {
       id: string
       method: string
+      params?: unknown
     }
     if (decoded.method === method) {
-      return { id: decoded.id }
+      return { id: decoded.id, params: decoded.params }
     }
   }
   throw new Error(`Request not sent: ${method}`)
@@ -126,7 +127,8 @@ describe('rpc-client terminal reconnect streams', () => {
     const terminalEvents: unknown[] = []
     authenticate(first)
 
-    client.subscribe('terminal.subscribe', { terminal: 'term-1' }, (event) => {
+    const subscribeParams = { terminal: 'term-1', sinceSeq: 3 }
+    client.subscribe('terminal.subscribe', subscribeParams, (event) => {
       terminalEvents.push(event)
     })
     const initialSubscribe = sentRequest(first, 'terminal.subscribe')
@@ -134,6 +136,7 @@ describe('rpc-client terminal reconnect streams', () => {
 
     const request = client.sendRequest('status.get').catch(() => undefined)
     await Promise.resolve()
+    subscribeParams.sinceSeq = 9
     first.receive(unauthorizedResponsePayload(sentRequest(first, 'status.get').id))
     await request
 
@@ -142,6 +145,7 @@ describe('rpc-client terminal reconnect streams', () => {
     authenticate(second)
     expect(sentRequests(second, 'terminal.subscribe')).toHaveLength(1)
     const resumedSubscribe = sentRequest(second, 'terminal.subscribe')
+    expect(resumedSubscribe.params).toMatchObject({ sinceSeq: 9 })
     second.receive(encryptedStreamingReady(resumedSubscribe.id, 77))
     second.receive(encodeTerminalOutput(77, 'after-reconnect'))
     second.receive(encodeTerminalOutput(76, 'stale-before-reconnect'))
@@ -151,11 +155,13 @@ describe('rpc-client terminal reconnect streams', () => {
     expect(terminalEvents).toContainEqual({
       type: 'data',
       streamId: 77,
+      seq: 1,
       chunk: 'after-reconnect'
     })
     expect(terminalEvents).not.toContainEqual({
       type: 'data',
       streamId: 76,
+      seq: 1,
       chunk: 'stale-before-reconnect'
     })
     client.close()

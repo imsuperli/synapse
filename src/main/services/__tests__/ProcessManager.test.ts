@@ -195,6 +195,7 @@ describe('ProcessManager', () => {
         alternate: true,
         data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
         capturedAt: '2026-07-11T10:30:00.000Z',
+        outputSeq: 12,
       });
 
       expect(processManager.getTerminalScreenSnapshot('win-snapshot', 'pane-snapshot')).toMatchObject({
@@ -205,6 +206,7 @@ describe('ProcessManager', () => {
         cursorX: 4,
         cursorY: 8,
         alternate: true,
+        outputSeq: 12,
       });
 
       processManager.clearTerminalScreenSnapshot('win-snapshot', 'pane-snapshot');
@@ -223,6 +225,7 @@ describe('ProcessManager', () => {
         alternate: true,
         data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
         capturedAt: '2026-07-11T10:30:00.000Z',
+        outputSeq: 8,
       });
       expect(processManager.getTerminalScreenSnapshot('win-clear-snapshot', 'pane-clear-snapshot')).toBeDefined();
 
@@ -236,6 +239,7 @@ describe('ProcessManager', () => {
         alternate: false,
         data: '',
         capturedAt: '2026-07-11T10:30:01.000Z',
+        outputSeq: 8,
       });
 
       expect(processManager.getTerminalScreenSnapshot('win-clear-snapshot', 'pane-clear-snapshot')).toBeUndefined();

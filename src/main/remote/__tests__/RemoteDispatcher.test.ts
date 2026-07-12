@@ -8,6 +8,7 @@ import { REMOTE_METHODS } from '../../../shared/remote/methods';
 import {
   TerminalStreamOpcode,
   decodeTerminalStreamFrame,
+  decodeTerminalStreamJson,
   decodeTerminalStreamText,
 } from '../../../shared/remote/terminal-stream-protocol';
 import { RemoteDeviceRegistry, type RemoteDeviceEntry } from '../RemoteDeviceRegistry';
@@ -279,6 +280,25 @@ describe('RemoteDispatcher', () => {
     expect(harness.processManager.getPtyHistoryEntriesSince).toHaveBeenCalledWith('win-1', 'pane-1', 4);
   });
 
+  it('reports a history gap when the client cursor is ahead of the current process', async () => {
+    const harness = createHarness();
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_HISTORY, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 50,
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        chunks: [],
+        lastSeq: 5,
+        gap: true,
+      },
+    });
+  });
+
   it('returns older terminal history before beforeSeq with page limits', async () => {
     const harness = createHarness();
     harness.processManager.getPtyHistoryEntriesBefore.mockReturnValueOnce({
@@ -340,6 +360,7 @@ describe('RemoteDispatcher', () => {
       alternate: true,
       data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
       capturedAt: '2026-07-11T10:30:00.000Z',
+      outputSeq: 4,
     });
 
     const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_HISTORY, {
@@ -395,7 +416,7 @@ describe('RemoteDispatcher', () => {
         type: 'subscribed',
         subscriptionId: expect.any(String),
         streamId: expect.any(Number),
-        firstSeq: 4,
+        firstSeq: 5,
         lastSeq: 5,
         gap: false,
       },
@@ -411,7 +432,7 @@ describe('RemoteDispatcher', () => {
     expect(events).toEqual([]);
     const frames = binaryEvents.map((event) => decodeTerminalStreamFrame(event));
     expect(frames.some((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotStart)).toBe(true);
-    expect(frames.some((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotChunk)).toBe(true);
+    expect(frames.some((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotChunk)).toBe(false);
     expect(frames.some((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotEnd)).toBe(true);
     const outputFrames = frames.filter((frame) => frame?.opcode === TerminalStreamOpcode.Output);
     expect(outputFrames).toHaveLength(1);
@@ -472,13 +493,216 @@ describe('RemoteDispatcher', () => {
       .map((frame) => decodeTerminalStreamText(frame!.payload))
       .join('');
     expect(snapshotText).toBe('hello world');
+    const snapshotStart = binaryEvents
+      .map((event) => decodeTerminalStreamFrame(event))
+      .find((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotStart);
+    expect(decodeTerminalStreamJson<Record<string, unknown>>(snapshotStart!.payload)).toMatchObject({
+      incremental: true,
+      requestedSinceSeq: 3,
+      hasMoreAfter: false,
+    });
+  });
+
+  it('streams the renderer screen snapshot at its captured output sequence', async () => {
+    const harness = createHarness();
+    const binaryEvents: Uint8Array[] = [];
+    harness.processManager.getTerminalScreenSnapshot.mockReturnValueOnce({
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      cols: 132,
+      rows: 34,
+      cursorX: 2,
+      cursorY: 3,
+      alternate: true,
+      data: '<screen>',
+      capturedAt: '2026-07-12T10:00:00.000Z',
+      outputSeq: 4,
+    });
+
+    await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 0,
+      capabilities: { terminalBinaryStream: 1 },
+    }, [], binaryEvents);
+    await waitForSubscriptionActivation();
+
+    const frames = binaryEvents.map((event) => decodeTerminalStreamFrame(event));
+    const start = frames.find((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotStart);
+    const meta = decodeTerminalStreamJson<Record<string, unknown>>(start!.payload);
+    const snapshotText = frames
+      .filter((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotChunk)
+      .map((frame) => decodeTerminalStreamText(frame!.payload))
+      .join('');
+
+    expect(snapshotText).toBe('hello<screen> world');
+    expect(meta).toMatchObject({
+      firstSeq: 4,
+      lastSeq: 5,
+      screenSnapshotOffset: 5,
+      screenSnapshotLength: 8,
+    });
+  });
+
+  it('replaces an ahead reconnect cursor and resumes output from the new process sequence', async () => {
+    const harness = createHarness();
+    const binaryEvents: Uint8Array[] = [];
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 50,
+      capabilities: { terminalBinaryStream: 1 },
+    }, [], binaryEvents);
+    await waitForSubscriptionActivation();
+    (harness.processManager as any).emitOutput('new-process-output', 6);
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        firstSeq: 4,
+        lastSeq: 5,
+      },
+    });
+    const frames = binaryEvents.map((event) => decodeTerminalStreamFrame(event));
+    const start = frames.find((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotStart);
+    expect(decodeTerminalStreamJson<Record<string, unknown>>(start!.payload)).toMatchObject({
+      incremental: false,
+      requestedSinceSeq: 50,
+      firstSeq: 4,
+      lastSeq: 5,
+    });
+    const snapshotText = frames
+      .filter((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotChunk)
+      .map((frame) => decodeTerminalStreamText(frame!.payload))
+      .join('');
+    expect(snapshotText).toBe('hello world');
+    const output = frames.find((frame) => frame?.opcode === TerminalStreamOpcode.Output);
+    expect(output?.seq).toBe(6);
+    expect(decodeTerminalStreamText(output!.payload)).toBe('new-process-output');
+  });
+
+  it('marks incremental snapshots when more retained output remains', async () => {
+    const harness = createHarness();
+    const binaryEvents: Uint8Array[] = [];
+    const first = 'a'.repeat(400 * 1024);
+    const second = 'b'.repeat(400 * 1024);
+    harness.processManager.getPtyHistoryEntriesSince.mockReturnValueOnce({
+      entries: [
+        { seq: 4, data: first },
+        { seq: 5, data: second },
+      ],
+      firstSeq: 4,
+      lastSeq: 5,
+      evictedBeforeSeq: 0,
+      gap: false,
+      hasMoreBefore: false,
+    });
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 3,
+      capabilities: { terminalBinaryStream: 1 },
+    }, [], binaryEvents);
+    await waitForSubscriptionActivation();
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: { firstSeq: 4, lastSeq: 4 },
+    });
+    const start = binaryEvents
+      .map((event) => decodeTerminalStreamFrame(event))
+      .find((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotStart);
+    expect(decodeTerminalStreamJson<Record<string, unknown>>(start!.payload)).toMatchObject({
+      incremental: true,
+      requestedSinceSeq: 3,
+      hasMoreAfter: true,
+      firstSeq: 4,
+      lastSeq: 4,
+    });
+  });
+
+  it('keeps the latest output sequence when retained history is empty', async () => {
+    const harness = createHarness();
+    harness.processManager.getPtyHistoryEntriesBefore.mockReturnValueOnce({
+      entries: [],
+      firstSeq: 0,
+      lastSeq: 0,
+      evictedBeforeSeq: 5,
+      gap: true,
+      hasMoreBefore: false,
+    });
+    harness.processManager.getLatestPaneOutputSeq.mockReturnValueOnce(5);
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 0,
+      capabilities: { terminalBinaryStream: 1 },
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: { firstSeq: 0, lastSeq: 5 },
+    });
+  });
+
+  it('does not drop output that arrives while the subscription snapshot is read', async () => {
+    const harness = createHarness();
+    const binaryEvents: Uint8Array[] = [];
+    harness.processManager.getLatestPaneOutputSeq.mockReturnValueOnce(5);
+    harness.processManager.getPtyHistoryEntriesBefore.mockImplementationOnce(() => {
+      (harness.processManager as any).emitOutput('late-output', 6);
+      return {
+        entries: [
+          { seq: 4, data: 'hello' },
+          { seq: 5, data: ' world' },
+        ],
+        firstSeq: 4,
+        lastSeq: 5,
+        evictedBeforeSeq: 0,
+        gap: false,
+        hasMoreBefore: false,
+      };
+    });
+
+    await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 0,
+      capabilities: { terminalBinaryStream: 1 },
+    }, [], binaryEvents);
+    await waitForSubscriptionActivation();
+
+    const outputFrames = binaryEvents
+      .map((event) => decodeTerminalStreamFrame(event))
+      .filter((frame) => frame?.opcode === TerminalStreamOpcode.Output);
+    expect(outputFrames.map((frame) => ({
+      seq: frame!.seq,
+      data: decodeTerminalStreamText(frame!.payload),
+    }))).toEqual([{ seq: 6, data: 'late-output' }]);
   });
 
   it('reports replay gaps from evicted terminal history', async () => {
     const harness = createHarness();
+    harness.processManager.getPtyHistoryEntriesSince.mockReturnValueOnce({
+      entries: [
+        { seq: 3, data: 'after-gap' },
+        { seq: 4, data: '-continued' },
+        { seq: 5, data: '-latest' },
+      ],
+      firstSeq: 3,
+      lastSeq: 5,
+      evictedBeforeSeq: 2,
+      gap: true,
+      hasMoreBefore: false,
+    });
     harness.processManager.getPtyHistoryEntriesBefore.mockReturnValueOnce({
       entries: [
         { seq: 3, data: 'after-gap' },
+        { seq: 4, data: '-continued' },
+        { seq: 5, data: '-latest' },
       ],
       firstSeq: 3,
       lastSeq: 5,

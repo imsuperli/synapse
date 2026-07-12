@@ -16,17 +16,17 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(snapshotIndex).toBeGreaterThan(subscribeIndex)
     expect(applyIndex).toBeGreaterThan(snapshotIndex)
     expect(routeSource).toContain('terminalRef.current?.init(\n        viewport.cols,\n        viewport.rows,')
-    expect(routeSource).toContain('sinceSeq: lastSeqRef.current')
+    expect(routeSource).toContain('sinceSeq: options.sinceSeq ?? terminalHistoryRef.current.lastSeq')
     expect(routeSource).toContain('capabilities: { terminalBinaryStream: 1 }')
     expect(routeSource).toContain('parseTerminalSubscribedEvent(payload)')
     expect(routeSource).toContain('parseTerminalScrollbackEvent(payload)')
     expect(routeSource).toContain('parseTerminalDataEvent(payload)')
     expect(routeSource).toContain('parseTerminalStreamErrorEvent(payload)')
-    expect(routeSource).toContain('const screenSnapshotDataRef = useRef(\'\')')
-    expect(routeSource).toContain('const screenSnapshotTailChunkCountRef = useRef(0)')
+    expect(routeSource).toContain('const terminalHistoryRef = useRef(createRemoteTerminalHistoryState())')
     expect(routeSource).toContain('const buildTerminalInitialData = useCallback(() => {')
-    expect(routeSource).toContain('historyChunksRef.current = snapshot.serialized ? [snapshot.serialized] : []')
-    expect(routeSource).toContain('screenSnapshotTailChunkCountRef.current = 0')
+    expect(routeSource).toContain('replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)')
+    expect(routeSource).toContain('screenSnapshotOffset?: number')
+    expect(routeSource).toContain('screenSnapshotLength?: number')
     expect(routeSource).toContain('buildTerminalInitialData()')
     expect(routeSource).not.toContain('viewport: viewportRef.current')
     expect(routeSource).not.toContain('resizeTerminal(client')
@@ -41,31 +41,36 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('loads older terminal history when the WebView reaches the top of scrollback', () => {
     expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_BYTES = 192 * 1024')
     expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_CHUNKS = 50_000')
-    expect(routeSource).toContain('const loadedFirstSeqRef = useRef(0)')
-    expect(routeSource).toContain('const historyChunksRef = useRef<string[]>([])')
-    expect(routeSource).toContain('const hasMoreHistoryBeforeRef = useRef(false)')
     expect(routeSource).toContain('const handleHistoryTopReached = useCallback(() => {')
     expect(routeSource).toContain('beforeSeq,\n          limitBytes: TERMINAL_HISTORY_PAGE_BYTES')
-    expect(routeSource).toContain('historyChunksRef.current = [...history.chunks, ...historyChunksRef.current]')
-    expect(routeSource).toContain('const screenSnapshotInsertAt = historyChunksRef.current.length - tailChunkCount')
-    expect(routeSource).toContain('historyChunksRef.current.slice(0, screenSnapshotInsertAt).join(\'\')')
+    expect(routeSource).toContain('prependRemoteTerminalHistoryPage(terminalHistoryRef.current, history)')
+    expect(routeSource).toContain('buildRemoteTerminalInitialData(terminalHistoryRef.current)')
     expect(routeSource).toContain('onHistoryTopReached={handleHistoryTopReached}')
     expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
   })
 
   it('resynchronizes from history when the terminal subscription reports a gap', () => {
     expect(routeSource).toContain('unsubscribeRef.current?.()')
-    expect(routeSource).toContain('startTerminalSubscription(client, runId)')
-    expect(routeSource).toContain('await startTerminalSubscription(client, runId)')
+    expect(routeSource).toContain('startTerminalSubscription(client, runId, { sinceSeq: 0 })')
+    expect(routeSource).toContain('await reloadSnapshotForCurrentRun()')
   })
 
   it('reloads terminal history and subscriptions when the desktop restarts the same pane', () => {
-    expect(routeSource).toContain('function terminalPaneRuntimeKey(pane: RemotePaneSummary | null): string | null')
+    expect(routeSource).toContain(
+      'function terminalPaneRuntimeKey(pane: RemotePaneSummary | null | undefined): string | null'
+    )
     expect(routeSource).toContain('const currentPaneRuntimeKeyRef = useRef<string | null>(null)')
     expect(routeSource).toContain('const previousRuntimeKey = currentPaneRuntimeKeyRef.current')
     expect(routeSource).toContain('previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey')
     expect(routeSource).toContain('await reloadCurrentTerminalStream(client)')
-    expect(routeSource).toContain('lastSeqRef.current = 0')
+    expect(routeSource).toContain('resetRemoteTerminalHistoryState(terminalHistoryRef.current)')
+  })
+
+  it('distinguishes a deleted pane from a transient window-list failure', () => {
+    expect(routeSource).toContain('return undefined')
+    expect(routeSource).toContain('if (currentPane === undefined)')
+    expect(routeSource).toContain('if (currentPane === null)')
+    expect(routeSource).toContain("setError(t('terminal.stoppedOnDesktop'))")
   })
 
   it('guards terminal background polling against overlapping stale responses', () => {
@@ -78,6 +83,16 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('paneStatusSyncInFlightRef.current = false')
   })
 
+  it('invalidates stale subscription frames and history responses after an in-place reload', () => {
+    expect(routeSource).toContain('const terminalSubscriptionGenerationRef = useRef(0)')
+    expect(routeSource).toContain('const terminalHistoryGenerationRef = useRef(0)')
+    expect(routeSource).toContain(
+      'terminalSubscriptionGenerationRef.current !== subscriptionGeneration'
+    )
+    expect(routeSource).toContain('terminalHistoryGenerationRef.current !== historyGeneration')
+    expect(routeSource).toContain('terminalHistoryGenerationRef.current += 1')
+  })
+
   it('maps protocol-level terminal errors to user-facing messages', () => {
     expect(routeSource).toContain('function terminalErrorMessage(err: unknown, t: MobileTranslate): string')
     expect(routeSource).toContain("t('terminal.stoppedOnDesktop')")
@@ -86,15 +101,29 @@ describe('Synapse Mobile terminal route wiring', () => {
   })
 
   it('ignores duplicate sequenced terminal events after replay or reconnect', () => {
-    expect(routeSource).toContain('event.seq > 0 && event.seq <= lastSeqRef.current')
-    expect(routeSource).toContain('lastSeqRef.current = Math.max(lastSeqRef.current, event.seq)')
+    expect(routeSource).toContain('appendRemoteTerminalData(')
+    expect(routeSource).toContain('appendRemoteTerminalHistoryIncrement(')
+    expect(routeSource).toContain('appendRemoteTerminalIncrementalSnapshot(')
+    expect(routeSource).toContain('if (appliedSnapshot)')
+    expect(routeSource).toContain('void syncTerminalIncrementRef.current?.()')
+    expect(routeSource).toContain('terminalSubscribeParamsRef.current.sinceSeq = terminalHistoryRef.current.lastSeq')
+  })
+
+  it('resizes the mobile xterm without replacing history when desktop pane dimensions change', () => {
+    expect(routeSource).toContain('terminalRef.current?.resize(historyViewport.cols, historyViewport.rows)')
+    const viewportBranch = routeSource.slice(
+      routeSource.indexOf('if (!sameTerminalViewport(historyViewport, viewportRef.current))'),
+      routeSource.indexOf('if (history.gap)')
+    )
+    expect(viewportBranch).not.toContain('reloadSnapshotForCurrentRun')
+    expect(viewportBranch).not.toContain('resetRemoteTerminalHistoryState')
   })
 
   it('routes user input and clear through Synapse terminal RPC helpers', () => {
     expect(routeSource).toContain('onTerminalInput={handleTerminalInput}')
     expect(routeSource).toContain('sendTerminalInput(client, windowId, paneId, bytes)')
     expect(routeSource).toContain('const result = await clearTerminal(client, windowId, paneId)')
-    expect(routeSource).toContain('lastSeqRef.current = Math.max(lastSeqRef.current, result.lastSeq)')
+    expect(routeSource).toContain('terminalHistoryRef.current.lastSeq = result.lastSeq')
     expect(routeSource).toContain('terminalRef.current?.clear()')
   })
 

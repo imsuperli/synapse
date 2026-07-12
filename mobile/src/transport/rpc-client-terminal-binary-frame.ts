@@ -15,6 +15,7 @@ type StreamingListener = (result: unknown) => void
 
 type TerminalBinaryFrameOptions = {
   terminalSnapshots: Map<number, TerminalSnapshotState>
+  terminalOutputChunks: Map<number, string[]>
   getListener: (streamId: number) => StreamingListener | undefined
   recordValidatedInboundTraffic: () => void
 }
@@ -29,16 +30,27 @@ export function handleTerminalBinaryFrame(
   }
   const listener = options.getListener(frame.streamId)
   if (!listener) {
+    options.terminalSnapshots.delete(frame.streamId)
+    options.terminalOutputChunks.delete(frame.streamId)
     options.recordValidatedInboundTraffic()
     return
   }
   if (frame.opcode === TerminalStreamOpcode.Output) {
     options.recordValidatedInboundTraffic()
+    const chunk = decodeTerminalStreamText(frame.payload)
+    if (frame.seq <= 0) {
+      const pending = options.terminalOutputChunks.get(frame.streamId) ?? []
+      pending.push(chunk)
+      options.terminalOutputChunks.set(frame.streamId, pending)
+      return
+    }
+    const pending = options.terminalOutputChunks.get(frame.streamId)
+    options.terminalOutputChunks.delete(frame.streamId)
     listener({
       type: 'data',
       streamId: frame.streamId,
       seq: frame.seq,
-      chunk: decodeTerminalStreamText(frame.payload)
+      chunk: pending ? `${pending.join('')}${chunk}` : chunk
     })
     return
   }

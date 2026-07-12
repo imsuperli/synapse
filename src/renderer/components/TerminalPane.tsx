@@ -131,6 +131,7 @@ function createAlternateTerminalScreenSnapshot(
   windowId: string,
   paneId: string,
   terminal: Terminal,
+  outputSeq: number,
 ): TerminalScreenSnapshot | null {
   const buffer = terminal.buffer?.active;
   if (!buffer || buffer.type !== 'alternate') {
@@ -157,6 +158,7 @@ function createAlternateTerminalScreenSnapshot(
     alternate: true,
     data: `\x1b[?1049h\x1b[2J\x1b[H${lines.join('\r\n')}\x1b[${cursorY + 1};${cursorX + 1}H`,
     capturedAt: new Date().toISOString(),
+    outputSeq,
   };
 }
 
@@ -829,6 +831,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const outputChunksRef = useRef<string[]>([]);
   const outputBufferSizeRef = useRef(0);
+  const outputBufferLastSeqRef = useRef<number | undefined>(undefined);
   const outputFlushFrameRef = useRef<number | null>(null);
   const screenSnapshotFrameRef = useRef<number | null>(null);
   const lastScreenSnapshotSentAtRef = useRef(Number.NEGATIVE_INFINITY);
@@ -855,6 +858,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const bufferedLiveDataRef = useRef<PtyDataPayload[]>([]);
   const historyReplayTokenRef = useRef(0);
   const lastAppliedSeqRef = useRef(0);
+  const lastRenderedSeqRef = useRef(0);
   const suppressPtyWriteRef = useRef(false);
   const suppressProgrammaticFocusReportUntilRef = useRef(0);
   const liveOsc8GuardRef = useRef(createTerminalOsc8Guard());
@@ -973,7 +977,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
 
       const now = nowMs();
-      const snapshot = createAlternateTerminalScreenSnapshot(windowId, pane.id, terminal);
+      const snapshot = createAlternateTerminalScreenSnapshot(
+        windowId,
+        pane.id,
+        terminal,
+        lastRenderedSeqRef.current,
+      );
       if (!snapshot) {
         if (lastScreenSnapshotSignatureRef.current) {
           window.electronAPI.updateTerminalScreenSnapshot({
@@ -986,6 +995,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             alternate: false,
             data: '',
             capturedAt: new Date().toISOString(),
+            outputSeq: lastRenderedSeqRef.current,
           });
           lastScreenSnapshotSentAtRef.current = now;
         }
@@ -1735,6 +1745,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       isHistoryLoadedRef.current = true;
       bufferedLiveDataRef.current = [];
       lastAppliedSeqRef.current = 0;
+      lastRenderedSeqRef.current = 0;
       suppressPtyWriteRef.current = false;
       lastLiveOutputQueuedAtRef.current = Number.NEGATIVE_INFINITY;
       hasCompletedReplayForCurrentSessionRef.current = false;
@@ -1754,6 +1765,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
+      outputBufferLastSeqRef.current = undefined;
       lastScreenSnapshotSignatureRef.current = '';
       lastScreenSnapshotSentAtRef.current = Number.NEGATIVE_INFINITY;
       lastKnownViewportYRef.current = null;
@@ -2027,7 +2039,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       refreshTerminalViewport(terminal);
     });
 
-    const writeGuardedLiveOutput = (data: string) => {
+    const writeGuardedLiveOutput = (data: string, outputSeq?: number) => {
       const currentTerminal = terminalRef.current;
       if (!currentTerminal) {
         return;
@@ -2042,12 +2054,17 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         );
         if (shouldCaptureSnapshot) {
           currentTerminal.write(guardedData, () => {
+            if (outputSeq !== undefined) {
+              lastRenderedSeqRef.current = outputSeq;
+            }
             scheduleTerminalScreenSnapshot();
           });
         } else {
           currentTerminal.write(guardedData);
         }
         scheduleStaleRenderSurfaceRecovery();
+      } else if (outputSeq !== undefined) {
+        lastRenderedSeqRef.current = outputSeq;
       }
     };
 
@@ -2067,9 +2084,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       const pending = outputChunksRef.current.length === 1
         ? outputChunksRef.current[0]
         : outputChunksRef.current.join('');
+      const pendingLastSeq = outputBufferLastSeqRef.current;
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
-      writeGuardedLiveOutput(pending);
+      outputBufferLastSeqRef.current = undefined;
+      writeGuardedLiveOutput(pending, pendingLastSeq);
     };
 
     const clearQueuedOutput = () => {
@@ -2080,9 +2099,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
+      outputBufferLastSeqRef.current = undefined;
     };
 
-    const queueOutput = (data: string) => {
+    const queueOutput = (data: string, outputSeq?: number) => {
       if (!data) return;
 
       const currentTerminal = terminalRef.current;
@@ -2098,7 +2118,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         && data.length <= DIRECT_LIVE_OUTPUT_MAX_CHARS
         && wasIdle
       ) {
-        writeGuardedLiveOutput(data);
+        writeGuardedLiveOutput(data, outputSeq);
         return;
       }
 
@@ -2115,6 +2135,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       outputChunksRef.current.push(data);
       outputBufferSizeRef.current += data.length;
+      if (outputSeq !== undefined) {
+        outputBufferLastSeqRef.current = outputSeq;
+      }
       if (outputFlushFrameRef.current !== null) {
         return;
       }
@@ -2122,7 +2145,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       outputFlushFrameRef.current = requestAnimationFrame(flushOutput);
     };
 
-    const writeReplayOutput = (data: string) => new Promise<void>((resolve) => {
+    const writeReplayOutput = (data: string, outputSeq: number) => new Promise<void>((resolve) => {
       const currentTerminal = terminalRef.current;
       if (!currentTerminal) {
         resolve();
@@ -2134,11 +2157,13 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       currentTerminal.write(OSC8_HYPERLINK_CLOSE, () => {
         if (!guardedData) {
+          lastRenderedSeqRef.current = outputSeq;
           resolve();
           return;
         }
 
         currentTerminal.write(guardedData, () => {
+          lastRenderedSeqRef.current = outputSeq;
           if (
             shouldCaptureTerminalScreenSnapshot(
               currentTerminal,
@@ -2171,7 +2196,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         lastAppliedSeqRef.current = payload.seq;
       }
 
-      queueOutput(payload.data);
+      queueOutput(payload.data, payload.seq);
     };
 
     const replayHistory = async ({ resetTerminal = false }: { resetTerminal?: boolean } = {}) => {
@@ -2183,6 +2208,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       isHistoryLoadedRef.current = false;
       bufferedLiveDataRef.current = [];
       lastAppliedSeqRef.current = 0;
+      lastRenderedSeqRef.current = 0;
       liveOsc8GuardRef.current.reset();
       replayOsc8GuardRef.current.reset();
       const sessionKey = replaySessionKeyRef.current;
@@ -2218,7 +2244,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         if (isReplayStillCurrent()) {
           suppressPtyWriteRef.current = true;
           shouldResumePtyWrites = true;
-          await writeReplayOutput(replayData);
+          await writeReplayOutput(replayData, historySnapshot.lastSeq);
         }
       } catch {
         // 历史回放失败不应影响实时输出
@@ -2246,7 +2272,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           if (payload.seq !== undefined) {
             lastAppliedSeqRef.current = payload.seq;
           }
-          queueOutput(payload.data);
+          queueOutput(payload.data, payload.seq);
         }
       }
     };
@@ -2487,6 +2513,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       isHistoryLoadedRef.current = true;
       bufferedLiveDataRef.current = [];
       lastAppliedSeqRef.current = 0;
+      lastRenderedSeqRef.current = 0;
       suppressPtyWriteRef.current = false;
       lastLiveOutputQueuedAtRef.current = Number.NEGATIVE_INFINITY;
       hasCompletedReplayForCurrentSessionRef.current = false;

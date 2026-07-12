@@ -179,7 +179,8 @@ describe('Synapse remote terminal helpers', () => {
           cursorY: 8,
           alternate: true,
           data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
-          capturedAt: '2026-07-11T10:30:00.000Z'
+          capturedAt: '2026-07-11T10:30:00.000Z',
+          outputSeq: 4
         }
       })
     ).toEqual({
@@ -203,7 +204,8 @@ describe('Synapse remote terminal helpers', () => {
         cursorY: 8,
         alternate: true,
         data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
-        capturedAt: '2026-07-11T10:30:00.000Z'
+        capturedAt: '2026-07-11T10:30:00.000Z',
+        outputSeq: 4
       }
     })
   })

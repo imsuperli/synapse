@@ -35,6 +35,7 @@ export default defineConfig({
       'src/transport/pairing-connection-attempt.test.ts',
       'src/transport/pairing.test.ts',
       'src/transport/rpc-client.test.ts',
+      'src/transport/rpc-client-terminal-*.test.ts',
       'src/transport/rpc-response-shape.test.ts',
       'src/transport/websocket-payload-bytes.test.ts',
       'src/i18n/**/*.test.ts',

@@ -608,6 +608,7 @@ describe('TerminalPane history replay', () => {
           cursorX: 7,
           cursorY: 2,
           alternate: true,
+          outputSeq: 1,
           data: expect.stringContaining('Codex task\r\n\r\nworking 12s'),
         }),
       );
@@ -685,6 +686,7 @@ describe('TerminalPane history replay', () => {
           paneId: 'pane-alt-clear',
           alternate: false,
           data: '',
+          outputSeq: 2,
         }),
       );
     });

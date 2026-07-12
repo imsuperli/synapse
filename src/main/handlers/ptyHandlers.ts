@@ -144,6 +144,7 @@ function isTerminalScreenSnapshotPayload(value: unknown): value is TerminalScree
     typeof snapshot.cursorX === 'number' &&
     typeof snapshot.cursorY === 'number' &&
     typeof snapshot.alternate === 'boolean' &&
-    typeof snapshot.capturedAt === 'string'
+    typeof snapshot.capturedAt === 'string' &&
+    typeof snapshot.outputSeq === 'number'
   );
 }

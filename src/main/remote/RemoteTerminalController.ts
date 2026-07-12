@@ -35,7 +35,7 @@ type TerminalHistoryOptions = {
 };
 
 type TerminalStreamSnapshot = {
-  chunks: string[];
+  serialized: string;
   firstSeq: number;
   lastSeq: number;
   gap: boolean;
@@ -43,10 +43,16 @@ type TerminalStreamSnapshot = {
   evictedBeforeSeq: number;
   cols?: number;
   rows?: number;
+  incremental: boolean;
+  requestedSinceSeq: number;
+  hasMoreAfter: boolean;
+  screenSnapshotOffset?: number;
+  screenSnapshotLength?: number;
 };
 
 const TERMINAL_STREAM_CHUNK_BYTES = 48 * 1024;
-const TERMINAL_STREAM_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+const TERMINAL_STREAM_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+const TERMINAL_STREAM_INCREMENT_BYTES = 512 * 1024;
 const TERMINAL_STREAM_SNAPSHOT_CHUNKS = 250_000;
 let nextTerminalStreamId = 1;
 
@@ -78,6 +84,7 @@ export class RemoteTerminalController {
     const screenSnapshot = this.processManager.getTerminalScreenSnapshot(windowId, paneId);
     if (typeof options.sinceSeq === 'number') {
       const history = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, options.sinceSeq);
+      const cursorAhead = options.sinceSeq > history.lastSeq;
       const entries = limitHistoryEntriesForward(history.entries, {
         limitBytes: options.limitBytes,
         limitChunks: options.limitChunks,
@@ -88,7 +95,7 @@ export class RemoteTerminalController {
         chunks: entries.map((entry) => entry.data),
         firstSeq: entries[0]?.seq ?? history.firstSeq,
         lastSeq: entries.at(-1)?.seq ?? history.lastSeq,
-        gap: history.gap,
+        gap: history.gap || cursorAhead,
         hasMoreBefore: history.hasMoreBefore,
         evictedBeforeSeq: history.evictedBeforeSeq,
         ...dimensions,
@@ -192,8 +199,8 @@ export class RemoteTerminalController {
       }
       emitOutput(payload);
     });
-    snapshot = this.getRecentSnapshot(windowId, paneId);
-    lastEmittedSeq = Math.max(lastEmittedSeq, snapshot.lastSeq);
+    snapshot = this.getSubscriptionSnapshot(windowId, paneId, sinceSeq ?? 0);
+    lastEmittedSeq = snapshot.lastSeq;
     const closeSubscription = () => {
       if (closed) {
         return;
@@ -218,7 +225,7 @@ export class RemoteTerminalController {
           kind: 'scrollback',
           windowId,
           paneId,
-          data: snapshot?.chunks.join('') ?? '',
+          data: snapshot?.serialized ?? '',
           cols: snapshot?.cols,
           rows: snapshot?.rows,
           firstSeq: snapshot?.firstSeq ?? 0,
@@ -226,6 +233,11 @@ export class RemoteTerminalController {
           gap: snapshot?.gap === true,
           hasMoreBefore: snapshot?.hasMoreBefore === true,
           evictedBeforeSeq: snapshot?.evictedBeforeSeq ?? 0,
+          incremental: snapshot?.incremental === true,
+          requestedSinceSeq: snapshot?.requestedSinceSeq ?? 0,
+          hasMoreAfter: snapshot?.hasMoreAfter === true,
+          screenSnapshotOffset: snapshot?.screenSnapshotOffset,
+          screenSnapshotLength: snapshot?.screenSnapshotLength,
         });
         activated = true;
         for (const payload of bufferedLiveOutput) {
@@ -282,6 +294,10 @@ export class RemoteTerminalController {
 
   private getRecentSnapshot(windowId: string, paneId: string): TerminalStreamSnapshot {
     const dimensions = this.processManager.getPaneTerminalDimensions(windowId, paneId);
+    // Capture the floor before reading history. Output that arrives after this
+    // point is either included by the history read or remains in the live queue;
+    // it must never be skipped by advertising a newer lastSeq than serialized.
+    const latestSeqBeforeHistory = this.processManager.getLatestPaneOutputSeq(windowId, paneId);
     const history = this.processManager.getPtyHistoryEntriesBefore(
       windowId,
       paneId,
@@ -292,23 +308,80 @@ export class RemoteTerminalController {
       },
     );
     const screenSnapshot = this.processManager.getTerminalScreenSnapshot(windowId, paneId);
-    const chunks = history.entries.map((entry) => entry.data);
+    const snapshotLastSeq = history.entries.at(-1)?.seq ?? latestSeqBeforeHistory;
+    let serialized = history.entries.map((entry) => entry.data).join('');
+    let screenSnapshotOffset: number | undefined;
+    let screenSnapshotLength: number | undefined;
     if (
       screenSnapshot?.alternate &&
       screenSnapshot.windowId === windowId &&
       screenSnapshot.paneId === paneId &&
+      typeof screenSnapshot.outputSeq === 'number' &&
       screenSnapshot.data
     ) {
-      chunks.push(screenSnapshot.data);
+      const snapshotSeq = Math.max(
+        0,
+        Math.min(snapshotLastSeq, screenSnapshot.outputSeq),
+      );
+      let insertOffset = 0;
+      for (const entry of history.entries) {
+        if (entry.seq > snapshotSeq) {
+          break;
+        }
+        insertOffset += entry.data.length;
+      }
+      serialized = `${serialized.slice(0, insertOffset)}${screenSnapshot.data}${serialized.slice(insertOffset)}`;
+      screenSnapshotOffset = insertOffset;
+      screenSnapshotLength = screenSnapshot.data.length;
     }
     return {
-      chunks,
+      serialized,
       firstSeq: history.firstSeq,
-      lastSeq: history.lastSeq,
+      lastSeq: snapshotLastSeq,
       gap: history.gap,
       hasMoreBefore: history.hasMoreBefore,
       evictedBeforeSeq: history.evictedBeforeSeq,
       ...dimensions,
+      incremental: false,
+      requestedSinceSeq: 0,
+      hasMoreAfter: false,
+      ...(screenSnapshotOffset !== undefined ? { screenSnapshotOffset } : {}),
+      ...(screenSnapshotLength !== undefined ? { screenSnapshotLength } : {}),
+    };
+  }
+
+  private getSubscriptionSnapshot(
+    windowId: string,
+    paneId: string,
+    sinceSeq: number,
+  ): TerminalStreamSnapshot {
+    if (sinceSeq <= 0) {
+      return this.getRecentSnapshot(windowId, paneId);
+    }
+    const dimensions = this.processManager.getPaneTerminalDimensions(windowId, paneId);
+    const history = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, sinceSeq);
+    if (history.gap || sinceSeq > history.lastSeq) {
+      return {
+        ...this.getRecentSnapshot(windowId, paneId),
+        requestedSinceSeq: sinceSeq,
+      };
+    }
+    const entries = limitHistoryEntriesForward(history.entries, {
+      limitBytes: TERMINAL_STREAM_INCREMENT_BYTES,
+      limitChunks: TERMINAL_STREAM_SNAPSHOT_CHUNKS,
+    });
+    const lastSeq = entries.at(-1)?.seq ?? sinceSeq;
+    return {
+      serialized: entries.map((entry) => entry.data).join(''),
+      firstSeq: entries[0]?.seq ?? sinceSeq,
+      lastSeq,
+      gap: false,
+      hasMoreBefore: false,
+      evictedBeforeSeq: history.evictedBeforeSeq,
+      ...dimensions,
+      incremental: true,
+      requestedSinceSeq: sinceSeq,
+      hasMoreAfter: lastSeq < history.lastSeq,
     };
   }
 }
@@ -331,6 +404,11 @@ function sendSnapshotFrames(
     gap: boolean;
     hasMoreBefore: boolean;
     evictedBeforeSeq: number;
+    incremental: boolean;
+    requestedSinceSeq: number;
+    hasMoreAfter: boolean;
+    screenSnapshotOffset?: number;
+    screenSnapshotLength?: number;
   },
 ): void {
   sendFrame(
@@ -346,6 +424,11 @@ function sendSnapshotFrames(
       gap: options.gap,
       hasMoreBefore: options.hasMoreBefore,
       evictedBeforeSeq: options.evictedBeforeSeq,
+      incremental: options.incremental,
+      requestedSinceSeq: options.requestedSinceSeq,
+      hasMoreAfter: options.hasMoreAfter,
+      screenSnapshotOffset: options.screenSnapshotOffset,
+      screenSnapshotLength: options.screenSnapshotLength,
     }),
   );
   for (const chunk of iterateTerminalStreamTextPayloads(options.data, TERMINAL_STREAM_CHUNK_BYTES)) {

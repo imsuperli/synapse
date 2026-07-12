@@ -78,6 +78,7 @@ export type TerminalScreenSnapshot = {
   alternate: boolean
   data: string
   capturedAt: string
+  outputSeq: number
 }
 
 export type TerminalHistoryRequestOptions = {
@@ -694,7 +695,8 @@ function parseTerminalScreenSnapshot(value: unknown): { screenSnapshot: Terminal
     typeof snapshot.cursorY !== 'number' ||
     typeof snapshot.alternate !== 'boolean' ||
     typeof snapshot.data !== 'string' ||
-    typeof snapshot.capturedAt !== 'string'
+    typeof snapshot.capturedAt !== 'string' ||
+    typeof snapshot.outputSeq !== 'number'
   ) {
     return null
   }
@@ -708,7 +710,8 @@ function parseTerminalScreenSnapshot(value: unknown): { screenSnapshot: Terminal
       cursorY: snapshot.cursorY,
       alternate: snapshot.alternate,
       data: snapshot.data,
-      capturedAt: snapshot.capturedAt
+      capturedAt: snapshot.capturedAt,
+      outputSeq: snapshot.outputSeq
     }
   }
 }

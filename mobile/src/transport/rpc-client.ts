@@ -219,6 +219,7 @@ export function connect(
   const terminalStreamListeners = new Map<number, StreamingListener>()
   const terminalStreamIdsByRequest = new Map<string, Set<number>>()
   const terminalSnapshots = new Map<number, TerminalSnapshotState>()
+  const terminalOutputChunks = new Map<number, string[]>()
   let activeBrowserScreencastRequestId: string | null = null
   let pendingBrowserScreencastRequestId: string | null = null
   const stateListeners = new Set<(state: ConnectionState) => void>()
@@ -933,6 +934,7 @@ export function connect(
       for (const streamId of terminalStreamIds) {
         terminalStreamListeners.delete(streamId)
         terminalSnapshots.delete(streamId)
+        terminalOutputChunks.delete(streamId)
       }
       terminalStreamIdsByRequest.delete(id)
     }
@@ -956,6 +958,7 @@ export function connect(
     for (const streamId of terminalStreamIds) {
       terminalStreamListeners.delete(streamId)
       terminalSnapshots.delete(streamId)
+      terminalOutputChunks.delete(streamId)
     }
     terminalStreamIdsByRequest.delete(id)
   }
@@ -1019,6 +1022,7 @@ export function connect(
     }
     handleTerminalBinaryFrame(bytes, {
       terminalSnapshots,
+      terminalOutputChunks,
       getListener: (streamId) => terminalStreamListeners.get(streamId),
       recordValidatedInboundTraffic
     })

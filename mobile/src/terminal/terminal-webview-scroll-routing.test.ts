@@ -60,7 +60,7 @@ describe('TerminalWebView scroll routing', () => {
     expect(momentumBlock).toContain('routeScrollLines(lines, ts.lastX, ts.lastY);')
   })
 
-  it('notifies React Native when upward history intent happens on the alternate screen', () => {
+  it('routes alternate-screen scrolling only to the TUI', () => {
     const routeBlock = sliceBetween(
       'function routeScrollLines(lines, clientX, clientY)',
       'function clampNormalScrollLines(lines)'
@@ -70,8 +70,8 @@ describe('TerminalWebView scroll routing', () => {
     const inputIndex = routeBlock.indexOf('var input = buildTuiScrollInput(lines, clientX, clientY);')
 
     expect(alternateIndex).toBeGreaterThanOrEqual(0)
-    expect(historyIndex).toBeGreaterThan(alternateIndex)
-    expect(inputIndex).toBeGreaterThan(historyIndex)
+    expect(historyIndex).toBe(-1)
+    expect(inputIndex).toBeGreaterThan(alternateIndex)
   })
 
   it('does not rubber-band normal scroll at scrollback edges', () => {
@@ -162,7 +162,6 @@ describe('TerminalWebView scroll routing', () => {
     expect(source).toContain("notify({ type: 'history-top' });")
     expect(source).toContain('if (now - lastHistoryTopNotifyAt < 900) return;')
     expect(source).toContain('if (deltaY < 0) notifyHistoryTopReached();')
-    expect(source).toContain('if (lines < 0) notifyHistoryTopReached();')
   })
 
   it('does not apply fractional smooth scroll transforms to terminal content', () => {

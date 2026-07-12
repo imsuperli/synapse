@@ -23,6 +23,7 @@ export type TerminalScreenSnapshot = {
   alternate: boolean;
   data: string;
   capturedAt: string;
+  outputSeq: number;
 };
 
 export type TerminalHistoryResult = {

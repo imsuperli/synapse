@@ -996,7 +996,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       !snapshot.windowId ||
       !snapshot.paneId ||
       !Number.isFinite(snapshot.cols) ||
-      !Number.isFinite(snapshot.rows)
+      !Number.isFinite(snapshot.rows) ||
+      !Number.isFinite(snapshot.outputSeq)
     ) {
       return;
     }
@@ -1014,6 +1015,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       cursorY: Math.max(0, Math.floor(snapshot.cursorY)),
       data: snapshot.data,
       capturedAt: snapshot.capturedAt || new Date().toISOString(),
+      outputSeq: Math.max(0, Math.floor(snapshot.outputSeq)),
     });
   }
 
