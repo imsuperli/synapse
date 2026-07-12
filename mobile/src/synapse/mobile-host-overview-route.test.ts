@@ -126,7 +126,7 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('!selectionMode && isStartableLocalPane(pane) ?')
   })
 
-  it('renders a side-docked host switcher that verifies connection before routing', () => {
+  it('opens the host switcher from the toolbar and verifies connection before routing', () => {
     expect(routeSource).toContain("import { loadHosts } from '../../../src/transport/host-store'")
     expect(routeSource).toContain('useWindowDimensions')
     expect(routeSource).toContain('const hostSwitcherPanelWidth = Math.min(286, Math.max(220, screenWidth - spacing.lg * 2))')
@@ -137,14 +137,15 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('setHostSwitchError(')
     expect(routeSource).toContain('styles.hostSwitcherDock')
     expect(routeSource).toContain('styles.hostSwitcherPanel, { width: hostSwitcherPanelWidth }')
-    expect(routeSource).toContain("pairedHosts.length > 1 ?")
+    expect(routeSource).toContain('pairedHosts.length > 1 && hostSwitcherOpen ?')
+    expect(routeSource).not.toContain('styles.hostSwitcherTab')
   })
 
   it('places overview actions in the second toolbar row and keeps the native header simple', () => {
     expect(routeSource).toContain('<Stack.Screen')
     expect(routeSource).toContain("headerTitle: t('overview.windowsTitle')")
     expect(routeSource).toContain('styles.actionToolbar')
-    expect(routeSource).toContain('styles.filterChip')
+    expect(routeSource).toContain('styles.toolbarLeadingActions')
     expect(routeSource).toContain('styles.toolbarActions')
     expect(routeSource).not.toContain('headerRight: () => (')
     expect(routeSource).not.toContain('styles.navNewTerminalButton')
@@ -152,6 +153,27 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).not.toContain("<Text style={styles.title}>{t('nav.desktop')}</Text>")
     expect(routeSource).not.toContain('connectionLabel(connectionState, t)')
     expect(routeSource).not.toContain('hostEndpointLabel')
+  })
+
+  it('places the host switch icon immediately before the icon-only filter button', () => {
+    const toolbarStart = routeSource.indexOf('<View style={styles.actionToolbar}>')
+    const trailingActionsStart = routeSource.indexOf(
+      '<View style={styles.toolbarActions}>',
+      toolbarStart
+    )
+    const leadingActions = routeSource.slice(toolbarStart, trailingActionsStart)
+
+    expect(toolbarStart).toBeGreaterThanOrEqual(0)
+    expect(trailingActionsStart).toBeGreaterThan(toolbarStart)
+    expect(leadingActions).toContain('styles.toolbarLeadingActions')
+    expect(leadingActions).toContain('styles.navIconButton')
+    expect(leadingActions).toContain('hostSwitcherOpen && styles.iconButtonActive')
+    expect(leadingActions).toContain('filterActiveCount > 0 && styles.iconButtonActive')
+    const hostSwitchIconIndex = leadingActions.indexOf('<Server size={18}')
+    const filterIconIndex = leadingActions.indexOf('<Filter size={18}')
+    expect(hostSwitchIconIndex).toBeGreaterThanOrEqual(0)
+    expect(filterIconIndex).toBeGreaterThan(hostSwitchIconIndex)
+    expect(leadingActions).not.toContain('<Text')
   })
 
   it('confirms destructive window and group deletes before sending RPC requests', () => {

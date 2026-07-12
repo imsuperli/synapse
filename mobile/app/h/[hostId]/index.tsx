@@ -1036,29 +1036,43 @@ export default function HostOverviewScreen() {
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <View style={styles.actionToolbar}>
-        <Pressable
-          style={[
-            styles.filterChip,
-            filterActiveCount > 0 && styles.filterChipActive
-          ]}
-          onPress={() => setShowFilterModal(true)}
-          accessibilityRole="button"
-          accessibilityLabel={`${t('overview.filter')}: ${filterLabel}`}
-        >
-          <Filter
-            size={13}
-            color={filterActiveCount > 0 ? colors.textPrimary : colors.textSecondary}
-          />
-          <Text
+        <View style={styles.toolbarLeadingActions}>
+          {pairedHosts.length > 1 ? (
+            <Pressable
+              style={[
+                styles.navIconButton,
+                hostSwitcherOpen && styles.iconButtonActive
+              ]}
+              onPress={() => {
+                setShowFilterModal(false)
+                if (hostSwitcherOpen) {
+                  setHostSwitchError(null)
+                }
+                setHostSwitcherOpen(!hostSwitcherOpen)
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={t('overview.switchHost')}
+              accessibilityState={{ expanded: hostSwitcherOpen }}
+            >
+              <Server size={18} color={colors.textPrimary} />
+            </Pressable>
+          ) : null}
+          <Pressable
             style={[
-              styles.filterChipText,
-              filterActiveCount > 0 && styles.filterChipTextActive
+              styles.navIconButton,
+              filterActiveCount > 0 && styles.iconButtonActive
             ]}
-            numberOfLines={1}
+            onPress={() => {
+              setHostSwitcherOpen(false)
+              setHostSwitchError(null)
+              setShowFilterModal(true)
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`${t('overview.filter')}: ${filterLabel}`}
           >
-            {t('overview.filter')}{filterActiveCount > 0 ? ` ${filterActiveCount}` : ''}
-          </Text>
-        </Pressable>
+            <Filter size={18} color={colors.textPrimary} />
+          </Pressable>
+        </View>
         <View style={styles.toolbarActions}>
           {groupSelectionMode ? (
             <>
@@ -1292,79 +1306,69 @@ export default function HostOverviewScreen() {
           })}
         </View>
       </BottomDrawer>
-      {pairedHosts.length > 1 ? (
+      {pairedHosts.length > 1 && hostSwitcherOpen ? (
         <View style={styles.hostSwitcherDock} pointerEvents="box-none">
-          {hostSwitcherOpen ? (
-            <View style={[styles.hostSwitcherPanel, { width: hostSwitcherPanelWidth }]}>
-              <View style={styles.hostSwitcherHeader}>
-                <Text style={styles.hostSwitcherTitle}>{t('overview.switchHost')}</Text>
-                <Pressable
-                  style={styles.hostSwitcherCloseButton}
-                  onPress={() => {
-                    setHostSwitcherOpen(false)
-                    setHostSwitchError(null)
-                  }}
-                  accessibilityLabel={t('common.cancel')}
-                >
-                  <X size={16} color={colors.textPrimary} />
-                </Pressable>
-              </View>
-              <ScrollView
-                style={styles.hostSwitcherList}
-                contentContainerStyle={styles.hostSwitcherListContent}
-                showsVerticalScrollIndicator={false}
+          <View style={[styles.hostSwitcherPanel, { width: hostSwitcherPanelWidth }]}>
+            <View style={styles.hostSwitcherHeader}>
+              <Text style={styles.hostSwitcherTitle}>{t('overview.switchHost')}</Text>
+              <Pressable
+                style={styles.hostSwitcherCloseButton}
+                onPress={() => {
+                  setHostSwitcherOpen(false)
+                  setHostSwitchError(null)
+                }}
+                accessibilityLabel={t('common.cancel')}
               >
-                {pairedHosts.map((host) => {
-                  const current = host.id === hostId
-                  const switching = switchingHostId === host.id
-                  return (
-                    <Pressable
-                      key={host.id}
-                      disabled={current || switchingHostId !== null}
-                      style={({ pressed }) => [
-                        styles.hostSwitcherRow,
-                        current && styles.hostSwitcherRowCurrent,
-                        pressed && styles.pressed,
-                        switchingHostId !== null && !switching && !current && styles.disabledRow
-                      ]}
-                      onPress={() => void switchToHost(host)}
-                    >
-                      <View style={styles.hostSwitcherIcon}>
-                        {switching ? (
-                          <ActivityIndicator color={colors.textSecondary} />
-                        ) : (
-                          <Server size={16} color={colors.textPrimary} />
-                        )}
-                      </View>
-                      <View style={styles.hostSwitcherMain}>
-                        <Text style={styles.hostSwitcherName} numberOfLines={1}>
-                          {host.name}
-                        </Text>
-                        <Text style={styles.hostSwitcherEndpoint} numberOfLines={1}>
-                          {current
-                            ? t('overview.currentHost')
-                            : switching
-                              ? t('overview.switchingHost')
-                              : switcherHostEndpointLabel(host, t)}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  )
-                })}
-              </ScrollView>
-              {hostSwitchError ? (
-                <Text style={styles.hostSwitcherError}>{hostSwitchError}</Text>
-              ) : null}
+                <X size={16} color={colors.textPrimary} />
+              </Pressable>
             </View>
-          ) : (
-            <Pressable
-              style={styles.hostSwitcherTab}
-              onPress={() => setHostSwitcherOpen(true)}
-              accessibilityLabel={t('overview.switchHost')}
+            <ScrollView
+              style={styles.hostSwitcherList}
+              contentContainerStyle={styles.hostSwitcherListContent}
+              showsVerticalScrollIndicator={false}
             >
-              <Server size={18} color={colors.bgBase} />
-            </Pressable>
-          )}
+              {pairedHosts.map((host) => {
+                const current = host.id === hostId
+                const switching = switchingHostId === host.id
+                return (
+                  <Pressable
+                    key={host.id}
+                    disabled={current || switchingHostId !== null}
+                    style={({ pressed }) => [
+                      styles.hostSwitcherRow,
+                      current && styles.hostSwitcherRowCurrent,
+                      pressed && styles.pressed,
+                      switchingHostId !== null && !switching && !current && styles.disabledRow
+                    ]}
+                    onPress={() => void switchToHost(host)}
+                  >
+                    <View style={styles.hostSwitcherIcon}>
+                      {switching ? (
+                        <ActivityIndicator color={colors.textSecondary} />
+                      ) : (
+                        <Server size={16} color={colors.textPrimary} />
+                      )}
+                    </View>
+                    <View style={styles.hostSwitcherMain}>
+                      <Text style={styles.hostSwitcherName} numberOfLines={1}>
+                        {host.name}
+                      </Text>
+                      <Text style={styles.hostSwitcherEndpoint} numberOfLines={1}>
+                        {current
+                          ? t('overview.currentHost')
+                          : switching
+                            ? t('overview.switchingHost')
+                            : switcherHostEndpointLabel(host, t)}
+                      </Text>
+                    </View>
+                  </Pressable>
+                )
+              })}
+            </ScrollView>
+            {hostSwitchError ? (
+              <Text style={styles.hostSwitcherError}>{hostSwitchError}</Text>
+            ) : null}
+          </View>
         </View>
       ) : null}
       </View>
@@ -1716,15 +1720,6 @@ const styles = StyleSheet.create({
     zIndex: 20,
     elevation: 8
   },
-  hostSwitcherTab: {
-    width: 42,
-    height: 52,
-    borderTopLeftRadius: radii.button,
-    borderBottomLeftRadius: radii.button,
-    backgroundColor: colors.surfaceBright,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
   hostSwitcherPanel: {
     width: 286,
     maxWidth: 286,
@@ -1810,41 +1805,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.xs
   },
+  toolbarLeadingActions: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs
+  },
   toolbarActions: {
     flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: spacing.xs
-  },
-  filterChip: {
-    height: 32,
-    minWidth: 68,
-    maxWidth: 96,
-    flexShrink: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm + 2,
-    borderRadius: radii.button,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.bgPanel
-  },
-  filterChipActive: {
-    borderColor: colors.textSecondary,
-    backgroundColor: colors.bgRaised
-  },
-  filterChipText: {
-    flexShrink: 1,
-    minWidth: 0,
-    color: colors.textSecondary,
-    fontSize: typography.metaSize,
-    fontWeight: '700'
-  },
-  filterChipTextActive: {
-    color: colors.textPrimary
   },
   filterModalHeader: {
     flexDirection: 'row',
