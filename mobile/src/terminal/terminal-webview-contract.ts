@@ -17,6 +17,8 @@ export type TerminalKeyboardAvoidanceMetrics = {
   cursorY: number
   rows: number
   altScreen: boolean
+  cursorBottomPx: number
+  rowHeightPx: number
 }
 
 export type TerminalSelectionEvents = {
@@ -58,6 +60,7 @@ export type TerminalWebViewHandle = {
   clear: () => void
   measureFitDimensions: (containerHeight?: number) => Promise<{ cols: number; rows: number } | null>
   resetZoom: () => void
+  revealLiveInput: () => void
   cancelSelect: () => void
   doSelectAll: () => void
   // Why: lets callers await the WebView-side `init` rAF chain (term.open

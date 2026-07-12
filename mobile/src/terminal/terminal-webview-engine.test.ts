@@ -106,4 +106,33 @@ describe('terminal WebView bundled engine', () => {
     expect(capSites.length).toBe(2)
     expect(terminalHtmlSource).toContain('nonFatalErrorNotifies > 5')
   })
+
+  it('refreshes keyboard avoidance metrics after local clear and resize operations', () => {
+    const resizeStart = terminalHtmlSource.indexOf('function resize(cols, rows)')
+    const resizeEnd = terminalHtmlSource.indexOf('function notify(msg)', resizeStart)
+    const resizeSource = terminalHtmlSource.slice(resizeStart, resizeEnd)
+    expect(resizeSource).toContain('term.resize(cols || term.cols, rows || term.rows);')
+    expect(resizeSource).toContain('emitKeyboardAvoidanceMetrics();')
+
+    const clearStart = terminalHtmlSource.indexOf("msg.type === 'clear'")
+    const clearEnd = terminalHtmlSource.indexOf("msg.type === 'measure'", clearStart)
+    const clearSource = terminalHtmlSource.slice(clearStart, clearEnd)
+    expect(clearSource).toContain('if (term) { term.clear(); term.reset(); }')
+    expect(clearSource).toContain('emitKeyboardAvoidanceMetrics();')
+  })
+
+  it('reports scaled cursor coordinates and can return live input to the latest line', () => {
+    const metricsStart = terminalHtmlSource.indexOf('function emitKeyboardAvoidanceMetrics()')
+    const metricsEnd = terminalHtmlSource.indexOf('function attachTermObservers()', metricsStart)
+    const metricsSource = terminalHtmlSource.slice(metricsStart, metricsEnd)
+    expect(metricsSource).toContain('getCellHeight() * getTotalScale()')
+    expect(metricsSource).toContain('cursorBottomPx: cursorBottomPx')
+    expect(metricsSource).toContain('rowHeightPx: rowHeightPx')
+    expect(metricsSource).toContain('(buffer.baseY || 0) - (buffer.viewportY || 0)')
+
+    expect(terminalHtmlSource).toContain('function revealLiveInput()')
+    expect(terminalHtmlSource).toContain("msg.type === 'reveal-live-input'")
+    expect(terminalHtmlSource).toContain('term.scrollToBottom();')
+    expect(terminalHtmlSource).toContain('panY = window.innerHeight - cursorBottomPx;')
+  })
 })

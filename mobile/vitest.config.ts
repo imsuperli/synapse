@@ -40,6 +40,7 @@ export default defineConfig({
       'src/transport/websocket-payload-bytes.test.ts',
       'src/i18n/**/*.test.ts',
       'src/terminal/terminal-text-input-normalization.test.ts',
+      'src/terminal/terminal-keyboard-avoidance.test.ts',
       'src/terminal/terminal-webview-engine-error.test.ts',
       'src/terminal/terminal-webview-engine.test.ts',
       'src/terminal/terminal-webview-reflow.test.ts',

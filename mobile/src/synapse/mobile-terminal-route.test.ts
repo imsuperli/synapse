@@ -127,6 +127,16 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('terminalRef.current?.clear()')
   })
 
+  it('moves only terminal content that would be covered by the software keyboard', () => {
+    expect(routeSource).toContain('getTerminalKeyboardAvoidanceLift({')
+    expect(routeSource).toContain('metrics: terminalKeyboardMetrics')
+    expect(routeSource).toContain('onKeyboardAvoidanceMetrics={handleKeyboardAvoidanceMetrics}')
+    expect(routeSource).toContain('terminalKeyboardLift > 0 && { transform:')
+    expect(routeSource).toContain('terminalRef.current?.revealLiveInput()')
+    expect(routeSource).toContain("overflow: 'hidden'")
+    expect(routeSource).toContain("Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'")
+  })
+
   it('uses terminal live input wiring for the command dock', () => {
     expect(routeSource).toContain('useTerminalLiveInputCommit({')
     expect(routeSource).toContain('MobileTerminalLiveInputStatus')

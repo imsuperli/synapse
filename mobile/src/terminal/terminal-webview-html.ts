@@ -288,6 +288,7 @@ window.onerror = function(msg) {
       userScale = 1;
       clampPan();
       updateTransform();
+      emitKeyboardAvoidanceMetrics();
       return;
     }
     var px = fontPxForScale(scale);
@@ -553,6 +554,7 @@ window.onerror = function(msg) {
     smoothScrollOffsetY = 0;
     updateTransform();
     adjustRowsForViewport();
+    emitKeyboardAvoidanceMetrics();
 
     var cellW = getCellWidth();
     var sw = term.element.scrollWidth;
@@ -865,6 +867,7 @@ window.onerror = function(msg) {
     if (!term) return;
     initRows = rows || initRows;
     term.resize(cols || term.cols, rows || term.rows);
+    emitKeyboardAvoidanceMetrics();
     applyFitScale('resize-msg');
     notify({ type: 'ready', cols: cols, rows: rows });
   }
@@ -1030,6 +1033,7 @@ window.onerror = function(msg) {
       initialOscLinkEvictionReady = false;
       if (term) { term.clear(); term.reset(); }
       emitModesIfChanged();
+      emitKeyboardAvoidanceMetrics();
       resetEvictionCounter();
       if (selMode === 'select') {
         notify({ type: 'selection-evicted' });
@@ -1039,6 +1043,8 @@ window.onerror = function(msg) {
       measureFitDimensions(msg.containerHeight);
     } else if (msg.type === 'reset-zoom') {
       applyFitScale('reset-zoom-msg');
+    } else if (msg.type === 'reveal-live-input') {
+      revealLiveInput();
     } else if (msg.type === 'set-theme') {
       applyTerminalTheme(msg.terminalTheme);
     } else if (msg.type === 'cancel-select') {
@@ -1174,14 +1180,44 @@ window.onerror = function(msg) {
 
   function emitKeyboardAvoidanceMetrics() {
     if (!term) return;
+    var buffer = term.buffer && term.buffer.active ? term.buffer.active : null;
     var alt = false;
-    try { alt = term.buffer && term.buffer.active && term.buffer.active.type === 'alternate'; } catch (e) {}
+    try { alt = buffer && buffer.type === 'alternate'; } catch (e) {}
+    var cursorY = buffer ? buffer.cursorY || 0 : 0;
+    var viewportCursorY = cursorY;
+    if (buffer && !alt) {
+      viewportCursorY += Math.max(0, (buffer.baseY || 0) - (buffer.viewportY || 0));
+    }
+    var rowHeightPx = Math.max(0, getCellHeight() * getTotalScale());
+    var cursorBottomPx = panY + (viewportCursorY + 1) * rowHeightPx;
     notify({
       type: 'keyboard-avoidance-metrics',
-      cursorY: term.buffer && term.buffer.active ? term.buffer.active.cursorY : 0,
+      cursorY: cursorY,
       rows: term.rows || 0,
-      altScreen: alt
+      altScreen: alt,
+      cursorBottomPx: cursorBottomPx,
+      rowHeightPx: rowHeightPx
     });
+  }
+
+  function revealLiveInput() {
+    if (!term) return;
+    term.scrollToBottom();
+    var buffer = term.buffer && term.buffer.active ? term.buffer.active : null;
+    var rowHeightPx = Math.max(0, getCellHeight() * getTotalScale());
+    if (buffer && rowHeightPx > 0) {
+      var cursorTopPx = buffer.cursorY * rowHeightPx;
+      var cursorBottomPx = cursorTopPx + rowHeightPx;
+      if (cursorBottomPx + panY > window.innerHeight) {
+        panY = window.innerHeight - cursorBottomPx;
+      } else if (cursorTopPx + panY < 0) {
+        panY = -cursorTopPx;
+      }
+      clampPan();
+      updateTransform();
+    }
+    updateScrollIndicator(false);
+    emitKeyboardAvoidanceMetrics();
   }
 
   function attachTermObservers() {
@@ -1932,6 +1968,7 @@ window.onerror = function(msg) {
       }
 
       if (e.touches.length === 0) {
+        emitKeyboardAvoidanceMetrics();
         var vel = ts.velY;
         var FRICTION = 0.972;
         var MIN_VEL = 0.012;

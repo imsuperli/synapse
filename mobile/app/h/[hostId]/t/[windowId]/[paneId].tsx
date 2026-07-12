@@ -11,12 +11,17 @@ import {
   TextInput,
   View,
   type KeyboardEvent,
+  type LayoutChangeEvent,
 } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { Eraser, Keyboard as KeyboardIcon, RotateCw, Square } from 'lucide-react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { TerminalWebView, type TerminalWebViewHandle } from '../../../../../src/terminal/TerminalWebView'
+import {
+  TerminalWebView,
+  type TerminalKeyboardAvoidanceMetrics,
+  type TerminalWebViewHandle
+} from '../../../../../src/terminal/TerminalWebView'
 import {
   clearTerminal,
   connectToHost,
@@ -51,6 +56,7 @@ import type { MobileTerminalTheme } from '../../../../../src/terminal/mobile-ter
 import { colors, radii, spacing, typography } from '../../../../../src/theme/mobile-theme'
 import { useMobileI18n, type MobileTranslate } from '../../../../../src/i18n'
 import { loadTerminalTextScale, saveTerminalTextScale } from '../../../../../src/storage/preferences'
+import { getTerminalKeyboardAvoidanceLift } from '../../../../../src/terminal/terminal-keyboard-avoidance'
 import {
   appendRemoteTerminalData,
   appendRemoteTerminalHistoryIncrement,
@@ -360,6 +366,9 @@ export default function RemoteTerminalScreen() {
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
   const [liveInputCapture, setLiveInputCapture] = useState('')
   const [keyboardHeight, setKeyboardHeight] = useState(0)
+  const [terminalFrameHeight, setTerminalFrameHeight] = useState(0)
+  const [terminalKeyboardMetrics, setTerminalKeyboardMetrics] =
+    useState<TerminalKeyboardAvoidanceMetrics | null>(null)
   const [windowPanes, setWindowPanes] = useState<RemotePaneSummary[]>([])
   const [groupWindowTabs, setGroupWindowTabs] = useState<RemoteWindowGroupSummary['windows']>([])
   const [startingTabPaneKey, setStartingTabPaneKey] = useState<string | null>(null)
@@ -868,6 +877,7 @@ export default function RemoteTerminalScreen() {
     setStartingTabPaneKey(null)
     setStopping(false)
     setTerminalRunning(true)
+    setTerminalKeyboardMetrics(null)
     setLoadingOlderHistory(false)
     setHistoryNotice(null)
     resetRemoteTerminalHistoryState(terminalHistoryRef.current)
@@ -1110,10 +1120,31 @@ export default function RemoteTerminalScreen() {
   )
 
   const handleLayout = useCallback(
-    () => {
+    (event: LayoutChangeEvent) => {
+      const nextHeight = Math.max(0, event.nativeEvent.layout.height)
+      setTerminalFrameHeight((current) => current === nextHeight ? current : nextHeight)
       refitTerminalToPhone()
     },
     [refitTerminalToPhone]
+  )
+
+  const handleKeyboardAvoidanceMetrics = useCallback(
+    (metrics: TerminalKeyboardAvoidanceMetrics) => {
+      setTerminalKeyboardMetrics((current) => {
+        if (
+          current &&
+          current.cursorY === metrics.cursorY &&
+          current.rows === metrics.rows &&
+          current.altScreen === metrics.altScreen &&
+          current.cursorBottomPx === metrics.cursorBottomPx &&
+          current.rowHeightPx === metrics.rowHeightPx
+        ) {
+          return current
+        }
+        return metrics
+      })
+    },
+    []
   )
 
   const canSend = connectionState === 'connected' && !loading && terminalRunning && !stopping
@@ -1172,6 +1203,7 @@ export default function RemoteTerminalScreen() {
     if (!canSend) {
       return
     }
+    terminalRef.current?.revealLiveInput()
     focusTerminalLiveInputTarget(liveInputRef.current, {
       keyboardHeight,
       refocus: () =>
@@ -1309,17 +1341,19 @@ export default function RemoteTerminalScreen() {
 
   useEffect(() => {
     const updateKeyboardHeight = (event: KeyboardEvent) => {
-      setKeyboardHeight(Math.max(0, event.endCoordinates.height - insets.bottom))
+      setKeyboardHeight(Math.max(0, event.endCoordinates.height))
     }
-    const showSub = Keyboard.addListener('keyboardDidShow', updateKeyboardHeight)
-    const hideSub = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0))
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const showSub = Keyboard.addListener(showEvent, updateKeyboardHeight)
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0))
     return () => {
       showSub.remove()
       hideSub.remove()
       clearTerminalLiveInputFocusTimer(liveInputFocusTimerRef)
       stopAccessoryRepeat()
     }
-  }, [insets.bottom, stopAccessoryRepeat])
+  }, [stopAccessoryRepeat])
 
   useEffect(() => {
     if (loading || connectionState !== 'connected') {
@@ -1341,7 +1375,17 @@ export default function RemoteTerminalScreen() {
     return () => clearInterval(timer)
   }, [connectionState, syncPaneStatus])
 
-  const keyboardLift = keyboardHeight > 0 ? keyboardHeight : 0
+  const keyboardLift =
+    keyboardHeight > 0
+      ? Platform.OS === 'ios'
+        ? Math.max(0, keyboardHeight - insets.bottom)
+        : keyboardHeight
+      : 0
+  const terminalKeyboardLift = getTerminalKeyboardAvoidanceLift({
+    keyboardLift,
+    terminalFrameHeight,
+    metrics: terminalKeyboardMetrics
+  })
   const passiveDictationState = { isStarting: false, isRecording: false, isProcessing: false }
   const showGroupWindowTabs = groupWindowTabs.length > 1
 
@@ -1462,17 +1506,25 @@ export default function RemoteTerminalScreen() {
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <View style={styles.terminalFrame} onLayout={handleLayout}>
-        <TerminalWebView
-          ref={terminalRef}
-          terminalTheme={terminalTheme}
-          textScale={terminalTextScale}
-          textScaleMode="viewport-zoom"
-          onWebReady={handleTerminalWebReady}
-          onTerminalInput={handleTerminalInput}
-          onEngineError={setError}
-          onTextScaleChange={handleTextScaleChange}
-          onHistoryTopReached={handleHistoryTopReached}
-        />
+        <View
+          style={[
+            styles.terminalSurface,
+            terminalKeyboardLift > 0 && { transform: [{ translateY: -terminalKeyboardLift }] }
+          ]}
+        >
+          <TerminalWebView
+            ref={terminalRef}
+            terminalTheme={terminalTheme}
+            textScale={terminalTextScale}
+            textScaleMode="viewport-zoom"
+            onWebReady={handleTerminalWebReady}
+            onTerminalInput={handleTerminalInput}
+            onEngineError={setError}
+            onTextScaleChange={handleTextScaleChange}
+            onKeyboardAvoidanceMetrics={handleKeyboardAvoidanceMetrics}
+            onHistoryTopReached={handleHistoryTopReached}
+          />
+        </View>
         {loadingOlderHistory || historyNotice ? (
           <View style={styles.historyBanner}>
             {loadingOlderHistory ? <ActivityIndicator size="small" color={colors.textSecondary} /> : null}
@@ -1680,7 +1732,11 @@ const styles = StyleSheet.create({
   },
   terminalFrame: {
     flex: 1,
-    backgroundColor: colors.terminalBg
+    backgroundColor: colors.terminalBg,
+    overflow: 'hidden'
+  },
+  terminalSurface: {
+    ...StyleSheet.absoluteFillObject
   },
   historyBanner: {
     position: 'absolute',

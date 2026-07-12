@@ -186,10 +186,14 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       } else if (msg.type === 'keyboard-avoidance-metrics') {
         const cursorY = typeof msg.cursorY === 'number' ? msg.cursorY : 0
         const rows = typeof msg.rows === 'number' ? msg.rows : 0
+        const cursorBottomPx = typeof msg.cursorBottomPx === 'number' ? msg.cursorBottomPx : 0
+        const rowHeightPx = typeof msg.rowHeightPx === 'number' ? msg.rowHeightPx : 0
         onKeyboardAvoidanceMetrics?.({
           cursorY,
           rows,
-          altScreen: !!msg.altScreen
+          altScreen: !!msg.altScreen,
+          cursorBottomPx,
+          rowHeightPx
         })
       } else if (msg.type === 'haptic') {
         const kind = msg.kind
@@ -342,6 +346,9 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       },
       resetZoom() {
         postMessage({ type: 'reset-zoom' })
+      },
+      revealLiveInput() {
+        postMessage({ type: 'reveal-live-input' })
       },
       cancelSelect() {
         postMessage({ type: 'cancel-select' })
