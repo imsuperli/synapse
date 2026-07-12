@@ -40,7 +40,8 @@ describe('Synapse Mobile terminal route wiring', () => {
   })
 
   it('loads older terminal history when the WebView reaches the top of scrollback', () => {
-    expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_BYTES = 768 * 1024')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_BYTES = 5_000_000')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_CHUNKS = 250_000')
     expect(routeSource).toContain('const loadedFirstSeqRef = useRef(0)')
     expect(routeSource).toContain('const historyChunksRef = useRef<string[]>([])')
     expect(routeSource).toContain('const hasMoreHistoryBeforeRef = useRef(false)')

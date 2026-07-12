@@ -1410,6 +1410,10 @@ window.onerror = function(msg) {
     if (alternateBufferActive) {
       // Why: alternate-screen TUIs own their scroll state and xterm has no
       // scrollback there, so mobile scroll gestures must become terminal input.
+      // Also surface upward history intent to React Native: otherwise a TUI
+      // pane can never page in older server-side PTY history because the normal
+      // scrollback edge path is bypassed entirely.
+      if (lines < 0) notifyHistoryTopReached();
       var input = buildTuiScrollInput(lines, clientX, clientY);
       if (input) notify({ type: 'terminal-input', bytes: input });
       return;
