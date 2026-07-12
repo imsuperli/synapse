@@ -29,10 +29,14 @@ export type SynapseRelayServerStats = {
   pairedSessions: number;
 };
 
-type RelayQueuedMessage = {
+type RelayMessage = {
   data: Buffer | string;
   isBinary: boolean;
   bytes: number;
+};
+
+type RelayQueuedMessage = RelayMessage & {
+  sender: RelayPeer;
 };
 
 type RelayPeer = {
@@ -79,6 +83,7 @@ const CLOSE_EXPIRED = 4408;
 const CLOSE_POLICY = 1008;
 const CLOSE_OVERLOADED = 1013;
 const CLOSE_RATE_LIMIT = 4429;
+const CLOSE_PEER_CHANGED = 4004;
 
 export function hashRelayToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -390,7 +395,15 @@ export class SynapseRelayServer {
   private replacePeer(session: RelaySession, peer: RelayPeer): void {
     const existing = peer.role === 'host' ? session.host : session.client;
     if (existing && existing.ws !== peer.ws) {
-      existing.ws.close(4003, 'Replaced by newer connection');
+      this.closePeer(session, peer.role, 4003, 'Replaced by newer connection');
+      this.closePeer(
+        session,
+        oppositeRole(peer.role),
+        CLOSE_PEER_CHANGED,
+        'Relay peer was replaced',
+      );
+    } else {
+      this.clearQueuedMessagesFromSender(session, peer.role);
     }
     if (peer.role === 'host') {
       session.host = peer;
@@ -406,6 +419,9 @@ export class SynapseRelayServer {
     data: RawData,
     isBinary: boolean,
   ): void {
+    if (!this.isCurrentPeer(session, peer)) {
+      return;
+    }
     const message = normalizeMessage(data, isBinary);
     if (!peer.limiter.consume(message.bytes)) {
       peer.ws.close(CLOSE_RATE_LIMIT, 'Rate limit exceeded');
@@ -426,7 +442,7 @@ export class SynapseRelayServer {
   private enqueueMessage(
     session: RelaySession,
     targetRole: RelayRole,
-    message: RelayQueuedMessage,
+    message: RelayMessage,
     sender: RelayPeer,
   ): void {
     const queue = targetRole === 'host' ? session.queuedForHost : session.queuedForClient;
@@ -438,7 +454,7 @@ export class SynapseRelayServer {
       sender.ws.close(CLOSE_POLICY, 'Peer is not connected');
       return;
     }
-    queue.push(message);
+    queue.push({ ...message, sender });
     if (targetRole === 'host') {
       session.queuedForHostBytes += message.bytes;
     } else {
@@ -452,8 +468,18 @@ export class SynapseRelayServer {
       return;
     }
     const queue = role === 'host' ? session.queuedForHost : session.queuedForClient;
+    const senderRole = oppositeRole(role);
     while (queue.length > 0 && peer.ws.readyState === WebSocket.OPEN) {
-      sendMessage(peer.ws, queue.shift()!);
+      const message = queue.shift()!;
+      const currentSender = senderRole === 'host' ? session.host : session.client;
+      if (
+        !currentSender
+        || currentSender.ws !== message.sender.ws
+        || currentSender.ws.readyState !== WebSocket.OPEN
+      ) {
+        continue;
+      }
+      sendMessage(peer.ws, message);
     }
     if (role === 'host') {
       session.queuedForHostBytes = 0;
@@ -462,14 +488,55 @@ export class SynapseRelayServer {
     }
   }
 
+  private isCurrentPeer(session: RelaySession, peer: RelayPeer): boolean {
+    return peer.role === 'host'
+      ? session.host?.ws === peer.ws
+      : session.client?.ws === peer.ws;
+  }
+
   private detachPeer(session: RelaySession, peer: RelayPeer): void {
     if (peer.role === 'host' && session.host?.ws === peer.ws) {
       session.host = null;
+      this.clearQueuedMessagesFromSender(session, peer.role);
+      this.closePeer(session, 'client', CLOSE_PEER_CHANGED, 'Relay peer disconnected');
     }
     if (peer.role === 'client' && session.client?.ws === peer.ws) {
       session.client = null;
+      this.clearQueuedMessagesFromSender(session, peer.role);
+      this.closePeer(session, 'host', CLOSE_PEER_CHANGED, 'Relay peer disconnected');
     }
     session.lastActivityAt = this.now();
+  }
+
+  private closePeer(
+    session: RelaySession,
+    role: RelayRole,
+    code: number,
+    reason: string,
+  ): void {
+    const peer = role === 'host' ? session.host : session.client;
+    if (!peer) {
+      return;
+    }
+    if (role === 'host') {
+      session.host = null;
+    } else {
+      session.client = null;
+    }
+    this.clearQueuedMessagesFromSender(session, role);
+    if (peer.ws.readyState === WebSocket.OPEN || peer.ws.readyState === WebSocket.CONNECTING) {
+      peer.ws.close(code, reason);
+    }
+  }
+
+  private clearQueuedMessagesFromSender(session: RelaySession, senderRole: RelayRole): void {
+    if (senderRole === 'host') {
+      session.queuedForClient = [];
+      session.queuedForClientBytes = 0;
+      return;
+    }
+    session.queuedForHost = [];
+    session.queuedForHostBytes = 0;
   }
 
   private isExpired(session: RelaySession): boolean {
@@ -578,7 +645,7 @@ class FixedWindowRateLimiter {
   }
 }
 
-function normalizeMessage(data: RawData, isBinary: boolean): RelayQueuedMessage {
+function normalizeMessage(data: RawData, isBinary: boolean): RelayMessage {
   const buffer = Array.isArray(data)
     ? Buffer.concat(data)
     : Buffer.isBuffer(data)
@@ -591,11 +658,15 @@ function normalizeMessage(data: RawData, isBinary: boolean): RelayQueuedMessage 
   return { data: text, isBinary: false, bytes: Buffer.byteLength(text) };
 }
 
-function sendMessage(ws: WebSocket, message: RelayQueuedMessage): void {
+function sendMessage(ws: WebSocket, message: RelayMessage): void {
   if (ws.readyState !== WebSocket.OPEN) {
     return;
   }
   ws.send(message.data, { binary: message.isBinary });
+}
+
+function oppositeRole(role: RelayRole): RelayRole {
+  return role === 'host' ? 'client' : 'host';
 }
 
 function safeHashEquals(left: string, right: string): boolean {

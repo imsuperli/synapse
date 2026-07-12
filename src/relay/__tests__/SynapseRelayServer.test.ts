@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { WebSocket } from 'ws';
+import { WebSocket, type RawData } from 'ws';
 import {
   createRelaySessionId,
   hashRelayToken,
@@ -67,6 +67,33 @@ describe('SynapseRelayServer', () => {
     expect(await message).toBe('early-host-hello');
   });
 
+  it('drops queued messages from a disconnected client before the host rejoins', async () => {
+    server = await startRelay();
+    const session = createSession();
+    const firstHost = await connect(hostUrl(session));
+
+    const firstHostClose = onceClose(firstHost);
+    firstHost.close();
+    await firstHostClose;
+
+    const staleClient = await connect(clientUrl(session));
+    staleClient.send('stale-client-hello');
+    const staleClientClose = onceClose(staleClient);
+    staleClient.close();
+    await staleClientClose;
+
+    const currentClient = await connect(clientUrl(session));
+    currentClient.send('current-client-hello');
+
+    const secondHost = new WebSocket(hostUrl(session));
+    sockets.push(secondHost);
+    const secondHostMessage = onceMessage(secondHost);
+    await onceOpen(secondHost);
+
+    expect(await secondHostMessage).toBe('current-client-hello');
+    await expect(noMessage(secondHost, 50)).resolves.toBeUndefined();
+  });
+
   it('rejects clients with an invalid token without attaching them to the session', async () => {
     server = await startRelay();
     const session = createSession();
@@ -98,6 +125,84 @@ describe('SynapseRelayServer', () => {
       sessions: 1,
       connections: 1,
       pairedSessions: 0,
+    });
+  });
+
+  it('closes the paired host when a client connection is replaced', async () => {
+    server = await startRelay();
+    const session = createSession();
+    const host = await connect(hostUrl(session));
+    const firstClient = await connect(clientUrl(session));
+
+    const hostClose = onceClose(host);
+    const firstClientClose = onceClose(firstClient);
+    const secondClient = await connect(clientUrl(session));
+
+    await expect(firstClientClose).resolves.toMatchObject({ code: 4003 });
+    await expect(hostClose).resolves.toMatchObject({
+      code: 4004,
+      reason: 'Relay peer was replaced',
+    });
+    expect(secondClient.readyState).toBe(WebSocket.OPEN);
+    expect(server.getStats()).toMatchObject({
+      sessions: 1,
+      connections: 1,
+      pairedSessions: 0,
+    });
+  });
+
+  it('closes the paired peer when either side disconnects', async () => {
+    server = await startRelay();
+    const hostDisconnectSession = createSession();
+    const hostA = await connect(hostUrl(hostDisconnectSession));
+    const clientA = await connect(clientUrl(hostDisconnectSession));
+
+    const clientAClose = onceClose(clientA);
+    hostA.close();
+    await expect(clientAClose).resolves.toMatchObject({
+      code: 4004,
+      reason: 'Relay peer disconnected',
+    });
+
+    const clientDisconnectSession = createSession();
+    const hostB = await connect(hostUrl(clientDisconnectSession));
+    const clientB = await connect(clientUrl(clientDisconnectSession));
+
+    const hostBClose = onceClose(hostB);
+    clientB.close();
+    await expect(hostBClose).resolves.toMatchObject({
+      code: 4004,
+      reason: 'Relay peer disconnected',
+    });
+  });
+
+  it('keeps separate relay sessions isolated when one client reconnects', async () => {
+    server = await startRelay();
+    const sessionA = createSession();
+    const sessionB = createSession();
+    const hostA = await connect(hostUrl(sessionA));
+    const clientA = await connect(clientUrl(sessionA));
+    const hostB = await connect(hostUrl(sessionB));
+    const clientB = await connect(clientUrl(sessionB));
+
+    const hostAClose = onceClose(hostA);
+    const clientAClose = onceClose(clientA);
+    await connect(clientUrl(sessionA));
+    await expect(clientAClose).resolves.toMatchObject({ code: 4003 });
+    await expect(hostAClose).resolves.toMatchObject({ code: 4004 });
+
+    const clientBMessage = onceMessage(clientB);
+    hostB.send('session-b-host-message');
+    expect(await clientBMessage).toBe('session-b-host-message');
+
+    const hostBMessage = onceMessage(hostB);
+    clientB.send('session-b-client-message');
+    expect(await hostBMessage).toBe('session-b-client-message');
+
+    expect(server.getStats()).toMatchObject({
+      sessions: 2,
+      connections: 3,
+      pairedSessions: 1,
     });
   });
 
@@ -195,5 +300,19 @@ function onceClose(socket: WebSocket): Promise<{ code: number; reason: string }>
     socket.once('close', (code, reason) => {
       resolve({ code, reason: reason.toString('utf8') });
     });
+  });
+}
+
+function noMessage(socket: WebSocket, ms: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off('message', onMessage);
+      resolve();
+    }, ms);
+    const onMessage = (data: RawData) => {
+      clearTimeout(timer);
+      reject(new Error(`Unexpected relay message: ${data.toString()}`));
+    };
+    socket.once('message', onMessage);
   });
 }

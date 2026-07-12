@@ -105,7 +105,13 @@ export class RemoteE2EEChannel {
       return;
     }
 
-    const plaintext = decrypt(raw, this.sharedKey);
+    let plaintext: string | null;
+    try {
+      plaintext = decrypt(raw, this.sharedKey);
+    } catch {
+      this.trackDecryptFailure();
+      return;
+    }
     if (plaintext === null) {
       this.trackDecryptFailure();
       return;

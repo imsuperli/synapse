@@ -58,6 +58,34 @@ describe('RemoteE2EEChannel', () => {
     expect(ws.send).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(1013, 'Backpressure limit exceeded');
   });
+
+  it('treats malformed encrypted text frames as decrypt failures instead of throwing', () => {
+    const serverKeypair = generateKeyPair();
+    const mobileKeypair = generateKeyPair();
+    const ws = createMockWebSocket();
+    const onError = vi.fn();
+
+    const channel = new RemoteE2EEChannel(ws, {
+      serverSecretKey: serverKeypair.secretKey,
+      validateToken: (token) => token === 'device-token',
+      onReady: vi.fn(),
+      onError,
+    });
+
+    channel.handleRawMessage(JSON.stringify({
+      type: 'e2ee_hello',
+      publicKeyB64: Buffer.from(mobileKeypair.publicKey).toString('base64'),
+    }));
+
+    expect(() => channel.handleRawMessage('{"type":"e2ee_hello"}')).not.toThrow();
+    expect(onError).not.toHaveBeenCalled();
+
+    for (let index = 0; index < 4; index += 1) {
+      channel.handleRawMessage('{"type":"e2ee_hello"}');
+    }
+
+    expect(onError).toHaveBeenCalledWith(4003, 'Too many decryption failures');
+  });
 });
 
 function createMockWebSocket(): WebSocket & {

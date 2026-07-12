@@ -63,6 +63,8 @@ export type RemotePairingOfferResult =
 
 const RELAY_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const RELAY_RECONNECT_DELAY_MS = 5_000;
+const RELAY_FAST_RECONNECT_DELAY_MS = 0;
+const RELAY_CLOSE_PEER_CHANGED = 4004;
 
 export class RemoteGateway {
   private readonly processManager: ProcessManager;
@@ -560,7 +562,7 @@ export class RemoteGateway {
     ws.on('message', (data, isBinary) => {
       this.handleSocketMessage(ws, normalizeWebSocketMessage(data, isBinary));
     });
-    ws.on('close', () => this.finalizeRelaySocket(ws));
+    ws.on('close', (code) => this.finalizeRelaySocket(ws, code));
     ws.on('error', () => {
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
@@ -568,7 +570,7 @@ export class RemoteGateway {
     });
   }
 
-  private finalizeRelaySocket(ws: WebSocket): void {
+  private finalizeRelaySocket(ws: WebSocket, code?: number): void {
     this.cleanupSocket(ws);
     const deviceId = this.relaySocketDeviceIds.get(ws);
     if (!deviceId) {
@@ -578,11 +580,27 @@ export class RemoteGateway {
       return;
     }
     this.relaySockets.delete(deviceId);
-    this.scheduleRelayReconnect(deviceId);
+    this.scheduleRelayReconnect(
+      deviceId,
+      code === RELAY_CLOSE_PEER_CHANGED
+        ? RELAY_FAST_RECONNECT_DELAY_MS
+        : RELAY_RECONNECT_DELAY_MS,
+    );
   }
 
-  private scheduleRelayReconnect(deviceId: string): void {
-    if (this.relayReconnectTimers.has(deviceId)) {
+  private scheduleRelayReconnect(
+    deviceId: string,
+    delayMs = RELAY_RECONNECT_DELAY_MS,
+  ): void {
+    const existingTimer = this.relayReconnectTimers.get(deviceId);
+    if (existingTimer) {
+      if (delayMs > 0) {
+        return;
+      }
+      clearTimeout(existingTimer);
+      this.relayReconnectTimers.delete(deviceId);
+    }
+    if (delayMs < 0) {
       return;
     }
     const settings = this.settingsStore.getSettings();
@@ -595,7 +613,7 @@ export class RemoteGateway {
       if (device && hasRelaySession(device)) {
         this.connectRelayHostForDevice(device);
       }
-    }, RELAY_RECONNECT_DELAY_MS);
+    }, delayMs);
     timer.unref?.();
     this.relayReconnectTimers.set(deviceId, timer);
   }

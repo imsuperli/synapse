@@ -466,7 +466,7 @@ export function connect(
           return
         }
 
-        const plaintext = decrypt(raw, sharedKey)
+        const plaintext = decryptText(raw)
         if (plaintext === null) {
           return
         }
@@ -543,7 +543,7 @@ export function connect(
         return
       }
 
-      const plaintext = decrypt(raw, sharedKey)
+      const plaintext = decryptText(raw)
       if (plaintext === null) {
         return
       }
@@ -987,6 +987,21 @@ export function connect(
 
   function recordValidatedInboundTraffic(): void {
     inboundSequence++
+  }
+
+  function decryptText(raw: string): string | null {
+    if (!sharedKey || sharedKey.length !== 32) {
+      return null
+    }
+    try {
+      return decrypt(raw, sharedKey)
+    } catch (error) {
+      console.log('[net] decrypt text frame failed', {
+        state,
+        message: error instanceof Error ? error.message : String(error)
+      })
+      return null
+    }
   }
 
   function handleBinaryFrame(bytes: Uint8Array): void {

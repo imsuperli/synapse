@@ -11,7 +11,12 @@ vi.mock('./e2ee', () => ({
   publicKeyFromBase64: () => new Uint8Array(32),
   publicKeyToBase64: () => 'client-public-key',
   encrypt: (plaintext: string) => `encrypted:${plaintext}`,
-  decrypt: (raw: string) => (raw === 'undecryptable' ? null : raw.replace(/^encrypted:/, '')),
+  decrypt: (raw: string) => {
+    if (raw === 'malformed-base64') {
+      throw new Error('Invalid base64 payload')
+    }
+    return raw === 'undecryptable' ? null : raw.replace(/^encrypted:/, '')
+  },
   decryptBytes: (bytes: Uint8Array) => bytes
 }))
 
@@ -205,6 +210,22 @@ describe('mobile rpc-client connection timeout', () => {
     vi.advanceTimersByTime(12_000)
 
     expect(socket.close).not.toHaveBeenCalled()
+    expect(client.getState()).toBe('connected')
+
+    client.close()
+  })
+
+  it('ignores encrypted text frames that fail decoding', async () => {
+    const client = connect('ws://desktop.invalid', 'token', 'server-key')
+    const socket = mockSockets[0]!
+
+    socket.open()
+    socket.receive(JSON.stringify({ type: 'e2ee_ready' }))
+    socket.receive('encrypted:{"type":"e2ee_authenticated"}')
+
+    expect(client.getState()).toBe('connected')
+    expect(() => socket.receive('malformed-base64')).not.toThrow()
+    await Promise.resolve()
     expect(client.getState()).toBe('connected')
 
     client.close()

@@ -216,6 +216,85 @@ describe('RemoteGateway integration', () => {
     });
   });
 
+  it('accepts direct LAN and relay clients for the same desktop at the same time', async () => {
+    relay = new SynapseRelayServer({
+      host: '127.0.0.1',
+      port: 0,
+      heartbeatIntervalMs: 1_000,
+      cleanupIntervalMs: 1_000,
+    });
+    await relay.start();
+
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    gateway = new RemoteGateway({
+      processManager: createProcessManager() as any,
+      userDataPath: tempDir,
+      hostName: 'Synapse Test',
+      appVersion: '9.9.9',
+      transportOptions: {
+        host: '127.0.0.1',
+        port: 0,
+      },
+    });
+    await gateway.updateSettings({
+      enabled: true,
+      relayEnabled: true,
+      relayEndpoint: `${relay.endpoint}${relay.relayPath}`,
+    });
+
+    const pairing = gateway.createPairingOffer({ address: '127.0.0.1' });
+    expect(pairing.available).toBe(true);
+    if (!pairing.available) {
+      throw new Error('pairing unavailable');
+    }
+    const offer = parsePairingCode(pairing.pairingUrl);
+    expect(offer?.relayEndpoint).toBe(`${relay.endpoint}${relay.relayPath}`);
+    expect(offer?.relaySessionId).toBeTruthy();
+    expect(offer?.relayClientToken).toBeTruthy();
+
+    await waitFor(() => relay!.getStats().sessions === 1);
+    const directSocket = await openWebSocket(offer!.endpoint);
+    const relaySocket = await openWebSocket(buildRelayClientUrl(offer!.relayEndpoint!, {
+      sessionId: offer!.relaySessionId!,
+      clientToken: offer!.relayClientToken!,
+    }));
+
+    try {
+      const directSharedKey = await authenticateEncryptedClient(directSocket, offer!);
+      const relaySharedKey = await authenticateEncryptedClient(relaySocket, offer!);
+
+      directSocket.send(encrypt(JSON.stringify({
+        id: 'req-direct',
+        method: REMOTE_METHODS.STATUS_GET,
+      }), directSharedKey));
+      relaySocket.send(encrypt(JSON.stringify({
+        id: 'req-relay',
+        method: REMOTE_METHODS.STATUS_GET,
+      }), relaySharedKey));
+
+      const directStatus = decrypt(rawToString(await waitForMessage(directSocket)), directSharedKey);
+      const relayStatus = decrypt(rawToString(await waitForMessage(relaySocket)), relaySharedKey);
+      expect(JSON.parse(directStatus ?? '')).toMatchObject({
+        id: 'req-direct',
+        ok: true,
+        result: { ok: true, protocolVersion: 1 },
+      });
+      expect(JSON.parse(relayStatus ?? '')).toMatchObject({
+        id: 'req-relay',
+        ok: true,
+        result: { ok: true, protocolVersion: 1 },
+      });
+      expect(relay!.getStats()).toMatchObject({
+        sessions: 1,
+        connections: 2,
+        pairedSessions: 1,
+      });
+    } finally {
+      directSocket.close();
+      relaySocket.close();
+    }
+  });
+
   it('does not clear pane state when the requested window and pane have no live process', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
     const processManager = {
@@ -346,6 +425,32 @@ function waitForMessage(ws: WebSocket): Promise<RawData> {
     ws.once('message', onMessage);
     ws.once('error', onError);
   });
+}
+
+async function authenticateEncryptedClient(
+  ws: WebSocket,
+  offer: { publicKeyB64: string; deviceToken: string },
+): Promise<Uint8Array> {
+  const mobileKeypair = generateKeyPair();
+  const sharedKey = deriveSharedKey(
+    mobileKeypair.secretKey,
+    publicKeyFromBase64(offer.publicKeyB64),
+  );
+
+  ws.send(JSON.stringify({
+    type: 'e2ee_hello',
+    publicKeyB64: Buffer.from(mobileKeypair.publicKey).toString('base64'),
+  }));
+  expect(rawToString(await waitForMessage(ws))).toBe(JSON.stringify({ type: 'e2ee_ready' }));
+
+  ws.send(encrypt(JSON.stringify({
+    type: 'e2ee_auth',
+    deviceToken: offer.deviceToken,
+  }), sharedKey));
+
+  const authMessage = decrypt(rawToString(await waitForMessage(ws)), sharedKey);
+  expect(authMessage).toBe(JSON.stringify({ type: 'e2ee_authenticated' }));
+  return sharedKey;
 }
 
 function rawToString(data: RawData): string {
