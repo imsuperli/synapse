@@ -242,7 +242,14 @@ window.onerror = function(msg) {
   var MIN_TEXT_SCALE = TEXT_SCALE_PRESETS[0];
   var MAX_TEXT_SCALE = TEXT_SCALE_PRESETS[TEXT_SCALE_PRESETS.length - 1];
   var textScaleMode = 'font-size';
+  function stableTextScaleFallback() {
+    if (typeof currentTextScale === 'number' && isFinite(currentTextScale)) {
+      return Math.max(MIN_TEXT_SCALE, Math.min(MAX_TEXT_SCALE, currentTextScale));
+    }
+    return 1;
+  }
   function snapToTextScalePreset(value) {
+    if (typeof value !== 'number' || !isFinite(value)) return stableTextScaleFallback();
     var best = TEXT_SCALE_PRESETS[0], bestDelta = Infinity;
     for (var i = 0; i < TEXT_SCALE_PRESETS.length; i++) {
       var delta = Math.abs(TEXT_SCALE_PRESETS[i] - value);
@@ -275,7 +282,7 @@ window.onerror = function(msg) {
   // immediately. In viewport-zoom mode, leave xterm metrics alone and persist a
   // CSS multiplier so remote TUI snapshots keep their desktop cursor grid.
   function applyTextScale(scale) {
-    currentTextScale = scale;
+    currentTextScale = snapToTextScalePreset(scale);
     if (!term) return;
     if (isViewportZoomTextScale()) {
       userScale = 1;
@@ -725,7 +732,7 @@ window.onerror = function(msg) {
 
   function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
     textScaleMode = normalizeTextScaleMode(nextTextScaleMode);
-    if (typeof nextFontScale === 'number' && nextFontScale > 0) currentTextScale = nextFontScale;
+    if (typeof nextFontScale === 'number' && nextFontScale > 0) currentTextScale = snapToTextScalePreset(nextFontScale);
     // Why: a width-reflow re-stream rewraps the same content at new cols.
     // Distance-from-bottom (rows) is the only stable anchor across reflow,
     // since line counts and cell positions change. null = stay pinned to bottom.
@@ -994,13 +1001,14 @@ window.onerror = function(msg) {
       textScaleMode = normalizeTextScaleMode(msg.textScaleMode);
       // Why: ignore RN echoing back the value a pinch just set (msg.fontScale ===
       // currentTextScale) so the post-pinch state isn't reset; only apply changes.
-      if (typeof msg.fontScale === 'number' && msg.fontScale > 0 && msg.fontScale !== currentTextScale) {
+      var nextFontScale = snapToTextScalePreset(msg.fontScale);
+      if (nextFontScale !== currentTextScale) {
         userScale = 1;
         if (!isViewportZoomTextScale()) {
           panX = 0;
           panY = 0;
         }
-        applyTextScale(msg.fontScale);
+        applyTextScale(nextFontScale);
       }
     } else if (msg.type === 'resize') {
       resize(msg.cols, msg.rows);
@@ -1760,6 +1768,24 @@ window.onerror = function(msg) {
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  function beginPinchGesture(a, b) {
+    var dist = getDistance(a, b);
+    if (!isFinite(dist) || dist <= 0) return false;
+    ts.isPinching = true;
+    smoothScrollOffsetY = 0;
+    ts.pinchDist = dist;
+    ts.pinchScale = (typeof userScale === 'number' && isFinite(userScale) && userScale > 0)
+      ? userScale
+      : 1;
+    var mx = (a.clientX + b.clientX) / 2;
+    var my = (a.clientY + b.clientY) / 2;
+    var total = getTotalScale();
+    if (!isFinite(total) || total <= 0) total = 1;
+    ts.pinchSurfX = (mx - panX) / total;
+    ts.pinchSurfY = (my - panY) / total;
+    return true;
+  }
+
   function attachSurfaceEventHandlers(targetSurface) {
     if (!targetSurface || targetSurface.__orcaSurfaceHandlersAttached) return;
     targetSurface.__orcaSurfaceHandlersAttached = true;
@@ -1775,15 +1801,7 @@ window.onerror = function(msg) {
         ts.momentumId = null;
       }
       if (e.touches.length === 2) {
-        ts.isPinching = true;
-        smoothScrollOffsetY = 0;
-        ts.pinchDist = getDistance(e.touches[0], e.touches[1]);
-        ts.pinchScale = userScale;
-        var mx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-        var my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-        var total = getTotalScale();
-        ts.pinchSurfX = (mx - panX) / total;
-        ts.pinchSurfY = (my - panY) / total;
+        beginPinchGesture(e.touches[0], e.touches[1]);
       } else if (e.touches.length === 1) {
         ts.isPinching = false;
         ts.lastX = e.touches[0].clientX;
@@ -1801,20 +1819,28 @@ window.onerror = function(msg) {
       e.stopPropagation();
 
       if (e.touches.length === 2) {
-        ts.isPinching = true;
         var dist = getDistance(e.touches[0], e.touches[1]);
+        if (!ts.isPinching || !isFinite(ts.pinchDist) || ts.pinchDist <= 0 || !isFinite(ts.pinchScale) || ts.pinchScale <= 0) {
+          if (!beginPinchGesture(e.touches[0], e.touches[1])) return;
+          return;
+        }
+        if (!isFinite(dist) || dist <= 0) return;
         var mx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         var my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
 
         var ratio = dist / ts.pinchDist;
+        if (!isFinite(ratio) || ratio <= 0) return;
         // Why: userScale is a CSS multiplier on the current font size; bound it so
         // the resulting apparent size (currentTextScale × userScale) stays within
         // the preset range, since release snaps to one of those presets.
         var loScale = MIN_TEXT_SCALE / currentTextScale;
         var hiScale = MAX_TEXT_SCALE / currentTextScale;
-        userScale = Math.max(loScale, Math.min(hiScale, ts.pinchScale * ratio));
+        var nextUserScale = ts.pinchScale * ratio;
+        if (!isFinite(nextUserScale) || nextUserScale <= 0) return;
+        userScale = Math.max(loScale, Math.min(hiScale, nextUserScale));
 
         var total = getTotalScale();
+        if (!isFinite(total) || total <= 0) return;
         panX = mx - ts.pinchSurfX * total;
         panY = my - ts.pinchSurfY * total;
         clampPan();
