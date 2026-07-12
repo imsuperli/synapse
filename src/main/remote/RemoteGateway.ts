@@ -447,7 +447,7 @@ export class RemoteGateway {
       }
     };
 
-    channel.onMessage((plaintext, encryptedReply) => {
+    channel.onMessage((plaintext, encryptedReply, encryptedBinaryReply) => {
       const authenticatedDeviceToken = this.e2eeChannels.get(ws)?.deviceToken ?? null;
       const device = authenticatedDeviceToken
         ? this.deviceRegistry.validateToken(authenticatedDeviceToken)
@@ -465,6 +465,12 @@ export class RemoteGateway {
         plaintext,
         { device, connectionId },
         (event) => sendEncryptedJson(encryptedReply, event),
+        (payload) => {
+          const sent = encryptedBinaryReply(payload);
+          if (!sent && ws.readyState === ws.OPEN) {
+            ws.close(1013, 'Backpressure limit exceeded');
+          }
+        },
       ).then((response) => {
         sendEncryptedJson(encryptedReply, response);
       }).catch((error) => {

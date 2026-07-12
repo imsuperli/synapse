@@ -87,7 +87,7 @@ function encryptedStreamingReady(id: string, streamId: number): string {
     id,
     ok: true,
     streaming: true,
-    result: { type: 'subscribed', streamId }
+    result: { type: 'subscribed', streamId, subscriptionId: `sub-${streamId}` }
   })}`
 }
 

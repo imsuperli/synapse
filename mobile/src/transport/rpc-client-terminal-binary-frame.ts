@@ -37,6 +37,7 @@ export function handleTerminalBinaryFrame(
     listener({
       type: 'data',
       streamId: frame.streamId,
+      seq: frame.seq,
       chunk: decodeTerminalStreamText(frame.payload)
     })
     return

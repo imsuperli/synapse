@@ -12,6 +12,7 @@ export type RemoteRpcSuccess = {
   id: string;
   ok: true;
   result: unknown;
+  streaming?: true;
 };
 
 export type RemoteRpcError = {

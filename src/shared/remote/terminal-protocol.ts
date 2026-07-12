@@ -41,7 +41,9 @@ export type TerminalHistoryResult = {
 };
 
 export type TerminalSubscribeResult = {
+  type: 'subscribed';
   subscriptionId: string;
+  streamId: number;
   firstSeq: number;
   lastSeq: number;
   gap: boolean;
@@ -61,6 +63,9 @@ export const TerminalHistoryParamsSchema = TerminalPaneRefSchema.extend({
 
 export const TerminalSubscribeParamsSchema = TerminalPaneRefSchema.extend({
   sinceSeq: z.number().int().nonnegative().optional(),
+  capabilities: z.object({
+    terminalBinaryStream: z.literal(1),
+  }).strict(),
 }).strict();
 
 export const TerminalSendParamsSchema = TerminalPaneRefSchema.extend({

@@ -48,6 +48,7 @@ type RemoteMethodHandler = (
   params: unknown,
   context: DispatchContext,
   emit: (event: RemoteStreamEvent) => void,
+  emitBinary: (payload: Uint8Array<ArrayBufferLike>) => void,
 ) => Promise<unknown> | unknown;
 
 type RemoteMethodSpec = {
@@ -87,6 +88,7 @@ export class RemoteDispatcher {
     raw: string,
     context: DispatchContext,
     emit: (event: RemoteStreamEvent) => void,
+    emitBinary: (payload: Uint8Array<ArrayBufferLike>) => void = () => undefined,
   ): Promise<RemoteRpcResponse> {
     let parsed: unknown;
     try {
@@ -140,7 +142,10 @@ export class RemoteDispatcher {
     }
 
     try {
-      const result = await method.handler(params, context, emit);
+      const result = await method.handler(params, context, emit, emitBinary);
+      if (isStreamingMethodResult(result)) {
+        return { id: request.id, ok: true, streaming: true, result: result.result };
+      }
       return { id: request.id, ok: true, result };
     } catch (error) {
       const mapped = mapRemoteError(error);
@@ -211,29 +216,26 @@ export class RemoteDispatcher {
 
     this.methods.set(REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
       params: TerminalSubscribeParamsSchema,
-      handler: (params, context, emit) => {
+      handler: (params, context, _emit, emitBinary) => {
         const typed = TerminalSubscribeParamsSchema.parse(params);
-        let subscriptionId = '';
         const subscription = this.terminalController.subscribe(
           typed.windowId,
           typed.paneId,
           typed.sinceSeq,
-          (payload) => {
-            emit({
-              type: 'event',
-              subscriptionId,
-              payload,
-            });
-          },
+          emitBinary,
         );
-        subscriptionId = subscription.subscriptionId;
         this.trackSubscription(context.connectionId, subscription.subscriptionId);
         setImmediate(() => subscription.activate());
         return {
-          subscriptionId: subscription.subscriptionId,
-          firstSeq: subscription.firstSeq,
-          lastSeq: subscription.lastSeq,
-          gap: subscription.gap,
+          streaming: true,
+          result: {
+            type: 'subscribed',
+            subscriptionId: subscription.subscriptionId,
+            streamId: subscription.streamId,
+            firstSeq: subscription.firstSeq,
+            lastSeq: subscription.lastSeq,
+            gap: subscription.gap,
+          },
         };
       },
     });
@@ -380,6 +382,15 @@ function sanitizeDevice(device: RemoteDeviceEntry) {
 
 function formatZodError(error: ZodError): string {
   return error.issues[0]?.message ?? 'Invalid request';
+}
+
+function isStreamingMethodResult(value: unknown): value is { streaming: true; result: unknown } {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    (value as { streaming?: unknown }).streaming === true &&
+    'result' in value
+  );
 }
 
 function mapRemoteError(error: unknown): { code: string; message: string } {

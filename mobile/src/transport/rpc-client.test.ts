@@ -521,7 +521,7 @@ describe('mobile rpc-client connection timeout', () => {
         id: request.id,
         ok: true,
         streaming: true,
-        result: { type: 'subscribed', streamId: 42 },
+        result: { type: 'subscribed', streamId: 42, subscriptionId: 'sub-42' },
         _meta: { runtimeId: 'r1' }
       })}`
     )
@@ -529,7 +529,7 @@ describe('mobile rpc-client connection timeout', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(events).toContainEqual({ type: 'data', streamId: 42, chunk: 'hello' })
+    expect(events).toContainEqual({ type: 'data', streamId: 42, seq: 1, chunk: 'hello' })
 
     client.close()
   })
@@ -554,7 +554,15 @@ describe('mobile rpc-client connection timeout', () => {
       `encrypted:${JSON.stringify({
         id: request.id,
         ok: true,
-        result: { subscriptionId: 'terminal-sub-1', firstSeq: 8, lastSeq: 9, gap: false }
+        streaming: true,
+        result: {
+          type: 'subscribed',
+          subscriptionId: 'terminal-sub-1',
+          streamId: 42,
+          firstSeq: 8,
+          lastSeq: 9,
+          gap: false
+        }
       })}`
     )
 
@@ -854,7 +862,7 @@ describe('mobile rpc-client connection timeout', () => {
           id: subscribe.id,
           ok: true,
           streaming: true,
-          result: { type: 'subscribed', streamId: 42 }
+          result: { type: 'subscribed', streamId: 42, subscriptionId: 'sub-42' }
         })}`
       )
 
@@ -864,7 +872,7 @@ describe('mobile rpc-client connection timeout', () => {
       await Promise.resolve()
       await vi.advanceTimersByTimeAsync(8_000)
 
-      expect(events).toContainEqual({ type: 'data', streamId: 42, chunk: 'still alive' })
+      expect(events).toContainEqual({ type: 'data', streamId: 42, seq: 1, chunk: 'still alive' })
       expect(socket.close).not.toHaveBeenCalled()
       expect(client.getState()).toBe('connected')
 

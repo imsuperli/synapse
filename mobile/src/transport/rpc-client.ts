@@ -603,6 +603,12 @@ export function connect(
             }
           }
           if (isTerminalSubscribedResult(result)) {
+            stream.subscriptionId = result.subscriptionId
+            if (stream.cancelled) {
+              sendTerminalUnsubscribe(result.subscriptionId)
+              removeStreamListener(response.id)
+              return
+            }
             let ids = terminalStreamIdsByRequest.get(response.id)
             if (!ids) {
               ids = new Set()
@@ -1284,12 +1290,13 @@ export function connect(
 
 function isTerminalSubscribedResult(
   value: unknown
-): value is { type: 'subscribed'; streamId: number } {
+): value is { type: 'subscribed'; streamId: number; subscriptionId: string } {
   return (
     !!value &&
     typeof value === 'object' &&
     (value as { type?: unknown }).type === 'subscribed' &&
-    typeof (value as { streamId?: unknown }).streamId === 'number'
+    typeof (value as { streamId?: unknown }).streamId === 'number' &&
+    typeof (value as { subscriptionId?: unknown }).subscriptionId === 'string'
   )
 }
 
