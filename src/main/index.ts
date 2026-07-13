@@ -51,7 +51,8 @@ import { createPtyDataForwarder } from './utils/ptyDataForwarder';
 import { isTerminalPane } from '../shared/utils/terminalCapabilities';
 import { isAllowedBrowserUrl } from '../shared/utils/browserUrls';
 import { normalizeImagePath, toFileUrl } from '../shared/utils/appImage';
-import { getAgentController } from './handlers/agentHandlers';
+import { disposeAgentTaskForPane, getAgentController } from './handlers/agentHandlers';
+import { createSSHWindowSession } from './handlers/sshSessionHandlers';
 import { RemoteGateway } from './remote/RemoteGateway';
 
 const APP_DISPLAY_NAME = 'Synapse';
@@ -622,8 +623,34 @@ if (hasSingleInstanceLock) {
           }
         });
       },
+      listSSHProfiles: async () => {
+        if (!sshProfileStore) {
+          throw new Error('SSH profile store is not initialized');
+        }
+        return sshProfileStore.list();
+      },
+      createSSHWindow: (params) => createSSHWindowSession({
+        mainWindow,
+        processManager,
+        statusPoller,
+        ptySubscriptionManager,
+        sshProfileStore,
+        sshVaultService,
+      }, {
+        profileId: params.profileId,
+        name: params.name,
+        remoteCwd: params.workingDirectory,
+        command: params.command,
+        initialCols: params.initialCols,
+        initialRows: params.initialRows,
+      }),
       onRemoteWindowCreated: ({ workspace }) => {
         publishRemoteWorkspaceUpdate(workspace);
+      },
+      onRemotePaneDeleted: ({ paneId }) => {
+        ptySubscriptionManager?.remove(paneId);
+        statusPoller?.removePane(paneId);
+        disposeAgentTaskForPane(paneId);
       },
       onRemoteWindowDeleted: ({ windowId, paneIds, workspace }) => {
         for (const paneId of paneIds) {

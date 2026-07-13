@@ -8,6 +8,7 @@ import {
   Pane,
   WindowStatus,
 } from '../types/window';
+import { removePaneFromLayout } from '../../shared/utils/layout-tree';
 import { getInactiveWindowStatus, isLegacyPausedStatus } from './windowLifecycle';
 
 type DestroyedSessionCollapseResult = {
@@ -255,55 +256,7 @@ export function closePane(
   layout: LayoutNode,
   paneId: string
 ): LayoutNode | null {
-  if (layout.type === 'pane') {
-    // 如果是要关闭的窗格，返回 null
-    return layout.id === paneId ? null : layout;
-  }
-
-  let hasChanges = false;
-  const newChildren: LayoutNode[] = [];
-  const remainingSizes: number[] = [];
-
-  // SplitNode: 递归处理子节点，仅在当前层子节点数量变化时重算 sizes
-  layout.children.forEach((child, index) => {
-    const nextChild = closePane(child, paneId);
-    if (nextChild !== child) {
-      hasChanges = true;
-    }
-    if (nextChild !== null) {
-      newChildren.push(nextChild);
-      remainingSizes.push(layout.sizes[index] ?? 0);
-    }
-  });
-
-  if (!hasChanges) {
-    return layout;
-  }
-
-  // 如果没有子节点了，返回 null
-  if (newChildren.length === 0) {
-    return null;
-  }
-
-  // 仅保留一个子节点时继续保留当前 split，避免幸存 pane 被卸载重建
-  if (newChildren.length === 1) {
-    return {
-      ...layout,
-      children: newChildren,
-      sizes: [1],
-    };
-  }
-
-  const sizesChanged = newChildren.length !== layout.children.length;
-  const newSizes = sizesChanged
-    ? normalizeSizes(remainingSizes)
-    : layout.sizes;
-
-  return {
-    ...layout,
-    children: newChildren,
-    sizes: newSizes,
-  };
+  return removePaneFromLayout(layout, paneId);
 }
 
 function hasStrongTmuxAgentMarker(pane: Pane): boolean {

@@ -111,6 +111,8 @@ export interface CreateSSHWindowConfig {
   profileId: string;
   remoteCwd?: string;
   command?: string;
+  initialCols?: number;
+  initialRows?: number;
 }
 
 export interface StartSSHPaneConfig {

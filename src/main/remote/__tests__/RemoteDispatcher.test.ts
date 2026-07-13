@@ -50,9 +50,13 @@ describe('RemoteDispatcher', () => {
         startWindow?: ReturnType<typeof vi.fn>;
         closeWindow?: ReturnType<typeof vi.fn>;
         closePane?: ReturnType<typeof vi.fn>;
+        deletePane?: ReturnType<typeof vi.fn>;
         deleteWindow?: ReturnType<typeof vi.fn>;
         createGroup?: ReturnType<typeof vi.fn>;
         deleteGroup?: ReturnType<typeof vi.fn>;
+        removeWindowFromGroup?: ReturnType<typeof vi.fn>;
+        supportsSSHWindowCreation?: ReturnType<typeof vi.fn>;
+        listSSHProfiles?: ReturnType<typeof vi.fn>;
       };
     } = {},
   ) {
@@ -933,6 +937,7 @@ describe('RemoteDispatcher', () => {
     const harness = createHarness('mobile.window-control', { stateProvider });
 
     const response = await dispatch(harness, REMOTE_METHODS.WINDOW_CREATE, {
+      backend: 'local',
       name: 'Mobile Shell',
       workingDirectory: '/repo',
     });
@@ -947,9 +952,114 @@ describe('RemoteDispatcher', () => {
       },
     });
     expect(stateProvider.createWindow).toHaveBeenCalledWith({
+      backend: 'local',
       name: 'Mobile Shell',
       workingDirectory: '/repo',
     });
+  });
+
+  it('rejects ambiguous window creation requests without a backend', async () => {
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      startWindow: vi.fn(),
+      createWindow: vi.fn(),
+    };
+    const harness = createHarness('mobile.window-control', { stateProvider });
+
+    const response = await dispatch(harness, REMOTE_METHODS.WINDOW_CREATE, {
+      workingDirectory: '/repo',
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: REMOTE_ERROR_CODES.INVALID_PARAMS },
+    });
+    expect(stateProvider.createWindow).not.toHaveBeenCalled();
+  });
+
+  it('lists safe SSH profiles and delegates SSH window creation for window-control devices', async () => {
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      startWindow: vi.fn(),
+      supportsSSHWindowCreation: vi.fn(() => true),
+      listSSHProfiles: vi.fn(() => ({
+        profiles: [{
+          profileId: 'profile-1',
+          name: 'Production',
+          host: 'prod.example.com',
+          port: 22,
+          user: 'deploy',
+          defaultRemoteCwd: '/srv/app',
+          remoteCommand: null,
+        }],
+      })),
+      createWindow: vi.fn(() => ({
+        window: {
+          windowId: 'win-ssh',
+          name: 'Production',
+          panes: [],
+        },
+        pane: {
+          windowId: 'win-ssh',
+          paneId: 'pane-ssh',
+          kind: 'terminal',
+          backend: 'ssh',
+          running: true,
+        },
+      })),
+    };
+    const harness = createHarness('mobile.window-control', { stateProvider });
+
+    const capabilities = await dispatch(harness, REMOTE_METHODS.REMOTE_CAPABILITIES);
+    const profileResponse = await dispatch(harness, REMOTE_METHODS.SSH_PROFILE_LIST);
+    const createResponse = await dispatch(harness, REMOTE_METHODS.WINDOW_CREATE, {
+      backend: 'ssh',
+      profileId: 'profile-1',
+      workingDirectory: '/srv/app',
+      initialCols: 100,
+      initialRows: 30,
+    });
+
+    expect(capabilities).toMatchObject({
+      ok: true,
+      result: { methods: expect.arrayContaining([REMOTE_METHODS.SSH_PROFILE_LIST]) },
+    });
+    expect(profileResponse).toMatchObject({
+      ok: true,
+      result: { profiles: [{ profileId: 'profile-1', name: 'Production' }] },
+    });
+    expect(createResponse).toMatchObject({
+      ok: true,
+      result: { pane: { windowId: 'win-ssh', paneId: 'pane-ssh' } },
+    });
+    expect(stateProvider.createWindow).toHaveBeenCalledWith({
+      backend: 'ssh',
+      profileId: 'profile-1',
+      workingDirectory: '/srv/app',
+      initialCols: 100,
+      initialRows: 30,
+    });
+  });
+
+  it('does not expose SSH profile summaries to lower-privilege mobile scopes', async () => {
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      createWindow: vi.fn(),
+      supportsSSHWindowCreation: vi.fn(() => true),
+      listSSHProfiles: vi.fn(() => ({ profiles: [] })),
+    };
+    const harness = createHarness('mobile.control', { stateProvider });
+
+    const response = await dispatch(harness, REMOTE_METHODS.SSH_PROFILE_LIST);
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: REMOTE_ERROR_CODES.FORBIDDEN },
+    });
+    expect(stateProvider.listSSHProfiles).not.toHaveBeenCalled();
   });
 
   it('stops windows and panes through the state provider for window-control devices', async () => {
@@ -1000,6 +1110,69 @@ describe('RemoteDispatcher', () => {
     });
     expect(stateProvider.closeWindow).toHaveBeenCalledWith({ windowId: 'win-1' });
     expect(stateProvider.closePane).toHaveBeenCalledWith({ windowId: 'win-1', paneId: 'pane-1' });
+  });
+
+  it('deletes panes and removes grouped windows through structural window-control RPCs', async () => {
+    const replacementPane = {
+      windowId: 'win-1',
+      paneId: 'pane-2',
+      kind: 'terminal',
+      running: true,
+    };
+    const stateProvider = {
+      listWindows: vi.fn(),
+      listPanes: vi.fn(),
+      deletePane: vi.fn(() => ({
+        deleted: true,
+        deletedPaneId: 'pane-1',
+        window: {
+          windowId: 'win-1',
+          name: 'Project',
+          panes: [replacementPane],
+        },
+        replacementPane,
+      })),
+      removeWindowFromGroup: vi.fn(() => ({
+        removed: true,
+        groupId: 'group-1',
+        windowId: 'win-1',
+        dissolved: false,
+        group: null,
+        replacementWindow: {
+          windowId: 'win-2',
+          name: 'Peer',
+          panes: [],
+        },
+        replacementPane: null,
+      })),
+    };
+    const harness = createHarness('mobile.window-control', { stateProvider });
+
+    const paneResponse = await dispatch(harness, REMOTE_METHODS.PANE_DELETE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+    });
+    const groupResponse = await dispatch(harness, REMOTE_METHODS.GROUP_WINDOW_REMOVE, {
+      groupId: 'group-1',
+      windowId: 'win-1',
+    });
+
+    expect(paneResponse).toMatchObject({
+      ok: true,
+      result: { deleted: true, replacementPane: { paneId: 'pane-2' } },
+    });
+    expect(groupResponse).toMatchObject({
+      ok: true,
+      result: { removed: true, groupId: 'group-1', windowId: 'win-1' },
+    });
+    expect(stateProvider.deletePane).toHaveBeenCalledWith({
+      windowId: 'win-1',
+      paneId: 'pane-1',
+    });
+    expect(stateProvider.removeWindowFromGroup).toHaveBeenCalledWith({
+      groupId: 'group-1',
+      windowId: 'win-1',
+    });
   });
 
   it('deletes windows and manages groups through the state provider for window-control devices', async () => {
@@ -1124,6 +1297,8 @@ describe('RemoteDispatcher', () => {
           REMOTE_METHODS.WINDOW_LIST,
           REMOTE_METHODS.WINDOW_START,
           REMOTE_METHODS.PANE_CLOSE,
+          REMOTE_METHODS.PANE_DELETE,
+          REMOTE_METHODS.GROUP_WINDOW_REMOVE,
           REMOTE_METHODS.DEVICE_REVOKE,
         ]),
       },

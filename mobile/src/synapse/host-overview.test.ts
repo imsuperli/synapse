@@ -10,6 +10,7 @@ vi.mock('../transport/rpc-client', () => ({
 }))
 
 import {
+  canCreateSSHWindow,
   canCreateWindow,
   canUseWindowList,
   flattenTerminalPanes,
@@ -74,6 +75,7 @@ describe('Synapse Mobile host overview data', () => {
       mode: 'terminals',
       deviceScope: 'mobile.control',
       canCreateWindow: false,
+      canCreateSSHWindow: false,
       groups: [],
       terminals: [{ windowId: 'w1', paneId: 'p1' }]
     })
@@ -92,7 +94,7 @@ describe('Synapse Mobile host overview data', () => {
         ok: true,
         result: {
           protocolVersion: 1,
-          methods: ['window.create', 'window.list', 'pane.list', 'terminal.list']
+          methods: ['ssh.profile.list', 'window.create', 'window.list', 'pane.list', 'terminal.list']
         }
       },
       'window.list': {
@@ -175,6 +177,7 @@ describe('Synapse Mobile host overview data', () => {
       mode: 'windows',
       deviceScope: 'mobile.window-control',
       canCreateWindow: true,
+      canCreateSSHWindow: true,
       windows: [{ windowId: 'w1', name: 'Workspace' }],
       groups: [{ groupId: 'g1', name: 'Phone Group' }],
       terminals: [{ windowId: 'w1', paneId: 'p1', pid: 8 }]
@@ -189,6 +192,8 @@ describe('Synapse Mobile host overview data', () => {
     expect(canUseWindowList('mobile.admin', ['window.list'])).toBe(true)
     expect(canCreateWindow('mobile.control', ['window.create'])).toBe(false)
     expect(canCreateWindow('mobile.window-control', ['window.create'])).toBe(true)
+    expect(canCreateSSHWindow('mobile.window-control', ['window.create'])).toBe(false)
+    expect(canCreateSSHWindow('mobile.window-control', ['window.create', 'ssh.profile.list'])).toBe(true)
   })
 
   it('flattens running and stopped terminal panes into terminal routes', () => {

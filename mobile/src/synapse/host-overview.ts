@@ -15,6 +15,7 @@ export type HostOverviewData =
       mode: 'windows'
       deviceScope: RemoteDeviceScope
       canCreateWindow: boolean
+      canCreateSSHWindow: boolean
       windows: RemoteWindowSummary[]
       groups: RemoteWindowGroupSummary[]
       terminals: RemoteTerminalSummary[]
@@ -23,6 +24,7 @@ export type HostOverviewData =
       mode: 'terminals'
       deviceScope: RemoteDeviceScope
       canCreateWindow: boolean
+      canCreateSSHWindow: boolean
       windows: RemoteWindowSummary[]
       groups: RemoteWindowGroupSummary[]
       terminals: RemoteTerminalSummary[]
@@ -41,6 +43,7 @@ export async function loadHostOverviewData(client: RpcClient): Promise<HostOverv
       mode: 'windows',
       deviceScope: status.deviceScope,
       canCreateWindow: canCreateWindow(status.deviceScope, capabilities.methods),
+      canCreateSSHWindow: canCreateSSHWindow(status.deviceScope, capabilities.methods),
       windows,
       groups,
       terminals: flattenTerminalPanes(windows)
@@ -52,6 +55,7 @@ export async function loadHostOverviewData(client: RpcClient): Promise<HostOverv
     mode: 'terminals',
     deviceScope: status.deviceScope,
     canCreateWindow: canCreateWindow(status.deviceScope, capabilities.methods),
+    canCreateSSHWindow: canCreateSSHWindow(status.deviceScope, capabilities.methods),
     windows: [],
     groups: [],
     terminals
@@ -64,6 +68,10 @@ export function canUseWindowList(scope: RemoteDeviceScope, methods: string[]): b
 
 export function canCreateWindow(scope: RemoteDeviceScope, methods: string[]): boolean {
   return WINDOW_LIST_SCOPES.has(scope) && methods.includes('window.create')
+}
+
+export function canCreateSSHWindow(scope: RemoteDeviceScope, methods: string[]): boolean {
+  return canCreateWindow(scope, methods) && methods.includes('ssh.profile.list')
 }
 
 export function flattenTerminalPanes(windows: RemoteWindowSummary[]): RemoteTerminalSummary[] {

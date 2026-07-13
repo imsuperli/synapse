@@ -3,8 +3,10 @@ import WebSocket, { type RawData } from 'ws';
 import type { ProcessManager } from '../services/ProcessManager';
 import { ProcessStatus } from '../types/process';
 import type { Workspace } from '../types/workspace';
+import type { SSHProfile } from '../../shared/types/ssh';
 import type { Window } from '../../shared/types/window';
 import { WindowStatus } from '../../shared/types/window';
+import type { WindowCreateParams } from '../../shared/remote/window-protocol';
 import type { RemoteDeviceScope } from '../../shared/remote/methods';
 import { PathValidator } from '../utils/pathValidator';
 import { resolveShellProgram } from '../utils/shell';
@@ -43,7 +45,10 @@ type RemoteGatewayOptions = {
   onPanePtySubscription?: (paneId: string, unsubscribe: () => void) => void;
   onPanePtyUnsubscribe?: (paneId: string) => void;
   onLocalPaneStarted?: (payload: { windowId: string; workingDirectory: string }) => void | Promise<void>;
+  listSSHProfiles?: () => Promise<SSHProfile[]>;
+  createSSHWindow?: (params: Extract<WindowCreateParams, { backend: 'ssh' }>) => Promise<Window>;
   onRemoteWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
+  onRemotePaneDeleted?: (payload: { windowId: string; paneId: string; workspace: Workspace }) => void | Promise<void>;
   onRemoteWindowDeleted?: (payload: { windowId: string; paneIds: string[]; workspace: Workspace }) => void | Promise<void>;
   onRemoteWindowRuntimeUpdated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
   onRemoteWorkspaceLayoutUpdated?: (payload: { workspace: Workspace }) => void | Promise<void>;
@@ -81,6 +86,7 @@ export class RemoteGateway {
   private readonly onPanePtyUnsubscribe: ((paneId: string) => void) | undefined;
   private readonly onLocalPaneStarted: ((payload: { windowId: string; workingDirectory: string }) => void | Promise<void>) | undefined;
   private readonly onRemoteWindowCreated: ((payload: { window: Window; workspace: Workspace }) => void | Promise<void>) | undefined;
+  private readonly onRemotePaneDeleted: ((payload: { windowId: string; paneId: string; workspace: Workspace }) => void | Promise<void>) | undefined;
   private readonly onRemoteWindowDeleted: ((payload: { windowId: string; paneIds: string[]; workspace: Workspace }) => void | Promise<void>) | undefined;
   private readonly onRemoteWindowRuntimeUpdated: ((payload: { window: Window; workspace: Workspace }) => void | Promise<void>) | undefined;
   private readonly onRemoteWorkspaceLayoutUpdated: ((payload: { workspace: Workspace }) => void | Promise<void>) | undefined;
@@ -111,6 +117,7 @@ export class RemoteGateway {
     this.onPanePtyUnsubscribe = options.onPanePtyUnsubscribe;
     this.onLocalPaneStarted = options.onLocalPaneStarted;
     this.onRemoteWindowCreated = options.onRemoteWindowCreated;
+    this.onRemotePaneDeleted = options.onRemotePaneDeleted;
     this.onRemoteWindowDeleted = options.onRemoteWindowDeleted;
     this.onRemoteWindowRuntimeUpdated = options.onRemoteWindowRuntimeUpdated;
     this.onRemoteWorkspaceLayoutUpdated = options.onRemoteWorkspaceLayoutUpdated;
@@ -122,8 +129,11 @@ export class RemoteGateway {
           getCurrentWorkspace: options.getCurrentWorkspace,
           processManager: this.processManager,
           startLocalTerminalPane: (params) => this.startLocalTerminalPane(params),
+          listSSHProfiles: options.listSSHProfiles,
+          createSSHWindow: options.createSSHWindow,
           stopWindowPanes: (params) => this.stopWindowPanes(params),
           onWindowCreated: (payload) => this.onRemoteWindowCreated?.(payload),
+          onPaneDeleted: (payload) => this.onRemotePaneDeleted?.(payload),
           onWindowDeleted: (payload) => this.onRemoteWindowDeleted?.(payload),
           onWindowRuntimeUpdated: (payload) => this.onRemoteWindowRuntimeUpdated?.(payload),
           onWorkspaceLayoutUpdated: (payload) => this.onRemoteWorkspaceLayoutUpdated?.(payload),

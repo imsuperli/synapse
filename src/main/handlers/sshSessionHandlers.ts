@@ -26,6 +26,90 @@ import { errorResponse, successResponse } from './HandlerResponse';
 import type { SSHSessionConfig, TerminalConfig } from '../types/process';
 import { createPtyDataForwarder } from '../utils/ptyDataForwarder';
 
+type SSHWindowSessionContext = Pick<
+  HandlerContext,
+  | 'mainWindow'
+  | 'processManager'
+  | 'statusPoller'
+  | 'ptySubscriptionManager'
+  | 'sshProfileStore'
+  | 'sshVaultService'
+>;
+
+export async function createSSHWindowSession(
+  ctx: SSHWindowSessionContext,
+  config: CreateSSHWindowConfig,
+): Promise<Window> {
+  const {
+    mainWindow,
+    processManager,
+    statusPoller,
+    ptySubscriptionManager,
+    sshProfileStore,
+    sshVaultService,
+  } = ctx;
+
+  if (!processManager || !sshProfileStore) {
+    throw new Error('SSH session services are not initialized');
+  }
+
+  const profile = await requireSSHProfile(sshProfileStore, config.profileId);
+  const vaultEntry = await sshVaultService?.get(profile.id) ?? null;
+  const windowId = randomUUID();
+  const paneId = randomUUID();
+  const pane = createSshPaneDraft(profile, {
+    paneId,
+    remoteCwd: config.remoteCwd,
+    command: config.command,
+  });
+
+  const handle = await processManager.spawnTerminal(await buildSSHSpawnConfig(profile, vaultEntry, {
+    windowId,
+    paneId,
+    remoteCwd: resolvePaneRemoteCwd(pane),
+    command: config.command,
+    initialCols: config.initialCols,
+    initialRows: config.initialRows,
+  }, {
+    sshProfileStore,
+    sshVaultService,
+  }));
+
+  const runningPane: Pane = {
+    ...pane,
+    pid: handle.pid,
+    sessionId: handle.sessionId,
+    status: WindowStatus.WaitingForInput,
+  };
+
+  const window: Window = {
+    id: windowId,
+    name: config.name || profile.name,
+    layout: {
+      type: 'pane',
+      id: paneId,
+      pane: runningPane,
+    },
+    activePaneId: paneId,
+    createdAt: new Date().toISOString(),
+    lastActiveAt: new Date().toISOString(),
+    kind: 'ssh',
+    tags: profile.tags,
+  };
+
+  subscribePaneOutput({
+    mainWindow,
+    processManager,
+    ptySubscriptionManager,
+    statusPoller,
+    windowId,
+    paneId,
+    pid: handle.pid,
+  });
+
+  return window;
+}
+
 export function registerSSHSessionHandlers(ctx: HandlerContext) {
   const {
     mainWindow,
@@ -39,63 +123,7 @@ export function registerSSHSessionHandlers(ctx: HandlerContext) {
 
   ipcMain.handle('create-ssh-window', async (_event, config: CreateSSHWindowConfig) => {
     try {
-      if (!processManager || !sshProfileStore) {
-        throw new Error('SSH session services are not initialized');
-      }
-
-      const profile = await requireSSHProfile(sshProfileStore, config.profileId);
-      const vaultEntry = await sshVaultService?.get(profile.id) ?? null;
-      const windowId = randomUUID();
-      const paneId = randomUUID();
-      const pane = createSshPaneDraft(profile, {
-        paneId,
-        remoteCwd: config.remoteCwd,
-        command: config.command,
-      });
-
-      const handle = await processManager.spawnTerminal(await buildSSHSpawnConfig(profile, vaultEntry, {
-        windowId,
-        paneId,
-        remoteCwd: resolvePaneRemoteCwd(pane),
-        command: config.command,
-      }, {
-        sshProfileStore,
-        sshVaultService,
-      }));
-
-      const runningPane: Pane = {
-        ...pane,
-        pid: handle.pid,
-        sessionId: handle.sessionId,
-        status: WindowStatus.WaitingForInput,
-      };
-
-      const window: Window = {
-        id: windowId,
-        name: config.name || profile.name,
-        layout: {
-          type: 'pane',
-          id: paneId,
-          pane: runningPane,
-        },
-        activePaneId: paneId,
-        createdAt: new Date().toISOString(),
-        lastActiveAt: new Date().toISOString(),
-        kind: 'ssh',
-        tags: profile.tags,
-      };
-
-      subscribePaneOutput({
-        mainWindow,
-        processManager,
-        ptySubscriptionManager,
-        statusPoller,
-        windowId,
-        paneId,
-        pid: handle.pid,
-      });
-
-      return successResponse(window);
+      return successResponse(await createSSHWindowSession(ctx, config));
     } catch (error) {
       return errorResponse(error);
     }

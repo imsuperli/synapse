@@ -18,11 +18,14 @@ export const REMOTE_METHODS = {
   WINDOW_START: 'window.start',
   WINDOW_CLOSE: 'window.close',
   WINDOW_DELETE: 'window.delete',
+  SSH_PROFILE_LIST: 'ssh.profile.list',
   GROUP_CREATE: 'group.create',
   GROUP_DELETE: 'group.delete',
+  GROUP_WINDOW_REMOVE: 'group.window.remove',
   PANE_LIST: 'pane.list',
   PANE_FOCUS: 'pane.focus',
   PANE_CLOSE: 'pane.close',
+  PANE_DELETE: 'pane.delete',
 } as const;
 
 export type RemoteMethodName = (typeof REMOTE_METHODS)[keyof typeof REMOTE_METHODS];
@@ -57,11 +60,14 @@ const MOBILE_WINDOW_CONTROL_METHODS = new Set<string>([
   REMOTE_METHODS.WINDOW_ACTIVATE,
   REMOTE_METHODS.WINDOW_CLOSE,
   REMOTE_METHODS.WINDOW_DELETE,
+  REMOTE_METHODS.SSH_PROFILE_LIST,
   REMOTE_METHODS.GROUP_CREATE,
   REMOTE_METHODS.GROUP_DELETE,
+  REMOTE_METHODS.GROUP_WINDOW_REMOVE,
   REMOTE_METHODS.PANE_LIST,
   REMOTE_METHODS.PANE_FOCUS,
   REMOTE_METHODS.PANE_CLOSE,
+  REMOTE_METHODS.PANE_DELETE,
 ]);
 
 const MOBILE_ADMIN_METHODS = new Set<string>([

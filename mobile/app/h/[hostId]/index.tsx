@@ -34,11 +34,14 @@ import {
   createRemoteGroup,
   deleteRemoteGroup,
   deleteRemoteWindow,
+  requestSSHProfileList,
   startRemoteWindow,
   stopRemotePane,
   type RemoteWindowGroupSummary,
   type RemotePaneSummary,
+  type RemoteSSHProfileSummary,
   type RemoteTerminalSummary,
+  type WindowCreateParams,
   type RemoteWindowSummary
 } from '../../../src/synapse/remote'
 import { loadHostOverviewData } from '../../../src/synapse/host-overview'
@@ -53,6 +56,7 @@ import type { ConnectionLogEntry, ConnectionState, HostProfile } from '../../../
 import { colors, radii, spacing, typography } from '../../../src/theme/mobile-theme'
 import { useMobileI18n, type MobileTranslate } from '../../../src/i18n'
 import { BottomDrawer } from '../../../src/components/BottomDrawer'
+import { CreateTerminalDrawer } from '../../../src/components/CreateTerminalDrawer'
 
 function getParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
@@ -373,6 +377,18 @@ function overviewErrorMessage(err: unknown, t: MobileTranslate): string {
   if (/workspace_not_loaded/i.test(message)) {
     return t('overview.workspaceNotLoaded')
   }
+  if (/invalid working directory|unable to resolve working directory/i.test(message)) {
+    return t('overview.invalidWorkingDirectory')
+  }
+  if (/ssh profile not found/i.test(message)) {
+    return t('overview.sshProfileNotFound')
+  }
+  if (/ssh authentication failed|all configured authentication methods failed/i.test(message)) {
+    return t('overview.sshAuthenticationFailed')
+  }
+  if (/remote_ssh_.*_unavailable|ssh session services are not initialized/i.test(message)) {
+    return t('createTerminal.remoteUnavailable')
+  }
   return message
 }
 
@@ -388,6 +404,7 @@ export default function HostOverviewScreen() {
   const [groups, setGroups] = useState<RemoteWindowGroupSummary[]>([])
   const [overviewMode, setOverviewMode] = useState<'terminals' | 'windows'>('terminals')
   const [canCreateWindow, setCanCreateWindow] = useState(false)
+  const [canCreateSSHWindow, setCanCreateSSHWindow] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchVisible, setSearchVisible] = useState(false)
   const [showFilterModal, setShowFilterModal] = useState(false)
@@ -395,6 +412,12 @@ export default function HostOverviewScreen() {
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [creatingWindow, setCreatingWindow] = useState(false)
+  const [showCreateWindowDrawer, setShowCreateWindowDrawer] = useState(false)
+  const [createWindowFormKey, setCreateWindowFormKey] = useState(0)
+  const [createWindowError, setCreateWindowError] = useState<string | null>(null)
+  const [sshProfiles, setSSHProfiles] = useState<RemoteSSHProfileSummary[]>([])
+  const [loadingSSHProfiles, setLoadingSSHProfiles] = useState(false)
+  const [sshProfilesError, setSSHProfilesError] = useState<string | null>(null)
   const [creatingGroup, setCreatingGroup] = useState(false)
   const [startingPaneKey, setStartingPaneKey] = useState<string | null>(null)
   const [stoppingPaneKey, setStoppingPaneKey] = useState<string | null>(null)
@@ -410,6 +433,8 @@ export default function HostOverviewScreen() {
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const loadGenerationRef = useRef(0)
   const syncOverviewStateInFlightRef = useRef(false)
+  const createWindowOperationRef = useRef<symbol | null>(null)
+  const sshProfileLoadOperationRef = useRef<symbol | null>(null)
 
   const normalizedSearchQuery = useMemo(
     () => normalizeTerminalSearchQuery(searchQuery),
@@ -512,6 +537,8 @@ export default function HostOverviewScreen() {
   const closeClient = useCallback(() => {
     loadGenerationRef.current += 1
     syncOverviewStateInFlightRef.current = false
+    createWindowOperationRef.current = null
+    sshProfileLoadOperationRef.current = null
     clientRef.current?.close()
     clientRef.current = null
   }, [])
@@ -522,6 +549,7 @@ export default function HostOverviewScreen() {
     const isCurrentLoad = () => loadGenerationRef.current === loadId
     let client: RpcClient | null = null
     setRefreshing(true)
+    setCreatingWindow(false)
     setConnectionState('loading')
     setError(null)
     logsRef.current = []
@@ -530,6 +558,12 @@ export default function HostOverviewScreen() {
     setGroups([])
     setOverviewMode('terminals')
     setCanCreateWindow(false)
+    setCanCreateSSHWindow(false)
+    setShowCreateWindowDrawer(false)
+    setCreateWindowError(null)
+    setSSHProfiles([])
+    setLoadingSSHProfiles(false)
+    setSSHProfilesError(null)
     setStartingPaneKey(null)
     setStoppingPaneKey(null)
     setGroupSelectionMode(false)
@@ -571,6 +605,7 @@ export default function HostOverviewScreen() {
       }
       setOverviewMode(overview.mode)
       setCanCreateWindow(overview.canCreateWindow)
+      setCanCreateSSHWindow(overview.canCreateSSHWindow)
       setWindows(overview.windows)
       setGroups(overview.groups)
       setSelectedGroupWindowIds((current) =>
@@ -691,21 +726,111 @@ export default function HostOverviewScreen() {
     [hostId, router, t]
   )
 
-  const handleCreateWindow = useCallback(async () => {
-    if (!canCreateWindow) {
-      setError(t('overview.createUnavailable'))
+  const loadSSHProfilesForCreate = useCallback(async () => {
+    if (!canCreateSSHWindow) {
+      sshProfileLoadOperationRef.current = null
+      setSSHProfiles([])
+      setSSHProfilesError(null)
+      setLoadingSSHProfiles(false)
       return
     }
     const client = clientRef.current
     if (!client) {
-      setError(t('overview.notConnected'))
+      sshProfileLoadOperationRef.current = null
+      setLoadingSSHProfiles(false)
+      setSSHProfilesError(t('overview.notConnected'))
       return
     }
     const loadId = loadGenerationRef.current
-    setCreatingWindow(true)
-    setError(null)
+    const operationId = Symbol('load-ssh-profiles')
+    sshProfileLoadOperationRef.current = operationId
+    setLoadingSSHProfiles(true)
+    setSSHProfilesError(null)
     try {
-      const result = await createRemoteWindow(client, DEFAULT_REMOTE_START_VIEWPORT)
+      const profiles = await requestSSHProfileList(client)
+      if (
+        loadGenerationRef.current !== loadId ||
+        clientRef.current !== client ||
+        sshProfileLoadOperationRef.current !== operationId
+      ) {
+        return
+      }
+      setSSHProfiles(profiles)
+    } catch (err) {
+      if (
+        loadGenerationRef.current === loadId &&
+        clientRef.current === client &&
+        sshProfileLoadOperationRef.current === operationId
+      ) {
+        setSSHProfilesError(overviewErrorMessage(err, t))
+      }
+    } finally {
+      if (sshProfileLoadOperationRef.current === operationId) {
+        sshProfileLoadOperationRef.current = null
+        if (loadGenerationRef.current === loadId && clientRef.current === client) {
+          setLoadingSSHProfiles(false)
+        }
+      }
+    }
+  }, [canCreateSSHWindow, t])
+
+  const openCreateWindowDrawer = useCallback(() => {
+    if (!canCreateWindow) {
+      setError(t('overview.createUnavailable'))
+      return
+    }
+    if (!clientRef.current) {
+      setError(t('overview.notConnected'))
+      return
+    }
+    setError(null)
+    setShowFilterModal(false)
+    setHostSwitcherOpen(false)
+    setHostSwitchError(null)
+    setCreateWindowError(null)
+    setSSHProfiles([])
+    setSSHProfilesError(null)
+    setCreateWindowFormKey((current) => current + 1)
+    setShowCreateWindowDrawer(true)
+    if (canCreateSSHWindow) {
+      void loadSSHProfilesForCreate()
+    }
+  }, [canCreateSSHWindow, canCreateWindow, loadSSHProfilesForCreate, t])
+
+  const closeCreateWindowDrawer = useCallback(() => {
+    if (!creatingWindow) {
+      sshProfileLoadOperationRef.current = null
+      setShowCreateWindowDrawer(false)
+      setCreateWindowError(null)
+      setLoadingSSHProfiles(false)
+      setSSHProfilesError(null)
+    }
+  }, [creatingWindow])
+
+  const handleCreateWindow = useCallback(async (params: WindowCreateParams) => {
+    if (createWindowOperationRef.current) {
+      return
+    }
+    if (!canCreateWindow || (params.backend === 'ssh' && !canCreateSSHWindow)) {
+      setCreateWindowError(t('overview.createUnavailable'))
+      return
+    }
+    const client = clientRef.current
+    if (!client) {
+      setCreateWindowError(t('overview.notConnected'))
+      return
+    }
+    const loadId = loadGenerationRef.current
+    const operationId = Symbol('create-window')
+    createWindowOperationRef.current = operationId
+    setCreatingWindow(true)
+    setCreateWindowError(null)
+    try {
+      const result = await createRemoteWindow(client, {
+        ...params,
+        initialCols: DEFAULT_REMOTE_START_VIEWPORT.cols,
+        initialRows: DEFAULT_REMOTE_START_VIEWPORT.rows
+      })
       if (loadGenerationRef.current !== loadId || clientRef.current !== client) {
         return
       }
@@ -727,19 +852,24 @@ export default function HostOverviewScreen() {
         )
       ])
       setOverviewMode('windows')
+      setShowCreateWindowDrawer(false)
+      setCreateWindowError(null)
       router.push(
         `/h/${hostId}/t/${encodeURIComponent(result.pane.windowId)}/${encodeURIComponent(result.pane.paneId)}`
       )
     } catch (err) {
       if (loadGenerationRef.current === loadId && clientRef.current === client) {
-        setError(t('overview.createFailed', { message: overviewErrorMessage(err, t) }))
+        setCreateWindowError(t('overview.createFailed', { message: overviewErrorMessage(err, t) }))
       }
     } finally {
-      if (loadGenerationRef.current === loadId && clientRef.current === client) {
-        setCreatingWindow(false)
+      if (createWindowOperationRef.current === operationId) {
+        createWindowOperationRef.current = null
+        if (loadGenerationRef.current === loadId && clientRef.current === client) {
+          setCreatingWindow(false)
+        }
       }
     }
-  }, [canCreateWindow, hostId, router, t])
+  }, [canCreateSSHWindow, canCreateWindow, hostId, router, t])
 
   const toggleGroupWindowSelection = useCallback((windowId: string) => {
     setSelectedGroupWindowIds((current) =>
@@ -899,6 +1029,7 @@ export default function HostOverviewScreen() {
       }
       setOverviewMode(overview.mode)
       setCanCreateWindow(overview.canCreateWindow)
+      setCanCreateSSHWindow(overview.canCreateSSHWindow)
       setWindows(overview.windows)
       setGroups(overview.groups)
       setSelectedGroupWindowIds((current) =>
@@ -1108,7 +1239,7 @@ export default function HostOverviewScreen() {
                   (!canCreateWindow || creatingWindow) && styles.iconButtonDisabled
                 ]}
                 disabled={!canCreateWindow || creatingWindow}
-                onPress={() => void handleCreateWindow()}
+                onPress={openCreateWindowDrawer}
                 accessibilityLabel={t('overview.newTerminal')}
               >
                 {creatingWindow ? (
@@ -1261,6 +1392,19 @@ export default function HostOverviewScreen() {
               )
             : renderTerminalItem(item.terminal, openTerminal, t)
         }
+      />
+      <CreateTerminalDrawer
+        key={createWindowFormKey}
+        visible={showCreateWindowDrawer}
+        canCreateSSH={canCreateSSHWindow}
+        sshProfiles={sshProfiles}
+        loadingSSHProfiles={loadingSSHProfiles}
+        sshProfilesError={sshProfilesError}
+        submitting={creatingWindow}
+        submitError={createWindowError}
+        onRetrySSHProfiles={() => void loadSSHProfilesForCreate()}
+        onSubmit={(params) => void handleCreateWindow(params)}
+        onClose={closeCreateWindowDrawer}
       />
       <BottomDrawer visible={showFilterModal} onClose={() => setShowFilterModal(false)}>
         <View style={styles.filterModalHeader}>

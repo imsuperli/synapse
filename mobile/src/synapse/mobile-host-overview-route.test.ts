@@ -47,8 +47,28 @@ describe('Synapse Mobile host overview route wiring', () => {
 
   it('starts and creates mobile terminals with an explicit default viewport', () => {
     expect(routeSource).toContain('const DEFAULT_REMOTE_START_VIEWPORT = { cols: 80, rows: 30 }')
-    expect(routeSource).toContain('createRemoteWindow(client, DEFAULT_REMOTE_START_VIEWPORT)')
+    expect(routeSource).toContain('const result = await createRemoteWindow(client, {')
+    expect(routeSource).toContain('initialCols: DEFAULT_REMOTE_START_VIEWPORT.cols')
+    expect(routeSource).toContain('initialRows: DEFAULT_REMOTE_START_VIEWPORT.rows')
     expect(routeSource).toContain('startRemoteWindow(\n            client,\n            pane.windowId,\n            pane.paneId,\n            DEFAULT_REMOTE_START_VIEWPORT\n          )')
+  })
+
+  it('opens a creation form from the plus button and enters only the returned pane', () => {
+    expect(routeSource).toContain("import { CreateTerminalDrawer } from '../../../src/components/CreateTerminalDrawer'")
+    expect(routeSource).toContain('onPress={openCreateWindowDrawer}')
+    expect(routeSource).toContain('<CreateTerminalDrawer')
+    expect(routeSource).toContain('onSubmit={(params) => void handleCreateWindow(params)}')
+    expect(routeSource).toContain('encodeURIComponent(result.pane.windowId)')
+    expect(routeSource).toContain('encodeURIComponent(result.pane.paneId)')
+    expect(routeSource).not.toContain('createRemoteWindow(client, DEFAULT_REMOTE_START_VIEWPORT)')
+  })
+
+  it('serializes create requests and ignores stale SSH profile loads', () => {
+    expect(routeSource).toContain('const createWindowOperationRef = useRef<symbol | null>(null)')
+    expect(routeSource).toContain('if (createWindowOperationRef.current)')
+    expect(routeSource).toContain("const operationId = Symbol('create-window')")
+    expect(routeSource).toContain('const sshProfileLoadOperationRef = useRef<symbol | null>(null)')
+    expect(routeSource).toContain('sshProfileLoadOperationRef.current !== operationId')
   })
 
   it('drops stale group selections when windows disappear or become grouped elsewhere', () => {

@@ -21,7 +21,9 @@ import {
 import {
   GroupCreateParamsSchema,
   GroupDeleteParamsSchema,
+  GroupWindowRemoveParamsSchema,
   PaneCloseParamsSchema,
+  PaneDeleteParamsSchema,
   PaneListParamsSchema,
   WindowCloseParamsSchema,
   WindowCreateParamsSchema,
@@ -270,6 +272,13 @@ export class RemoteDispatcher {
 
     const stateProvider = this.stateProvider;
     if (stateProvider) {
+      if (stateProvider.supportsSSHWindowCreation?.()) {
+        this.methods.set(REMOTE_METHODS.SSH_PROFILE_LIST, {
+          params: null,
+          handler: () => stateProvider.listSSHProfiles(),
+        });
+      }
+
       this.methods.set(REMOTE_METHODS.WINDOW_LIST, {
         params: WindowListParamsSchema,
         handler: (params) => {
@@ -326,6 +335,14 @@ export class RemoteDispatcher {
         },
       });
 
+      this.methods.set(REMOTE_METHODS.GROUP_WINDOW_REMOVE, {
+        params: GroupWindowRemoveParamsSchema,
+        handler: (params) => {
+          const typed = GroupWindowRemoveParamsSchema.parse(params);
+          return stateProvider.removeWindowFromGroup(typed);
+        },
+      });
+
       this.methods.set(REMOTE_METHODS.PANE_LIST, {
         params: PaneListParamsSchema,
         handler: (params) => {
@@ -339,6 +356,14 @@ export class RemoteDispatcher {
         handler: (params) => {
           const typed = PaneCloseParamsSchema.parse(params);
           return stateProvider.closePane(typed);
+        },
+      });
+
+      this.methods.set(REMOTE_METHODS.PANE_DELETE, {
+        params: PaneDeleteParamsSchema,
+        handler: (params) => {
+          const typed = PaneDeleteParamsSchema.parse(params);
+          return stateProvider.deletePane(typed);
         },
       });
     }

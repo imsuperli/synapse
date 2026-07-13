@@ -72,6 +72,13 @@ export type PaneCloseResult = {
   pane: RemotePaneSummary;
 };
 
+export type PaneDeleteResult = {
+  deleted: true;
+  deletedPaneId: string;
+  window: RemoteWindowSummary;
+  replacementPane: RemotePaneSummary;
+};
+
 export type WindowDeleteResult = {
   deleted: true;
   windowId: string;
@@ -85,6 +92,23 @@ export type GroupCreateResult = {
 export type GroupDeleteResult = {
   deleted: true;
   groupId: string;
+};
+
+export type GroupWindowRemoveResult = {
+  removed: true;
+  groupId: string;
+  windowId: string;
+  dissolved: boolean;
+  group: RemoteWindowGroupSummary | null;
+  replacementWindow: RemoteWindowSummary | null;
+  replacementPane: RemotePaneSummary | null;
+};
+
+const WindowCreateCommonShape = {
+  name: z.string().trim().min(1).max(120).optional(),
+  command: z.string().trim().min(1).max(500).optional(),
+  initialCols: z.number().int().min(1).max(1000).optional(),
+  initialRows: z.number().int().min(1).max(1000).optional(),
 };
 
 export const WindowListParamsSchema = z.object({
@@ -105,19 +129,32 @@ export const WindowStartParamsSchema = z.object({
   initialRows: z.number().int().min(1).max(1000).optional(),
 }).strict();
 
-export const WindowCreateParamsSchema = z.object({
-  name: z.string().trim().min(1).max(120).optional(),
-  workingDirectory: z.string().trim().min(1).optional(),
-  command: z.string().trim().min(1).max(500).optional(),
-  initialCols: z.number().int().min(1).max(1000).optional(),
-  initialRows: z.number().int().min(1).max(1000).optional(),
-}).strict();
+export const WindowCreateParamsSchema = z.discriminatedUnion('backend', [
+  z.object({
+    ...WindowCreateCommonShape,
+    backend: z.literal('local'),
+    workingDirectory: z.string().trim().min(1).max(4096),
+  }).strict(),
+  z.object({
+    ...WindowCreateCommonShape,
+    backend: z.literal('ssh'),
+    profileId: z.string().trim().min(1).max(200),
+    workingDirectory: z.string().trim().min(1).max(4096),
+  }).strict(),
+]);
+
+export type WindowCreateParams = z.infer<typeof WindowCreateParamsSchema>;
 
 export const WindowCloseParamsSchema = z.object({
   windowId: z.string().min(1),
 }).strict();
 
 export const PaneCloseParamsSchema = z.object({
+  windowId: z.string().min(1),
+  paneId: z.string().min(1),
+}).strict();
+
+export const PaneDeleteParamsSchema = z.object({
   windowId: z.string().min(1),
   paneId: z.string().min(1),
 }).strict();
@@ -133,4 +170,9 @@ export const GroupCreateParamsSchema = z.object({
 
 export const GroupDeleteParamsSchema = z.object({
   groupId: z.string().min(1),
+}).strict();
+
+export const GroupWindowRemoveParamsSchema = z.object({
+  groupId: z.string().min(1),
+  windowId: z.string().min(1),
 }).strict();

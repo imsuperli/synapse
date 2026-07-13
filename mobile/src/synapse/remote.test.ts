@@ -15,12 +15,16 @@ import {
   createRemoteGroup,
   createRemoteWindow,
   deleteRemoteGroup,
+  deleteRemotePane,
   deleteRemoteWindow,
   parseGroupCreateResult,
   parseGroupDeleteResult,
+  parseGroupWindowRemoveResult,
+  parsePaneDeleteResult,
   parseWindowCreateResult,
   parseWindowDeleteResult,
   parsePaneCloseResult,
+  parseSSHProfileList,
   parseTerminalClearResult,
   parseTerminalHistory,
   parseTerminalList,
@@ -29,9 +33,11 @@ import {
   parseWindowCloseResult,
   parseWindowList,
   requestWindowList,
+  requestSSHProfileList,
   requestTerminalHistory,
   requestTerminalList,
   sendTerminalInput,
+  removeRemoteWindowFromGroup,
   startRemoteWindow,
   stopRemotePane,
   stopRemoteWindow
@@ -408,10 +414,98 @@ describe('Synapse remote terminal helpers', () => {
       }
     })
 
-    await expect(createRemoteWindow(client, { cols: 100, rows: 30 })).resolves.toMatchObject({
+    await expect(createRemoteWindow(client, {
+      backend: 'local',
+      workingDirectory: '/repo',
+      name: 'Mobile Shell',
+      initialCols: 100,
+      initialRows: 30
+    })).resolves.toMatchObject({
       pane: { windowId: 'w-new', paneId: 'p-new', running: true }
     })
     expect(client.sendRequest).toHaveBeenCalledWith('window.create', {
+      backend: 'local',
+      workingDirectory: '/repo',
+      name: 'Mobile Shell',
+      initialCols: 100,
+      initialRows: 30
+    })
+  })
+
+  it('loads safe SSH profile summaries without desktop credentials', async () => {
+    const client = mockClient({
+      id: 'rpc-1',
+      ok: true,
+      result: {
+        profiles: [
+          {
+            profileId: 'profile-1',
+            name: 'Production',
+            host: 'prod.example.com',
+            port: 22,
+            user: 'deploy',
+            defaultRemoteCwd: '/srv/app',
+            remoteCommand: null
+          }
+        ]
+      }
+    })
+
+    await expect(requestSSHProfileList(client)).resolves.toEqual([
+      {
+        profileId: 'profile-1',
+        name: 'Production',
+        host: 'prod.example.com',
+        port: 22,
+        user: 'deploy',
+        defaultRemoteCwd: '/srv/app',
+        remoteCommand: null
+      }
+    ])
+    expect(client.sendRequest).toHaveBeenCalledWith('ssh.profile.list')
+    expect(parseSSHProfileList({ profiles: [{ password: 'secret' }] })).toEqual({ profiles: [] })
+  })
+
+  it('creates an SSH terminal using only the desktop profile reference', async () => {
+    const pane = {
+      windowId: 'w-ssh',
+      paneId: 'p-ssh',
+      kind: 'terminal',
+      backend: 'ssh',
+      status: 'waiting',
+      running: true,
+      pid: 45,
+      sessionId: 's-ssh',
+      cwd: '/srv/app',
+      command: 'zsh'
+    }
+    const client = mockClient({
+      id: 'rpc-1',
+      ok: true,
+      result: {
+        window: {
+          windowId: 'w-ssh',
+          name: 'Production',
+          activePaneId: 'p-ssh',
+          panes: [pane]
+        },
+        pane
+      }
+    })
+
+    await expect(createRemoteWindow(client, {
+      backend: 'ssh',
+      profileId: 'profile-1',
+      workingDirectory: '/srv/app',
+      initialCols: 100,
+      initialRows: 30
+    })).resolves.toMatchObject({
+      pane: { windowId: 'w-ssh', paneId: 'p-ssh', backend: 'ssh' }
+    })
+    expect(client.sendRequest).toHaveBeenCalledWith('window.create', {
+      backend: 'ssh',
+      profileId: 'profile-1',
+      workingDirectory: '/srv/app',
       initialCols: 100,
       initialRows: 30
     })
@@ -572,6 +666,47 @@ describe('Synapse remote terminal helpers', () => {
       ok: true,
       result: { deleted: true, groupId: 'g1' }
     })
+    const replacementPane = {
+      windowId: 'w1',
+      paneId: 'p2',
+      kind: 'terminal',
+      backend: 'local',
+      status: 'waiting',
+      running: true,
+      pid: 22,
+      sessionId: 'session-22',
+      cwd: '/repo',
+      command: 'bash'
+    }
+    const replacementWindow = {
+      windowId: 'w1',
+      name: 'Workspace',
+      activePaneId: 'p2',
+      paneCount: 1,
+      terminalPaneCount: 1,
+      panes: [replacementPane]
+    }
+    const deletePanePayload = {
+      deleted: true,
+      deletedPaneId: 'p1',
+      window: replacementWindow,
+      replacementPane
+    }
+    const removeGroupWindowPayload = {
+      removed: true,
+      groupId: 'g1',
+      windowId: 'w2',
+      dissolved: true,
+      group: null,
+      replacementWindow,
+      replacementPane
+    }
+    const deletePaneClient = mockClient({ id: 'rpc-4', ok: true, result: deletePanePayload })
+    const removeGroupWindowClient = mockClient({
+      id: 'rpc-5',
+      ok: true,
+      result: removeGroupWindowPayload
+    })
 
     await expect(deleteRemoteWindow(deleteWindowClient, 'w1')).resolves.toEqual({
       deleted: true,
@@ -584,6 +719,19 @@ describe('Synapse remote terminal helpers', () => {
     await expect(deleteRemoteGroup(deleteGroupClient, 'g1')).resolves.toEqual({
       deleted: true,
       groupId: 'g1'
+    })
+    await expect(deleteRemotePane(deletePaneClient, 'w1', 'p1')).resolves.toMatchObject({
+      deleted: true,
+      deletedPaneId: 'p1',
+      replacementPane: { paneId: 'p2' }
+    })
+    await expect(
+      removeRemoteWindowFromGroup(removeGroupWindowClient, 'g1', 'w2')
+    ).resolves.toMatchObject({
+      removed: true,
+      dissolved: true,
+      replacementWindow: { windowId: 'w1' },
+      replacementPane: { paneId: 'p2' }
     })
 
     expect(parseWindowDeleteResult({ deleted: true, windowId: 'w1', groups: [] })).toEqual({
@@ -598,12 +746,29 @@ describe('Synapse remote terminal helpers', () => {
       deleted: true,
       groupId: 'g1'
     })
+    expect(parsePaneDeleteResult(deletePanePayload)).toMatchObject({
+      deleted: true,
+      replacementPane: { paneId: 'p2' }
+    })
+    expect(parseGroupWindowRemoveResult(removeGroupWindowPayload)).toMatchObject({
+      removed: true,
+      dissolved: true,
+      replacementPane: { paneId: 'p2' }
+    })
     expect(deleteWindowClient.sendRequest).toHaveBeenCalledWith('window.delete', { windowId: 'w1' })
     expect(createGroupClient.sendRequest).toHaveBeenCalledWith('group.create', {
       windowIds: ['w1', 'w2'],
       name: 'Phone Group'
     })
     expect(deleteGroupClient.sendRequest).toHaveBeenCalledWith('group.delete', { groupId: 'g1' })
+    expect(deletePaneClient.sendRequest).toHaveBeenCalledWith('pane.delete', {
+      windowId: 'w1',
+      paneId: 'p1'
+    })
+    expect(removeGroupWindowClient.sendRequest).toHaveBeenCalledWith('group.window.remove', {
+      groupId: 'g1',
+      windowId: 'w2'
+    })
   })
 
   it('requests window lists with terminal-only summaries', async () => {
@@ -621,6 +786,10 @@ describe('Synapse remote terminal helpers', () => {
     expect(() => parseWindowCreateResult({ window: null, pane: null })).toThrow(
       'Invalid window create response'
     )
+    expect(() => parseWindowCreateResult({
+      window: { windowId: 'w1', name: 'Wrong pane', panes: [] },
+      pane: { windowId: 'w1', paneId: 'p1', kind: 'terminal' }
+    })).toThrow('Invalid window create response')
   })
 
   it('throws RPC error messages from terminal helpers', async () => {

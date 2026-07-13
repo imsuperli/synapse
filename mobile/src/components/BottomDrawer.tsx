@@ -41,6 +41,7 @@ type Props = {
   children: ReactNode
   dragContentToDismiss?: boolean
   contentScrollable?: boolean
+  dismissible?: boolean
   zIndex?: number
 }
 
@@ -50,6 +51,7 @@ export function BottomDrawer({
   children,
   dragContentToDismiss = true,
   contentScrollable = true,
+  dismissible = true,
   zIndex
 }: Props) {
   const [mounted, setMounted] = useState(visible)
@@ -74,6 +76,7 @@ export function BottomDrawer({
       onHidden={() => setMounted(false)}
       dragContentToDismiss={dragContentToDismiss}
       contentScrollable={contentScrollable}
+      dismissible={dismissible}
       zIndex={zIndex}
     >
       {children}
@@ -92,6 +95,7 @@ function MountedBottomDrawer({
   children,
   dragContentToDismiss = true,
   contentScrollable = true,
+  dismissible = true,
   zIndex = 1000
 }: MountedBottomDrawerProps) {
   const translateY = useSharedValue(0)
@@ -150,13 +154,16 @@ function MountedBottomDrawer({
   }, [visible, insets.bottom])
 
   const dismiss = useCallback(() => {
+    if (!dismissible) {
+      return
+    }
     Keyboard.dismiss()
     progress.value = withTiming(0, { duration: BOTTOM_DRAWER_HIDE_DURATION_MS }, (finished) => {
       if (finished) {
         runOnJS(onClose)()
       }
     })
-  }, [onClose, progress])
+  }, [dismissible, onClose, progress])
 
   useEffect(() => {
     if (!visible) {
@@ -164,11 +171,13 @@ function MountedBottomDrawer({
     }
 
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      dismiss()
+      if (dismissible) {
+        dismiss()
+      }
       return true
     })
     return () => sub.remove()
-  }, [visible, dismiss])
+  }, [dismiss, dismissible, visible])
 
   const scrollHandler = useAnimatedScrollHandler((event) => {
     scrollOffsetY.value = Math.max(event.contentOffset.y, 0)
@@ -176,6 +185,7 @@ function MountedBottomDrawer({
 
   const scrollGesture = Gesture.Native()
   const handlePanGesture = Gesture.Pan()
+    .enabled(dismissible)
     .activeOffsetY([-8, 8])
     .simultaneousWithExternalGesture(scrollGesture)
     .onUpdate((e) => {
@@ -199,6 +209,7 @@ function MountedBottomDrawer({
       }
     })
   const contentPanGesture = Gesture.Pan()
+    .enabled(dismissible)
     .activeOffsetY([-8, 8])
     .simultaneousWithExternalGesture(scrollGesture)
     .onBegin(() => {
@@ -273,7 +284,11 @@ function MountedBottomDrawer({
     >
       <GestureHandlerRootView style={styles.root}>
         <Animated.View style={[styles.backdrop, backdropStyle]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={dismiss} />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            disabled={!dismissible}
+            onPress={dismiss}
+          />
         </Animated.View>
 
         <View style={[styles.anchor, isWideLayout && styles.anchorWide]} pointerEvents="box-none">

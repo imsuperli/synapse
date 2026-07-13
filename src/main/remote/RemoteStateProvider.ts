@@ -2,18 +2,24 @@ import { randomUUID } from 'crypto';
 import type { ProcessManager } from '../services/ProcessManager';
 import { ProcessStatus } from '../types/process';
 import type { Workspace } from '../types/workspace';
+import type { SSHProfile } from '../../shared/types/ssh';
 import { WindowStatus, type LayoutNode, type Pane, type PaneBackend, type PaneKind, type Window } from '../../shared/types/window';
 import type { GroupLayoutNode, WindowGroup } from '../../shared/types/window-group';
+import { removePaneFromLayout, removeWindowFromGroupLayout } from '../../shared/utils/layout-tree';
+import type { SSHProfileListResult } from '../../shared/remote/ssh-protocol';
 import type {
   GroupCreateResult,
   GroupDeleteResult,
+  GroupWindowRemoveResult,
   WindowCreateResult,
   WindowCloseResult,
   PaneListResult,
   PaneCloseResult,
+  PaneDeleteResult,
   RemotePaneSummary,
   RemoteWindowGroupSummary,
   RemoteWindowSummary,
+  WindowCreateParams,
   WindowDeleteResult,
   WindowStartResult,
   WindowListResult,
@@ -31,8 +37,11 @@ type RemoteStateProviderOptions = {
     initialCols?: number;
     initialRows?: number;
   }) => Promise<{ pid: number; sessionId: string; status: WindowStatus; command?: string }>;
+  listSSHProfiles?: () => Promise<SSHProfile[]>;
+  createSSHWindow?: (params: Extract<WindowCreateParams, { backend: 'ssh' }>) => Promise<Window>;
   onWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
   stopWindowPanes?: (params: { windowId: string; paneIds: string[] }) => Promise<void> | void;
+  onPaneDeleted?: (payload: { windowId: string; paneId: string; workspace: Workspace }) => void | Promise<void>;
   onWindowDeleted?: (payload: { windowId: string; paneIds: string[]; workspace: Workspace }) => void | Promise<void>;
   onWindowRuntimeUpdated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
   onWorkspaceLayoutUpdated?: (payload: { workspace: Workspace }) => void | Promise<void>;
@@ -57,19 +66,16 @@ type StartWindowOptions = {
   initialRows?: number;
 };
 
-type CreateWindowOptions = {
-  name?: string;
-  workingDirectory?: string;
-  command?: string;
-  initialCols?: number;
-  initialRows?: number;
-};
-
 type CloseWindowOptions = {
   windowId: string;
 };
 
 type ClosePaneOptions = {
+  windowId: string;
+  paneId: string;
+};
+
+type DeletePaneOptions = {
   windowId: string;
   paneId: string;
 };
@@ -87,8 +93,54 @@ type DeleteGroupOptions = {
   groupId: string;
 };
 
+type RemoveGroupWindowOptions = {
+  groupId: string;
+  windowId: string;
+};
+
 export class RemoteStateProvider {
+  private workspaceMutationQueue: Promise<void> = Promise.resolve();
+
   constructor(private readonly options: RemoteStateProviderOptions) {}
+
+  private async runWorkspaceMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.workspaceMutationQueue;
+    let release: (() => void) | undefined;
+    this.workspaceMutationQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release?.();
+    }
+  }
+
+  supportsSSHWindowCreation(): boolean {
+    return Boolean(this.options.listSSHProfiles && this.options.createSSHWindow);
+  }
+
+  async listSSHProfiles(): Promise<SSHProfileListResult> {
+    if (!this.supportsSSHWindowCreation() || !this.options.listSSHProfiles) {
+      throw new Error('remote_ssh_profile_list_unavailable');
+    }
+
+    const profiles = await this.options.listSSHProfiles();
+    return {
+      profiles: profiles
+        .map((profile) => ({
+          profileId: profile.id,
+          name: profile.name,
+          host: profile.host,
+          port: profile.port,
+          user: profile.user,
+          defaultRemoteCwd: profile.defaultRemoteCwd?.trim() || null,
+          remoteCommand: profile.remoteCommand?.trim() || null,
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    };
+  }
 
   listWindows(options: ListOptions = {}): WindowListResult {
     const workspace = this.options.getCurrentWorkspace();
@@ -206,10 +258,14 @@ export class RemoteStateProvider {
     };
   }
 
-  async createWindow(options: CreateWindowOptions = {}): Promise<WindowCreateResult> {
+  async createWindow(options: WindowCreateParams): Promise<WindowCreateResult> {
     const workspace = this.options.getCurrentWorkspace();
     if (!workspace) {
       throw new Error('workspace_not_loaded');
+    }
+
+    if (options.backend === 'ssh') {
+      return this.createSSHWindow(workspace, options);
     }
 
     const startLocalTerminalPane = this.options.startLocalTerminalPane;
@@ -217,7 +273,7 @@ export class RemoteStateProvider {
       throw new Error('remote_window_create_unavailable');
     }
 
-    const workingDirectory = options.workingDirectory ?? getDefaultWorkingDirectory(workspace);
+    const workingDirectory = options.workingDirectory;
     const now = new Date().toISOString();
     const windowId = randomUUID();
     const paneId = randomUUID();
@@ -277,6 +333,42 @@ export class RemoteStateProvider {
     if (!summaryPane) {
       throw new Error('created_pane_not_found');
     }
+    return {
+      window: summary,
+      pane: summaryPane,
+    };
+  }
+
+  private async createSSHWindow(
+    workspace: Workspace,
+    options: Extract<WindowCreateParams, { backend: 'ssh' }>,
+  ): Promise<WindowCreateResult> {
+    const createSSHWindow = this.options.createSSHWindow;
+    if (!createSSHWindow || !this.options.listSSHProfiles) {
+      throw new Error('remote_ssh_window_create_unavailable');
+    }
+
+    const window = await createSSHWindow(options);
+    if (workspace.windows.some((item) => item.id === window.id)) {
+      throw new Error('created_window_id_conflict');
+    }
+
+    const terminalPanes = collectPanes(window.layout).filter((pane) => getPaneKind(pane) === 'terminal');
+    const createdPane = terminalPanes.find((pane) => pane.id === window.activePaneId) ?? terminalPanes[0];
+    if (!createdPane) {
+      throw new Error('created_pane_not_found');
+    }
+
+    workspace.windows.push(window);
+    markWorkspaceUpdated(workspace);
+    await this.options.onWindowCreated?.({ window, workspace });
+
+    const summary = this.summarizeWindow(window, this.getLivePaneProcesses(), { terminalOnly: true });
+    const summaryPane = findResultPane(summary, createdPane.id);
+    if (!summaryPane) {
+      throw new Error('created_pane_not_found');
+    }
+
     return {
       window: summary,
       pane: summaryPane,
@@ -344,6 +436,68 @@ export class RemoteStateProvider {
     return {
       window: summary,
       pane,
+    };
+  }
+
+  async deletePane(options: DeletePaneOptions): Promise<PaneDeleteResult> {
+    return this.runWorkspaceMutation(() => this.deletePaneNow(options));
+  }
+
+  private async deletePaneNow(options: DeletePaneOptions): Promise<PaneDeleteResult> {
+    const initialWorkspace = this.options.getCurrentWorkspace();
+    if (!initialWorkspace) {
+      throw new Error('workspace_not_loaded');
+    }
+
+    const initialWindow = initialWorkspace.windows.find((window) => window.id === options.windowId);
+    if (!initialWindow) {
+      throw new Error('window_not_found');
+    }
+    preparePaneDeletion(initialWindow, options.paneId);
+
+    await this.options.stopWindowPanes?.({
+      windowId: options.windowId,
+      paneIds: [options.paneId],
+    });
+
+    // The desktop can change the workspace while process shutdown is awaiting.
+    // Re-read and validate the latest layout before applying the structural edit.
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+    const targetWindow = workspace.windows.find((window) => window.id === options.windowId);
+    if (!targetWindow) {
+      throw new Error('window_not_found');
+    }
+    const plan = preparePaneDeletion(targetWindow, options.paneId);
+
+    targetWindow.layout = plan.layout;
+    if (
+      targetWindow.activePaneId === options.paneId
+      || !plan.remainingPanes.some((pane) => pane.id === targetWindow.activePaneId)
+    ) {
+      targetWindow.activePaneId = plan.replacementPaneId;
+    }
+    targetWindow.lastActiveAt = new Date().toISOString();
+    markWorkspaceUpdated(workspace);
+    await this.options.onPaneDeleted?.({
+      windowId: targetWindow.id,
+      paneId: options.paneId,
+      workspace,
+    });
+    await this.options.onWorkspaceLayoutUpdated?.({ workspace });
+
+    const summary = this.summarizeWindow(targetWindow, this.getLivePaneProcesses(), { terminalOnly: true });
+    const replacementPane = summary.panes.find((pane) => pane.paneId === plan.replacementPaneId);
+    if (!replacementPane) {
+      throw new Error('replacement_pane_not_found');
+    }
+    return {
+      deleted: true,
+      deletedPaneId: options.paneId,
+      window: summary,
+      replacementPane,
     };
   }
 
@@ -440,6 +594,79 @@ export class RemoteStateProvider {
     return {
       deleted: true,
       groupId: options.groupId,
+    };
+  }
+
+  async removeWindowFromGroup(options: RemoveGroupWindowOptions): Promise<GroupWindowRemoveResult> {
+    return this.runWorkspaceMutation(() => this.removeWindowFromGroupNow(options));
+  }
+
+  private async removeWindowFromGroupNow(
+    options: RemoveGroupWindowOptions,
+  ): Promise<GroupWindowRemoveResult> {
+    const workspace = this.options.getCurrentWorkspace();
+    if (!workspace) {
+      throw new Error('workspace_not_loaded');
+    }
+
+    const groupIndex = workspace.groups.findIndex((group) => group.id === options.groupId);
+    if (groupIndex < 0) {
+      throw new Error('group_not_found');
+    }
+
+    const group = workspace.groups[groupIndex]!;
+    const memberIds = getGroupWindowIds(group.layout);
+    if (!memberIds.includes(options.windowId)) {
+      throw new Error('window_not_in_group');
+    }
+    if (!workspace.windows.some((window) => window.id === options.windowId)) {
+      throw new Error('window_not_found');
+    }
+
+    const replacementWindowId = findReplacementGroupWindowId(
+      workspace,
+      memberIds,
+      options.windowId,
+    );
+    const nextLayout = removeWindowFromGroupLayout(group.layout, options.windowId);
+    const remainingWindowIds = nextLayout ? getGroupWindowIds(nextLayout) : [];
+    const dissolved = !nextLayout || remainingWindowIds.length < 2;
+
+    if (dissolved) {
+      workspace.groups.splice(groupIndex, 1);
+    } else {
+      group.layout = nextLayout;
+      if (!remainingWindowIds.includes(group.activeWindowId)) {
+        group.activeWindowId = remainingWindowIds[0]!;
+      }
+      group.lastActiveAt = new Date().toISOString();
+    }
+
+    markWorkspaceUpdated(workspace);
+    await this.options.onWorkspaceLayoutUpdated?.({ workspace });
+
+    const livePaneProcesses = this.getLivePaneProcesses();
+    const replacementWindowRecord = replacementWindowId
+      ? workspace.windows.find((window) => window.id === replacementWindowId)
+      : undefined;
+    const replacementWindow = replacementWindowRecord
+      ? this.summarizeWindow(replacementWindowRecord, livePaneProcesses, { terminalOnly: true })
+      : null;
+    const replacementPane = replacementWindow
+      ? findResultPane(replacementWindow, replacementWindow.activePaneId)
+      : null;
+    const updatedGroup = dissolved
+      ? null
+      : this.summarizeGroup(group, workspace, livePaneProcesses, { terminalOnly: true });
+
+    return {
+      removed: true,
+      groupId: options.groupId,
+      windowId: options.windowId,
+      dissolved,
+      group: updatedGroup,
+      replacementWindow,
+      replacementPane,
     };
   }
 
@@ -565,6 +792,51 @@ function collectPanes(layout: LayoutNode): Pane[] {
   return layout.children.flatMap((child) => collectPanes(child));
 }
 
+type PaneDeletionPlan = {
+  layout: LayoutNode;
+  remainingPanes: Pane[];
+  replacementPaneId: string;
+};
+
+function preparePaneDeletion(window: Window, paneId: string): PaneDeletionPlan {
+  const panes = collectPanes(window.layout);
+  const paneIndex = panes.findIndex((pane) => pane.id === paneId);
+  if (paneIndex < 0) {
+    throw new Error('pane_not_found');
+  }
+
+  const targetPane = panes[paneIndex]!;
+  if (getPaneKind(targetPane) !== 'terminal') {
+    throw new Error('pane_not_terminal');
+  }
+  if (panes.length <= 1) {
+    throw new Error('pane_delete_last_pane');
+  }
+
+  const remainingPanes = panes.filter((pane) => pane.id !== paneId);
+  const nextTerminal = panes
+    .slice(paneIndex + 1)
+    .find((pane) => getPaneKind(pane) === 'terminal');
+  const previousTerminal = panes
+    .slice(0, paneIndex)
+    .reverse()
+    .find((pane) => getPaneKind(pane) === 'terminal');
+  const replacementPane = nextTerminal ?? previousTerminal;
+  if (!replacementPane) {
+    throw new Error('pane_delete_last_terminal');
+  }
+
+  const layout = removePaneFromLayout(window.layout, paneId);
+  if (!layout || layout === window.layout) {
+    throw new Error('pane_not_found');
+  }
+  return {
+    layout,
+    remainingPanes,
+    replacementPaneId: replacementPane.id,
+  };
+}
+
 function getPaneKind(pane: Pane): PaneKind {
   return pane.kind ?? 'terminal';
 }
@@ -592,15 +864,6 @@ function clearPaneRuntime(pane: Pane): void {
   pane.sessionId = undefined;
   pane.lastOutput = undefined;
   pane.tmuxScopeId = undefined;
-}
-
-function getDefaultWorkingDirectory(workspace: Workspace): string {
-  const recentLocalPane = workspace.windows
-    .filter((window) => !window.archived)
-    .sort((a, b) => Date.parse(b.lastActiveAt || b.createdAt) - Date.parse(a.lastActiveAt || a.createdAt))
-    .flatMap((window) => collectPanes(window.layout))
-    .find((pane) => getPaneKind(pane) === 'terminal' && getPaneBackend(pane, 'terminal') === 'local' && pane.cwd);
-  return recentLocalPane?.cwd || process.cwd();
 }
 
 function getDefaultWindowName(workingDirectory: string): string {
@@ -633,6 +896,24 @@ function getGroupWindowIds(layout: GroupLayoutNode): string[] {
   return layout.children.flatMap((child) => getGroupWindowIds(child));
 }
 
+function findReplacementGroupWindowId(
+  workspace: Workspace,
+  memberIds: string[],
+  removedWindowId: string,
+): string | null {
+  const removedIndex = memberIds.indexOf(removedWindowId);
+  const candidateIds = [
+    ...memberIds.slice(removedIndex + 1),
+    ...memberIds.slice(0, removedIndex).reverse(),
+  ];
+  return candidateIds.find((windowId) => {
+    const window = workspace.windows.find((item) => item.id === windowId);
+    return window
+      ? collectPanes(window.layout).some((pane) => getPaneKind(pane) === 'terminal')
+      : false;
+  }) ?? null;
+}
+
 function removeWindowFromGroups(groups: WindowGroup[], windowId: string): WindowGroup[] {
   return groups.flatMap((group) => {
     const nextLayout = removeWindowFromGroupLayout(group.layout, windowId);
@@ -649,27 +930,4 @@ function removeWindowFromGroups(groups: WindowGroup[], windowId: string): Window
       lastActiveAt: new Date().toISOString(),
     }];
   });
-}
-
-function removeWindowFromGroupLayout(layout: GroupLayoutNode, windowId: string): GroupLayoutNode | null {
-  if (layout.type === 'window') {
-    return layout.id === windowId ? null : layout;
-  }
-  const nextChildren = layout.children
-    .map((child) => removeWindowFromGroupLayout(child, windowId))
-    .filter((child): child is GroupLayoutNode => child !== null);
-  if (nextChildren.length === layout.children.length) {
-    return layout;
-  }
-  if (nextChildren.length === 0) {
-    return null;
-  }
-  if (nextChildren.length === 1) {
-    return nextChildren[0]!;
-  }
-  return {
-    ...layout,
-    children: nextChildren,
-    sizes: nextChildren.map(() => 1 / nextChildren.length),
-  };
 }

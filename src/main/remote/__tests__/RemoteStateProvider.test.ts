@@ -252,7 +252,11 @@ describe('RemoteStateProvider', () => {
       onWindowCreated,
     });
 
-    const result = await provider.createWindow({ name: 'Mobile Shell', workingDirectory: '/repo' });
+    const result = await provider.createWindow({
+      backend: 'local',
+      name: 'Mobile Shell',
+      workingDirectory: '/repo',
+    });
 
     expect(startLocalTerminalPane).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -288,6 +292,86 @@ describe('RemoteStateProvider', () => {
     });
   });
 
+  it('lists safe SSH profile summaries and creates a synchronized SSH window', async () => {
+    const workspace = createWorkspace();
+    const sshWindow = createRunningTerminalWindow('win-ssh-created', 'Production');
+    sshWindow.kind = 'ssh';
+    if (sshWindow.layout.type === 'pane') {
+      sshWindow.layout.pane.backend = 'ssh';
+      sshWindow.layout.pane.cwd = '/srv/app';
+      sshWindow.layout.pane.command = 'zsh';
+      sshWindow.layout.pane.ssh = { profileId: 'profile-1' };
+    }
+    const processes = [{
+      windowId: sshWindow.id,
+      paneId: sshWindow.activePaneId,
+      pid: 999,
+      sessionId: 'session-999',
+      status: ProcessStatus.Alive,
+    }];
+    const listSSHProfiles = vi.fn(async () => [{
+      id: 'profile-1',
+      name: 'Production',
+      host: 'prod.example.com',
+      port: 22,
+      user: 'deploy',
+      defaultRemoteCwd: '/srv/app',
+      remoteCommand: 'zsh',
+      privateKeys: ['/secret/id_ed25519'],
+      notes: 'not exposed to mobile',
+    }] as any);
+    const createSSHWindow = vi.fn(async () => sshWindow);
+    const onWindowCreated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => processes) } as any,
+      listSSHProfiles,
+      createSSHWindow,
+      onWindowCreated,
+    });
+
+    await expect(provider.listSSHProfiles()).resolves.toEqual({
+      profiles: [{
+        profileId: 'profile-1',
+        name: 'Production',
+        host: 'prod.example.com',
+        port: 22,
+        user: 'deploy',
+        defaultRemoteCwd: '/srv/app',
+        remoteCommand: 'zsh',
+      }],
+    });
+
+    const result = await provider.createWindow({
+      backend: 'ssh',
+      profileId: 'profile-1',
+      workingDirectory: '/srv/app',
+      name: 'Deploy shell',
+      initialCols: 100,
+      initialRows: 30,
+    });
+
+    expect(createSSHWindow).toHaveBeenCalledWith({
+      backend: 'ssh',
+      profileId: 'profile-1',
+      workingDirectory: '/srv/app',
+      name: 'Deploy shell',
+      initialCols: 100,
+      initialRows: 30,
+    });
+    expect(result).toMatchObject({
+      window: { windowId: 'win-ssh-created', kind: 'ssh' },
+      pane: {
+        windowId: 'win-ssh-created',
+        paneId: 'win-ssh-created-pane',
+        backend: 'ssh',
+        running: true,
+      },
+    });
+    expect(workspace.windows.at(-1)).toBe(sshWindow);
+    expect(onWindowCreated).toHaveBeenCalledWith({ window: sshWindow, workspace });
+  });
+
   it('rolls back the inserted window when remote window creation fails', async () => {
     const workspace = createWorkspace();
     const originalWindowCount = workspace.windows.length;
@@ -299,7 +383,7 @@ describe('RemoteStateProvider', () => {
       }),
     });
 
-    await expect(provider.createWindow({ workingDirectory: '/repo' })).rejects.toThrow(
+    await expect(provider.createWindow({ backend: 'local', workingDirectory: '/repo' })).rejects.toThrow(
       'spawn_failed',
     );
     expect(workspace.windows).toHaveLength(originalWindowCount);
@@ -357,6 +441,118 @@ describe('RemoteStateProvider', () => {
       window: workspace.windows.find((window) => window.id === 'win-local'),
       workspace,
     });
+  });
+
+  it('deletes a pane from the shared layout and returns the exact surviving terminal', async () => {
+    const workspace = createWorkspace();
+    const splitWindow = createSplitTerminalWindow('win-split', ['pane-a', 'pane-b'], 'pane-a');
+    workspace.windows.push(splitWindow);
+    const stopWindowPanes = vi.fn();
+    const onPaneDeleted = vi.fn();
+    const onWorkspaceLayoutUpdated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes,
+      onPaneDeleted,
+      onWorkspaceLayoutUpdated,
+    });
+
+    const result = await provider.deletePane({ windowId: 'win-split', paneId: 'pane-a' });
+
+    expect(stopWindowPanes).toHaveBeenCalledWith({
+      windowId: 'win-split',
+      paneIds: ['pane-a'],
+    });
+    expect(splitWindow.layout).toMatchObject({
+      type: 'split',
+      sizes: [1],
+      children: [{ type: 'pane', id: 'pane-b' }],
+    });
+    expect(splitWindow.activePaneId).toBe('pane-b');
+    expect(result).toMatchObject({
+      deleted: true,
+      deletedPaneId: 'pane-a',
+      window: {
+        windowId: 'win-split',
+        activePaneId: 'pane-b',
+        terminalPaneCount: 1,
+      },
+      replacementPane: {
+        windowId: 'win-split',
+        paneId: 'pane-b',
+      },
+    });
+    expect(onPaneDeleted).toHaveBeenCalledWith({
+      windowId: 'win-split',
+      paneId: 'pane-a',
+      workspace,
+    });
+    expect(onWorkspaceLayoutUpdated).toHaveBeenCalledWith({ workspace });
+  });
+
+  it('preserves the desktop active pane when deleting a different pane', async () => {
+    const workspace = createWorkspace();
+    const splitWindow = createSplitTerminalWindow('win-split', ['pane-a', 'pane-b', 'pane-c'], 'pane-c');
+    workspace.windows.push(splitWindow);
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes: vi.fn(),
+    });
+
+    const result = await provider.deletePane({ windowId: 'win-split', paneId: 'pane-a' });
+
+    expect(splitWindow.activePaneId).toBe('pane-c');
+    expect(result.replacementPane.paneId).toBe('pane-b');
+  });
+
+  it('serializes concurrent pane deletion so a rejected last-pane request does not stop it', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createSplitTerminalWindow('win-split', ['pane-a', 'pane-b'], 'pane-a'));
+    let releaseFirstStop: (() => void) | null = null;
+    const stopWindowPanes = vi.fn(async ({ paneIds }: { paneIds: string[] }) => {
+      if (paneIds[0] === 'pane-a') {
+        await new Promise<void>((resolve) => {
+          releaseFirstStop = resolve;
+        });
+      }
+    });
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes,
+    });
+
+    const firstDelete = provider.deletePane({ windowId: 'win-split', paneId: 'pane-a' });
+    await vi.waitFor(() => expect(stopWindowPanes).toHaveBeenCalledTimes(1));
+    const secondDelete = provider.deletePane({ windowId: 'win-split', paneId: 'pane-b' });
+    await Promise.resolve();
+    expect(stopWindowPanes).toHaveBeenCalledTimes(1);
+
+    releaseFirstStop?.();
+    await expect(firstDelete).resolves.toMatchObject({ deletedPaneId: 'pane-a' });
+    await expect(secondDelete).rejects.toThrow('pane_delete_last_pane');
+    expect(stopWindowPanes).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to delete the only pane or the last terminal pane', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createTerminalWindow('win-only', 'Only'));
+    const stopWindowPanes = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes,
+    });
+
+    await expect(
+      provider.deletePane({ windowId: 'win-only', paneId: 'win-only-pane' }),
+    ).rejects.toThrow('pane_delete_last_pane');
+    await expect(
+      provider.deletePane({ windowId: 'win-1', paneId: 'pane-terminal' }),
+    ).rejects.toThrow('pane_delete_last_terminal');
+    expect(stopWindowPanes).not.toHaveBeenCalled();
   });
 
   it('stops every terminal pane in a window', async () => {
@@ -465,6 +661,71 @@ describe('RemoteStateProvider', () => {
       groupId,
     });
     expect(workspace.groups).toEqual([]);
+  });
+
+  it('removes a window from a group without deleting or stopping its terminal', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createTerminalWindow('win-local', 'Local'));
+    workspace.windows.push(createTerminalWindow('win-peer', 'Peer'));
+    workspace.windows.push(createTerminalWindow('win-other', 'Other'));
+    workspace.groups = [createGroupFixture('group-1', ['win-local', 'win-peer', 'win-other'])];
+    workspace.groups[0]!.activeWindowId = 'win-peer';
+    const stopWindowPanes = vi.fn();
+    const onWorkspaceLayoutUpdated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      stopWindowPanes,
+      onWorkspaceLayoutUpdated,
+    });
+
+    const result = await provider.removeWindowFromGroup({
+      groupId: 'group-1',
+      windowId: 'win-peer',
+    });
+
+    expect(stopWindowPanes).not.toHaveBeenCalled();
+    expect(workspace.windows.map((window) => window.id)).toContain('win-peer');
+    expect(workspace.groups).toHaveLength(1);
+    expect(getGroupFixtureWindowIds(workspace.groups[0]!.layout)).toEqual(['win-local', 'win-other']);
+    expect(workspace.groups[0]!.activeWindowId).toBe('win-local');
+    expect(result).toMatchObject({
+      removed: true,
+      groupId: 'group-1',
+      windowId: 'win-peer',
+      dissolved: false,
+      replacementWindow: { windowId: 'win-other' },
+      replacementPane: { windowId: 'win-other', paneId: 'win-other-pane' },
+    });
+    expect(onWorkspaceLayoutUpdated).toHaveBeenCalledWith({ workspace });
+  });
+
+  it('dissolves a two-window group while preserving both window records', async () => {
+    const workspace = createWorkspace();
+    workspace.windows.push(createTerminalWindow('win-local', 'Local'));
+    workspace.windows.push(createTerminalWindow('win-peer', 'Peer'));
+    workspace.groups = [createGroupFixture('group-1', ['win-local', 'win-peer'])];
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+    });
+
+    const result = await provider.removeWindowFromGroup({
+      groupId: 'group-1',
+      windowId: 'win-local',
+    });
+
+    expect(result).toMatchObject({
+      removed: true,
+      dissolved: true,
+      group: null,
+      replacementWindow: { windowId: 'win-peer' },
+      replacementPane: { paneId: 'win-peer-pane' },
+    });
+    expect(workspace.groups).toEqual([]);
+    expect(workspace.windows.map((window) => window.id)).toEqual(
+      expect.arrayContaining(['win-local', 'win-peer']),
+    );
   });
 
   it('rejects creating a group with windows already in an active group', async () => {
@@ -600,6 +861,33 @@ function createRunningTerminalWindow(id: string, name: string): Window {
   return window;
 }
 
+function createSplitTerminalWindow(id: string, paneIds: string[], activePaneId: string): Window {
+  return {
+    id,
+    name: 'Split',
+    activePaneId,
+    createdAt: '2026-07-08T00:00:00.000Z',
+    lastActiveAt: '2026-07-08T01:00:00.000Z',
+    layout: {
+      type: 'split',
+      direction: 'horizontal',
+      sizes: paneIds.map(() => 1 / paneIds.length),
+      children: paneIds.map((paneId) => ({
+        type: 'pane' as const,
+        id: paneId,
+        pane: {
+          id: paneId,
+          cwd: '/repo',
+          command: 'bash',
+          status: WindowStatus.Completed,
+          pid: null,
+          backend: 'local' as const,
+        },
+      })),
+    },
+  };
+}
+
 function createGroupFixture(id: string, windowIds: string[]) {
   return {
     id,
@@ -614,4 +902,11 @@ function createGroupFixture(id: string, windowIds: string[]) {
       children: windowIds.map((windowId) => ({ type: 'window' as const, id: windowId })),
     },
   };
+}
+
+function getGroupFixtureWindowIds(layout: Workspace['groups'][number]['layout']): string[] {
+  if (layout.type === 'window') {
+    return [layout.id];
+  }
+  return layout.children.flatMap((child) => getGroupFixtureWindowIds(child));
 }

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  Alert,
   AppState,
+  BackHandler,
   Keyboard,
   Platform,
   Pressable,
@@ -15,7 +17,15 @@ import {
 } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { Eraser, Keyboard as KeyboardIcon, RotateCw, Square } from 'lucide-react-native'
+import {
+  Check,
+  Eraser,
+  Keyboard as KeyboardIcon,
+  Pencil,
+  RotateCw,
+  Square,
+  X
+} from 'lucide-react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   TerminalWebView,
@@ -25,7 +35,9 @@ import {
 import {
   clearTerminal,
   connectToHost,
+  deleteRemotePane,
   loadHostById,
+  removeRemoteWindowFromGroup,
   requestTerminalHistory,
   requestWindowList,
   sendTerminalInput,
@@ -129,6 +141,93 @@ type TerminalSubscribeParams = {
   capabilities: { terminalBinaryStream: 1 }
 }
 
+type TabDeleteMode = 'pane' | 'group'
+
+type ManagedTerminalTabProps = {
+  label: string
+  statusColor: string
+  active: boolean
+  normalDisabled: boolean
+  starting: boolean
+  editing: boolean
+  deleting: boolean
+  deletionInFlight: boolean
+  deleteAccessibilityLabel: string
+  onPress: () => void
+  onLongPress: () => void
+  onDelete: () => void
+}
+
+function ManagedTerminalTab({
+  label,
+  statusColor,
+  active,
+  normalDisabled,
+  starting,
+  editing,
+  deleting,
+  deletionInFlight,
+  deleteAccessibilityLabel,
+  onPress,
+  onLongPress,
+  onDelete
+}: ManagedTerminalTabProps) {
+  return (
+    <View style={styles.paneTabWrapper}>
+      <Pressable
+        style={({ pressed }) => [
+          styles.paneTab,
+          active && styles.paneTabActive,
+          editing && styles.paneTabEditing,
+          normalDisabled && styles.paneTabDisabled,
+          pressed && !editing && !deletionInFlight && styles.paneTabPressed
+        ]}
+        onPress={() => {
+          if (!editing && !deletionInFlight && !starting && !normalDisabled) {
+            onPress()
+          }
+        }}
+        onLongPress={() => {
+          if (!deletionInFlight) {
+            onLongPress()
+          }
+        }}
+        delayLongPress={450}
+        accessibilityRole="tab"
+        accessibilityState={{ selected: active, disabled: normalDisabled || starting }}
+      >
+        <View style={[styles.paneTabDot, { backgroundColor: statusColor }]} />
+        <Text
+          style={[styles.paneTabText, active && styles.paneTabTextActive]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
+      </Pressable>
+      {editing ? (
+        <Pressable
+          style={({ pressed }) => [
+            styles.paneTabDeleteButton,
+            pressed && !deletionInFlight && styles.paneTabDeleteButtonPressed,
+            deletionInFlight && !deleting && styles.paneTabDeleteButtonDisabled
+          ]}
+          disabled={deletionInFlight}
+          onPress={onDelete}
+          hitSlop={4}
+          accessibilityRole="button"
+          accessibilityLabel={deleteAccessibilityLabel}
+        >
+          {deleting ? (
+            <ActivityIndicator size={12} color={colors.textPrimary} />
+          ) : (
+            <X size={13} color={colors.textPrimary} strokeWidth={3} />
+          )}
+        </Pressable>
+      ) : null}
+    </View>
+  )
+}
+
 function terminalPaneLabel(pane: RemotePaneSummary, t: MobileTranslate): string {
   return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || t('common.terminal')
 }
@@ -192,6 +291,12 @@ function terminalErrorMessage(err: unknown, t: MobileTranslate): string {
   }
   if (/workspace_not_loaded/i.test(message)) {
     return t('terminal.workspaceNotLoaded')
+  }
+  if (/pane_delete_last_pane|pane_delete_last_terminal/i.test(message)) {
+    return t('terminal.cannotDeleteOnlyPane')
+  }
+  if (/group_not_found|window_not_in_group/i.test(message)) {
+    return t('terminal.groupChanged')
   }
   return message
 }
@@ -339,6 +444,7 @@ export default function RemoteTerminalScreen() {
   const terminalSubscribeParamsRef = useRef<TerminalSubscribeParams | null>(null)
   const terminalSubscriptionGenerationRef = useRef(0)
   const terminalHistoryGenerationRef = useRef(0)
+  const windowListGenerationRef = useRef(0)
   const runIdRef = useRef(0)
   const terminalHistoryRef = useRef(createRemoteTerminalHistoryState())
   const terminalInitializedRef = useRef(false)
@@ -357,6 +463,8 @@ export default function RemoteTerminalScreen() {
     useRef<ReturnType<typeof requestAnimationFrame> | null>(null)
   const repeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const tabDeleteModeRef = useRef<TabDeleteMode | null>(null)
+  const suppressNextTabPressRef = useRef(false)
   const sendLiveTerminalInputRef = useRef<TerminalLiveInputSender>(async () => false)
   const currentPaneRuntimeKeyRef = useRef<string | null>(null)
   const terminalIncrementSyncInFlightRef = useRef(false)
@@ -373,7 +481,10 @@ export default function RemoteTerminalScreen() {
     useState<TerminalKeyboardAvoidanceMetrics | null>(null)
   const [windowPanes, setWindowPanes] = useState<RemotePaneSummary[]>([])
   const [groupWindowTabs, setGroupWindowTabs] = useState<RemoteWindowGroupSummary['windows']>([])
+  const [currentGroupId, setCurrentGroupId] = useState<string | null>(null)
   const [startingTabPaneKey, setStartingTabPaneKey] = useState<string | null>(null)
+  const [tabDeleteMode, setTabDeleteMode] = useState<TabDeleteMode | null>(null)
+  const [deletingTabKey, setDeletingTabKey] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(true)
   const [terminalTextScale, setTerminalTextScale] = useState(1)
@@ -386,6 +497,11 @@ export default function RemoteTerminalScreen() {
     () => getVisibleTerminalAccessoryKeys(getDefaultTerminalAccessoryBuiltInIds()),
     []
   )
+  const currentTabMode: TabDeleteMode | null = groupWindowTabs.length > 1
+    ? 'group'
+    : windowPanes.length > 1
+      ? 'pane'
+      : null
 
   activeHandleRef.current = terminalHandle
   activeSessionTabTypeRef.current = 'terminal'
@@ -394,6 +510,36 @@ export default function RemoteTerminalScreen() {
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-40)
     setLogs(logsRef.current)
+  }, [])
+
+  const enterTabDeleteMode = useCallback((mode: TabDeleteMode) => {
+    tabDeleteModeRef.current = mode
+    setTabDeleteMode(mode)
+  }, [])
+
+  const exitTabDeleteMode = useCallback(() => {
+    tabDeleteModeRef.current = null
+    suppressNextTabPressRef.current = false
+    setTabDeleteMode(null)
+  }, [])
+
+  const handleTabLongPress = useCallback(
+    (mode: TabDeleteMode) => {
+      suppressNextTabPressRef.current = true
+      enterTabDeleteMode(mode)
+    },
+    [enterTabDeleteMode]
+  )
+
+  const handleManagedTabPress = useCallback((action: () => void) => {
+    if (suppressNextTabPressRef.current) {
+      suppressNextTabPressRef.current = false
+      return
+    }
+    if (tabDeleteModeRef.current) {
+      return
+    }
+    action()
   }, [])
 
   const stopAccessoryRepeat = useCallback(() => {
@@ -440,6 +586,7 @@ export default function RemoteTerminalScreen() {
   const cleanup = useCallback(() => {
     runIdRef.current += 1
     terminalHistoryGenerationRef.current += 1
+    windowListGenerationRef.current += 1
     resyncingRef.current = false
     loadingOlderHistoryRef.current = false
     terminalIncrementSyncInFlightRef.current = false
@@ -487,22 +634,34 @@ export default function RemoteTerminalScreen() {
 
   const loadWindowPaneTabs = useCallback(
     async (client: RpcClient, expectedRunId = runIdRef.current) => {
+      const requestGeneration = windowListGenerationRef.current + 1
+      windowListGenerationRef.current = requestGeneration
       try {
         const { windows, groups } = await requestWindowList(client)
-        if (runIdRef.current !== expectedRunId || clientRef.current !== client) {
-          return null
+        if (
+          runIdRef.current !== expectedRunId ||
+          clientRef.current !== client ||
+          windowListGenerationRef.current !== requestGeneration
+        ) {
+          return undefined
         }
         const currentWindow = windows.find((window) => window.windowId === windowId)
         setWindowPanes(currentWindow?.panes.filter((pane) => pane.kind === 'terminal') ?? [])
         const currentGroup = groups.find((group) =>
           group.windows.some((window) => window.windowId === windowId)
         )
+        setCurrentGroupId(currentGroup?.groupId ?? null)
         setGroupWindowTabs(currentGroup?.windows ?? [])
         return currentWindow?.panes.find((pane) => pane.paneId === paneId && pane.kind === 'terminal') ?? null
       } catch {
-        if (runIdRef.current === expectedRunId && clientRef.current === client) {
+        if (
+          runIdRef.current === expectedRunId &&
+          clientRef.current === client &&
+          windowListGenerationRef.current === requestGeneration
+        ) {
           setWindowPanes([])
           setGroupWindowTabs([])
+          setCurrentGroupId(null)
         }
         return undefined
       }
@@ -900,7 +1059,12 @@ export default function RemoteTerminalScreen() {
     setLogs([])
     setWindowPanes([])
     setGroupWindowTabs([])
+    setCurrentGroupId(null)
     setStartingTabPaneKey(null)
+    tabDeleteModeRef.current = null
+    suppressNextTabPressRef.current = false
+    setTabDeleteMode(null)
+    setDeletingTabKey(null)
     setStopping(false)
     setTerminalRunning(true)
     setTerminalKeyboardMetrics(null)
@@ -993,6 +1157,25 @@ export default function RemoteTerminalScreen() {
     }, [cancelKeyboardViewportRestore, cleanup, openTerminal, restoreTerminalAfterKeyboard])
   )
 
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (!tabDeleteModeRef.current) {
+          return false
+        }
+        exitTabDeleteMode()
+        return true
+      })
+      return () => subscription.remove()
+    }, [exitTabDeleteMode])
+  )
+
+  useEffect(() => {
+    if (tabDeleteMode && tabDeleteMode !== currentTabMode) {
+      exitTabDeleteMode()
+    }
+  }, [currentTabMode, exitTabDeleteMode, tabDeleteMode])
+
   const handleTerminalInput = useCallback(
     (bytes: string) => {
       const client = clientRef.current
@@ -1063,6 +1246,201 @@ export default function RemoteTerminalScreen() {
       }
     }
   }, [hostId, paneId, router, stopping, t, windowId])
+
+  const navigateToReplacementPane = useCallback(
+    async (client: RpcClient, replacementPane: RemotePaneSummary | null, expectedRunId: number) => {
+      if (!replacementPane) {
+        router.replace(`/h/${hostId}`)
+        return
+      }
+
+      let targetPane = replacementPane
+      if (!targetPane.running) {
+        if (!isStartableLocalPane(targetPane)) {
+          if (runIdRef.current === expectedRunId && clientRef.current === client) {
+            setError(t('terminal.onlyLocalStart'))
+            router.replace(`/h/${hostId}`)
+          }
+          return
+        }
+        let startResult: Awaited<ReturnType<typeof startRemoteWindow>>
+        try {
+          startResult = await startRemoteWindow(
+            client,
+            targetPane.windowId,
+            targetPane.paneId,
+            viewportRef.current
+          )
+        } catch (err) {
+          if (runIdRef.current === expectedRunId && clientRef.current === client) {
+            setError(terminalErrorMessage(err, t))
+            router.replace(`/h/${hostId}`)
+          }
+          return
+        }
+        if (runIdRef.current !== expectedRunId || clientRef.current !== client) {
+          return
+        }
+        targetPane = startResult.pane ??
+          startResult.window.panes.find((pane) => pane.paneId === targetPane.paneId) ??
+          targetPane
+      }
+
+      if (runIdRef.current !== expectedRunId || clientRef.current !== client) {
+        return
+      }
+      router.replace(
+        `/h/${hostId}/t/${encodeURIComponent(targetPane.windowId)}/${encodeURIComponent(targetPane.paneId)}`
+      )
+    },
+    [hostId, router, t]
+  )
+
+  const handleDeletePaneTab = useCallback(
+    async (pane: RemotePaneSummary) => {
+      const client = clientRef.current
+      if (!client || deletingTabKey) {
+        return
+      }
+      const runId = runIdRef.current
+      const tabKey = `pane:${pane.windowId}:${pane.paneId}`
+      setDeletingTabKey(tabKey)
+      setError(null)
+      try {
+        const result = await deleteRemotePane(client, pane.windowId, pane.paneId)
+        if (runIdRef.current !== runId || clientRef.current !== client) {
+          return
+        }
+
+        if (pane.windowId === windowId && pane.paneId === paneId) {
+          exitTabDeleteMode()
+          await navigateToReplacementPane(client, result.replacementPane, runId)
+          return
+        }
+
+        const nextPanes = result.window.panes.filter((item) => item.kind === 'terminal')
+        setWindowPanes(nextPanes)
+        if (nextPanes.length <= 1) {
+          exitTabDeleteMode()
+        }
+        await loadWindowPaneTabs(client, runId)
+      } catch (err) {
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setError(terminalErrorMessage(err, t))
+          await loadWindowPaneTabs(client, runId)
+        }
+      } finally {
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setDeletingTabKey(null)
+        }
+      }
+    },
+    [
+      deletingTabKey,
+      exitTabDeleteMode,
+      loadWindowPaneTabs,
+      navigateToReplacementPane,
+      paneId,
+      t,
+      windowId
+    ]
+  )
+
+  const confirmPaneTabDeletion = useCallback(
+    (pane: RemotePaneSummary) => {
+      if (deletingTabKey) {
+        return
+      }
+      Alert.alert(
+        t('terminal.deletePaneTitle'),
+        t('terminal.deletePaneMessage'),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          {
+            text: t('terminal.deletePaneAction'),
+            style: 'destructive',
+            onPress: () => void handleDeletePaneTab(pane)
+          }
+        ]
+      )
+    },
+    [deletingTabKey, handleDeletePaneTab, t]
+  )
+
+  const handleRemoveGroupWindowTab = useCallback(
+    async (groupWindow: RemoteWindowGroupSummary['windows'][number]) => {
+      const client = clientRef.current
+      const groupId = currentGroupId
+      if (!client || !groupId || deletingTabKey) {
+        if (!groupId) {
+          setError(t('terminal.groupChanged'))
+        }
+        return
+      }
+      const runId = runIdRef.current
+      const tabKey = `group:${groupWindow.windowId}`
+      setDeletingTabKey(tabKey)
+      setError(null)
+      try {
+        const result = await removeRemoteWindowFromGroup(client, groupId, groupWindow.windowId)
+        if (runIdRef.current !== runId || clientRef.current !== client) {
+          return
+        }
+
+        if (groupWindow.windowId === windowId) {
+          exitTabDeleteMode()
+          await navigateToReplacementPane(client, result.replacementPane, runId)
+          return
+        }
+
+        setCurrentGroupId(result.group?.groupId ?? null)
+        setGroupWindowTabs(result.group?.windows ?? [])
+        if (!result.group || result.group.windows.length <= 1) {
+          exitTabDeleteMode()
+        }
+        await loadWindowPaneTabs(client, runId)
+      } catch (err) {
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setError(terminalErrorMessage(err, t))
+          await loadWindowPaneTabs(client, runId)
+        }
+      } finally {
+        if (runIdRef.current === runId && clientRef.current === client) {
+          setDeletingTabKey(null)
+        }
+      }
+    },
+    [
+      currentGroupId,
+      deletingTabKey,
+      exitTabDeleteMode,
+      loadWindowPaneTabs,
+      navigateToReplacementPane,
+      t,
+      windowId
+    ]
+  )
+
+  const confirmGroupWindowRemoval = useCallback(
+    (groupWindow: RemoteWindowGroupSummary['windows'][number]) => {
+      if (deletingTabKey) {
+        return
+      }
+      Alert.alert(
+        t('terminal.removeGroupWindowTitle'),
+        t('terminal.removeGroupWindowMessage'),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          {
+            text: t('terminal.removeGroupWindowAction'),
+            style: 'destructive',
+            onPress: () => void handleRemoveGroupWindowTab(groupWindow)
+          }
+        ]
+      )
+    },
+    [deletingTabKey, handleRemoveGroupWindowTab, t]
+  )
 
   const handlePaneTabPress = useCallback(
     async (pane: RemotePaneSummary) => {
@@ -1444,15 +1822,32 @@ export default function RemoteTerminalScreen() {
           headerTitle: '',
           headerRight: () => (
             <View style={styles.navActions}>
-              <Pressable style={styles.navIconButton} onPress={() => void openTerminal()}>
+              <Pressable
+                style={[
+                  styles.navIconButton,
+                  deletingTabKey !== null && styles.iconButtonDisabled
+                ]}
+                disabled={deletingTabKey !== null}
+                onPress={() => void openTerminal()}
+              >
                 <RotateCw size={18} color={colors.textPrimary} />
               </Pressable>
-              <Pressable style={styles.navIconButton} onPress={() => void handleClear()}>
+              <Pressable
+                style={[
+                  styles.navIconButton,
+                  deletingTabKey !== null && styles.iconButtonDisabled
+                ]}
+                disabled={deletingTabKey !== null}
+                onPress={() => void handleClear()}
+              >
                 <Eraser size={18} color={colors.textPrimary} />
               </Pressable>
               <Pressable
-                style={[styles.navIconButton, stopping && styles.iconButtonDisabled]}
-                disabled={stopping}
+                style={[
+                  styles.navIconButton,
+                  (stopping || deletingTabKey !== null) && styles.iconButtonDisabled
+                ]}
+                disabled={stopping || deletingTabKey !== null}
                 onPress={() => void handleStop()}
                 accessibilityLabel={t('overview.stopTerminal')}
               >
@@ -1466,88 +1861,140 @@ export default function RemoteTerminalScreen() {
 
       {showGroupWindowTabs ? (
         <View style={styles.paneTabs}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.paneTabContent}
-          >
-            {groupWindowTabs.map((window) => {
-              const active = window.windowId === windowId
-              const pane = getActiveTerminalPane(window.panes, window.activePaneId)
-              const paneKey = pane ? `${pane.windowId}:${pane.paneId}` : window.windowId
-              const starting = startingTabPaneKey === paneKey
-              const disabled = !pane || (!active && !pane.running && !isStartableLocalPane(pane))
-              return (
-                <Pressable
-                  key={window.windowId}
-                  disabled={disabled || starting}
-                  style={({ pressed }) => [
-                    styles.paneTab,
-                    active && styles.paneTabActive,
-                    disabled && styles.paneTabDisabled,
-                    pressed && styles.paneTabPressed
-                  ]}
-                  onPress={() => void handleGroupWindowTabPress(window)}
-                >
-                  <View
-                    style={[
-                      styles.paneTabDot,
-                      { backgroundColor: pane ? terminalPaneStatusColor(pane) : colors.borderSubtle }
-                    ]}
+          <View style={styles.paneTabsRow}>
+            <ScrollView
+              style={styles.paneTabScroller}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.paneTabContent}
+            >
+              {groupWindowTabs.map((window) => {
+                const active = window.windowId === windowId
+                const pane = getActiveTerminalPane(window.panes, window.activePaneId)
+                const paneKey = pane ? `${pane.windowId}:${pane.paneId}` : window.windowId
+                const deleteKey = `group:${window.windowId}`
+                const starting = startingTabPaneKey === paneKey
+                const disabled = !pane || (!active && !pane.running && !isStartableLocalPane(pane))
+                return (
+                  <ManagedTerminalTab
+                    key={window.windowId}
+                    label={starting ? t('common.starting') : window.name}
+                    statusColor={pane ? terminalPaneStatusColor(pane) : colors.borderSubtle}
+                    active={active}
+                    normalDisabled={disabled}
+                    starting={starting}
+                    editing={tabDeleteMode === 'group'}
+                    deleting={deletingTabKey === deleteKey}
+                    deletionInFlight={deletingTabKey !== null}
+                    deleteAccessibilityLabel={t('terminal.removeGroupWindowAction')}
+                    onPress={() => handleManagedTabPress(() => void handleGroupWindowTabPress(window))}
+                    onLongPress={() => handleTabLongPress('group')}
+                    onDelete={() => confirmGroupWindowRemoval(window)}
                   />
-                  <Text
-                    style={[styles.paneTabText, active && styles.paneTabTextActive]}
-                    numberOfLines={1}
-                  >
-                    {starting ? t('common.starting') : window.name}
-                  </Text>
-                </Pressable>
-              )
-            })}
-          </ScrollView>
+                )
+              })}
+            </ScrollView>
+            <Pressable
+              style={({ pressed }) => [
+                styles.paneTabManageButton,
+                pressed && !deletingTabKey && styles.paneTabPressed,
+                deletingTabKey && styles.iconButtonDisabled
+              ]}
+              disabled={deletingTabKey !== null}
+              onPress={() => {
+                if (tabDeleteMode === 'group') {
+                  exitTabDeleteMode()
+                } else {
+                  enterTabDeleteMode('group')
+                }
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                tabDeleteMode === 'group'
+                  ? t('terminal.finishManagingTabs')
+                  : t('terminal.manageTabs')
+              }
+            >
+              {tabDeleteMode === 'group' ? (
+                <>
+                  <Check size={16} color={colors.textPrimary} strokeWidth={2.5} />
+                  <Text style={styles.paneTabManageText}>{t('common.done')}</Text>
+                </>
+              ) : (
+                <Pencil size={16} color={colors.textSecondary} />
+              )}
+            </Pressable>
+          </View>
         </View>
       ) : windowPanes.length > 1 ? (
         <View style={styles.paneTabs}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.paneTabContent}
-          >
-            {windowPanes.map((pane, index) => {
-              const active = pane.paneId === paneId
-              const paneKey = `${pane.windowId}:${pane.paneId}`
-              const starting = startingTabPaneKey === paneKey
-              const disabled = !active && !pane.running && !isStartableLocalPane(pane)
-              return (
-                <Pressable
-                  key={paneKey}
-                  disabled={disabled || starting}
-                  style={({ pressed }) => [
-                    styles.paneTab,
-                    active && styles.paneTabActive,
-                    disabled && styles.paneTabDisabled,
-                    pressed && styles.paneTabPressed
-                  ]}
-                  onPress={() => void handlePaneTabPress(pane)}
-                >
-                  <View
-                    style={[
-                      styles.paneTabDot,
-                      { backgroundColor: terminalPaneStatusColor(pane) }
-                    ]}
+          <View style={styles.paneTabsRow}>
+            <ScrollView
+              style={styles.paneTabScroller}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.paneTabContent}
+            >
+              {windowPanes.map((pane, index) => {
+                const active = pane.paneId === paneId
+                const paneKey = `${pane.windowId}:${pane.paneId}`
+                const deleteKey = `pane:${pane.windowId}:${pane.paneId}`
+                const starting = startingTabPaneKey === paneKey
+                const disabled = !active && !pane.running && !isStartableLocalPane(pane)
+                return (
+                  <ManagedTerminalTab
+                    key={paneKey}
+                    label={
+                      starting
+                        ? t('common.starting')
+                        : terminalPaneLabel(pane, t) || `${t('overview.pane')} ${index + 1}`
+                    }
+                    statusColor={terminalPaneStatusColor(pane)}
+                    active={active}
+                    normalDisabled={disabled}
+                    starting={starting}
+                    editing={tabDeleteMode === 'pane'}
+                    deleting={deletingTabKey === deleteKey}
+                    deletionInFlight={deletingTabKey !== null}
+                    deleteAccessibilityLabel={t('terminal.deletePaneAction')}
+                    onPress={() => handleManagedTabPress(() => void handlePaneTabPress(pane))}
+                    onLongPress={() => handleTabLongPress('pane')}
+                    onDelete={() => confirmPaneTabDeletion(pane)}
                   />
-                  <Text
-                    style={[styles.paneTabText, active && styles.paneTabTextActive]}
-                    numberOfLines={1}
-                  >
-                    {starting
-                      ? t('common.starting')
-                      : terminalPaneLabel(pane, t) || `${t('overview.pane')} ${index + 1}`}
-                  </Text>
-                </Pressable>
-              )
-            })}
-          </ScrollView>
+                )
+              })}
+            </ScrollView>
+            <Pressable
+              style={({ pressed }) => [
+                styles.paneTabManageButton,
+                pressed && !deletingTabKey && styles.paneTabPressed,
+                deletingTabKey && styles.iconButtonDisabled
+              ]}
+              disabled={deletingTabKey !== null}
+              onPress={() => {
+                if (tabDeleteMode === 'pane') {
+                  exitTabDeleteMode()
+                } else {
+                  enterTabDeleteMode('pane')
+                }
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                tabDeleteMode === 'pane'
+                  ? t('terminal.finishManagingTabs')
+                  : t('terminal.manageTabs')
+              }
+            >
+              {tabDeleteMode === 'pane' ? (
+                <>
+                  <Check size={16} color={colors.textPrimary} strokeWidth={2.5} />
+                  <Text style={styles.paneTabManageText}>{t('common.done')}</Text>
+                </>
+              ) : (
+                <Pencil size={16} color={colors.textSecondary} />
+              )}
+            </Pressable>
+          </View>
         </View>
       ) : null}
 
@@ -1731,10 +2178,23 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.borderSubtle,
     backgroundColor: colors.bgPanel
   },
+  paneTabsRow: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  paneTabScroller: {
+    flex: 1
+  },
   paneTabContent: {
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm
+  },
+  paneTabWrapper: {
+    position: 'relative',
+    paddingTop: 4,
+    paddingRight: 4
   },
   paneTab: {
     maxWidth: 180,
@@ -1751,11 +2211,53 @@ const styles = StyleSheet.create({
   paneTabActive: {
     borderColor: colors.accentBlue
   },
+  paneTabEditing: {
+    paddingRight: spacing.xl
+  },
   paneTabDisabled: {
     opacity: 0.45
   },
   paneTabPressed: {
     backgroundColor: colors.borderSubtle
+  },
+  paneTabDeleteButton: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: colors.bgPanel,
+    backgroundColor: colors.statusRed,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 3
+  },
+  paneTabDeleteButtonPressed: {
+    opacity: 0.78
+  },
+  paneTabDeleteButtonDisabled: {
+    opacity: 0.35
+  },
+  paneTabManageButton: {
+    minWidth: 36,
+    height: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    marginRight: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radii.button,
+    backgroundColor: colors.bgRaised,
+    paddingHorizontal: spacing.sm
+  },
+  paneTabManageText: {
+    color: colors.textPrimary,
+    fontSize: typography.metaSize,
+    fontWeight: '700'
   },
   paneTabDot: {
     width: 7,
@@ -1763,6 +2265,7 @@ const styles = StyleSheet.create({
     borderRadius: 4
   },
   paneTabText: {
+    flexShrink: 1,
     maxWidth: 140,
     color: colors.textSecondary,
     fontSize: typography.metaSize,

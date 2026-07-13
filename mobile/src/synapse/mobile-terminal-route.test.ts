@@ -81,6 +81,8 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('runIdRef.current !== runId || clientRef.current !== client')
     expect(routeSource).toContain('terminalIncrementSyncInFlightRef.current = false')
     expect(routeSource).toContain('paneStatusSyncInFlightRef.current = false')
+    expect(routeSource).toContain('const windowListGenerationRef = useRef(0)')
+    expect(routeSource).toContain('windowListGenerationRef.current !== requestGeneration')
   })
 
   it('invalidates stale subscription frames and history responses after an in-place reload', () => {
@@ -159,7 +161,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('<Stack.Screen')
     expect(routeSource).toContain("headerTitle: ''")
     expect(routeSource).toContain('headerRight: () => (')
-    expect(routeSource).toContain('style={styles.navIconButton}')
+    expect(routeSource).toContain('styles.navIconButton')
     expect(routeSource).not.toContain('<View style={styles.toolbar}>')
     expect(routeSource).not.toContain("<Text style={styles.title}>{t('common.terminal')}</Text>")
     expect(routeSource).not.toContain('{windowId}:{paneId}')
@@ -191,6 +193,27 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('getActiveTerminalPane(window.panes, window.activePaneId)')
     expect(routeSource).toContain('handleGroupWindowTabPress(window)')
     expect(routeSource).toContain(': windowPanes.length > 1 ?')
+  })
+
+  it('provides explicit and long-press tab deletion with confirmation and exact replacement routing', () => {
+    expect(routeSource).toContain("type TabDeleteMode = 'pane' | 'group'")
+    expect(routeSource).toContain('function ManagedTerminalTab(')
+    expect(routeSource).toContain("enterTabDeleteMode('pane')")
+    expect(routeSource).toContain("enterTabDeleteMode('group')")
+    expect(routeSource).toContain("handleTabLongPress('pane')")
+    expect(routeSource).toContain("handleTabLongPress('group')")
+    expect(routeSource).toContain('styles.paneTabDeleteButton')
+    expect(routeSource).toContain("t('common.done')")
+    expect(routeSource).toContain("Alert.alert(\n        t('terminal.deletePaneTitle')")
+    expect(routeSource).toContain("Alert.alert(\n        t('terminal.removeGroupWindowTitle')")
+    expect(routeSource).toContain("BackHandler.addEventListener('hardwareBackPress'")
+    expect(routeSource).toContain('deleteRemotePane(client, pane.windowId, pane.paneId)')
+    expect(routeSource).toContain(
+      'removeRemoteWindowFromGroup(client, groupId, groupWindow.windowId)'
+    )
+    expect(routeSource).toContain(
+      'navigateToReplacementPane(client, result.replacementPane, runId)'
+    )
   })
 
   it('cleans up subscriptions and sockets when leaving the terminal screen', () => {
