@@ -350,6 +350,9 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       revealLiveInput() {
         postMessage({ type: 'reveal-live-input' })
       },
+      restoreKeyboardViewport() {
+        postMessage({ type: 'restore-keyboard-viewport' })
+      },
       cancelSelect() {
         postMessage({ type: 'cancel-select' })
       },

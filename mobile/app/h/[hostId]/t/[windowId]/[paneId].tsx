@@ -353,6 +353,8 @@ export default function RemoteTerminalScreen() {
   const activeSessionTabTypeRef = useRef<'terminal' | null>('terminal')
   const liveInputRef = useRef<TextInput | null>(null)
   const liveInputFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const keyboardViewportRestoreFrameRef =
+    useRef<ReturnType<typeof requestAnimationFrame> | null>(null)
   const repeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sendLiveTerminalInputRef = useRef<TerminalLiveInputSender>(async () => false)
@@ -405,6 +407,29 @@ export default function RemoteTerminalScreen() {
     }
   }, [])
 
+  const cancelKeyboardViewportRestore = useCallback(() => {
+    if (keyboardViewportRestoreFrameRef.current === null) {
+      return
+    }
+    cancelAnimationFrame(keyboardViewportRestoreFrameRef.current)
+    keyboardViewportRestoreFrameRef.current = null
+  }, [])
+
+  const restoreTerminalAfterKeyboard = useCallback(() => {
+    setKeyboardHeight(0)
+    cancelKeyboardViewportRestore()
+    // The native keyboard hide event can precede the WebView's restored layout.
+    // Wait for RN layout and the WebView viewport to settle before clamping pan.
+    keyboardViewportRestoreFrameRef.current = requestAnimationFrame(() => {
+      keyboardViewportRestoreFrameRef.current = requestAnimationFrame(() => {
+        keyboardViewportRestoreFrameRef.current = null
+        if (!Keyboard.isVisible()) {
+          terminalRef.current?.restoreKeyboardViewport()
+        }
+      })
+    })
+  }, [cancelKeyboardViewportRestore])
+
   const stopTerminalSubscription = useCallback(() => {
     terminalSubscriptionGenerationRef.current += 1
     unsubscribeRef.current?.()
@@ -423,9 +448,10 @@ export default function RemoteTerminalScreen() {
     clientRef.current?.close()
     clientRef.current = null
     clearTerminalLiveInputFocusTimer(liveInputFocusTimerRef)
+    cancelKeyboardViewportRestore()
     stopAccessoryRepeat()
     setLoadingOlderHistory(false)
-  }, [stopAccessoryRepeat, stopTerminalSubscription])
+  }, [cancelKeyboardViewportRestore, stopAccessoryRepeat, stopTerminalSubscription])
 
   const refitTerminalToPhone = useCallback(() => {
     terminalRef.current?.resetZoom()
@@ -936,20 +962,35 @@ export default function RemoteTerminalScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      const keyboardMetrics = Keyboard.metrics()
+      setKeyboardHeight(Keyboard.isVisible() ? Math.max(0, keyboardMetrics?.height ?? 0) : 0)
       void openTerminal()
       const subscription = AppState.addEventListener('change', (state) => {
-        if (state === 'active') {
-          clientRef.current?.notifyForeground()
-          setTimeout(() => {
-            void syncTerminalIncrementRef.current?.()
-          }, 150)
+        if (state !== 'active') {
+          liveInputRef.current?.blur()
+          Keyboard.dismiss()
+          setKeyboardHeight(0)
+          cancelKeyboardViewportRestore()
+          return
         }
+        clientRef.current?.notifyForeground()
+        if (Keyboard.isVisible()) {
+          cancelKeyboardViewportRestore()
+          setKeyboardHeight(Math.max(0, Keyboard.metrics()?.height ?? 0))
+        } else {
+          restoreTerminalAfterKeyboard()
+        }
+        setTimeout(() => {
+          void syncTerminalIncrementRef.current?.()
+        }, 150)
       })
       return () => {
         subscription.remove()
+        liveInputRef.current?.blur()
+        Keyboard.dismiss()
         cleanup()
       }
-    }, [cleanup, openTerminal])
+    }, [cancelKeyboardViewportRestore, cleanup, openTerminal, restoreTerminalAfterKeyboard])
   )
 
   const handleTerminalInput = useCallback(
@@ -1341,19 +1382,26 @@ export default function RemoteTerminalScreen() {
 
   useEffect(() => {
     const updateKeyboardHeight = (event: KeyboardEvent) => {
+      cancelKeyboardViewportRestore()
       setKeyboardHeight(Math.max(0, event.endCoordinates.height))
     }
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
     const showSub = Keyboard.addListener(showEvent, updateKeyboardHeight)
-    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0))
+    const hideSub = Keyboard.addListener(hideEvent, restoreTerminalAfterKeyboard)
+    const settledHideSub =
+      Platform.OS === 'ios'
+        ? Keyboard.addListener('keyboardDidHide', restoreTerminalAfterKeyboard)
+        : null
     return () => {
       showSub.remove()
       hideSub.remove()
+      settledHideSub?.remove()
       clearTerminalLiveInputFocusTimer(liveInputFocusTimerRef)
+      cancelKeyboardViewportRestore()
       stopAccessoryRepeat()
     }
-  }, [stopAccessoryRepeat])
+  }, [cancelKeyboardViewportRestore, restoreTerminalAfterKeyboard, stopAccessoryRepeat])
 
   useEffect(() => {
     if (loading || connectionState !== 'connected') {
@@ -1509,7 +1557,7 @@ export default function RemoteTerminalScreen() {
         <View
           style={[
             styles.terminalSurface,
-            terminalKeyboardLift > 0 && { transform: [{ translateY: -terminalKeyboardLift }] }
+            { transform: [{ translateY: -terminalKeyboardLift }] }
           ]}
         >
           <TerminalWebView

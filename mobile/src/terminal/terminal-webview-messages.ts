@@ -34,6 +34,7 @@ export type TerminalWebViewCommand =
   | { type: 'measure'; id?: number; containerHeight?: number }
   | { type: 'reset-zoom'; id?: number }
   | { type: 'reveal-live-input'; id?: number }
+  | { type: 'restore-keyboard-viewport'; id?: number }
   | { type: 'cancel-select'; id?: number }
   | { type: 'do-select-all'; id?: number }
   | { type: 'set-theme'; id?: number; terminalTheme?: MobileTerminalTheme }

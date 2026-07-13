@@ -135,4 +135,18 @@ describe('terminal WebView bundled engine', () => {
     expect(terminalHtmlSource).toContain('term.scrollToBottom();')
     expect(terminalHtmlSource).toContain('panY = window.innerHeight - cursorBottomPx;')
   })
+
+  it('restores the full viewport after keyboard avoidance without changing the terminal grid', () => {
+    const restoreStart = terminalHtmlSource.indexOf('function restoreKeyboardViewport()')
+    const restoreEnd = terminalHtmlSource.indexOf('function attachTermObservers()', restoreStart)
+    const restoreSource = terminalHtmlSource.slice(restoreStart, restoreEnd)
+
+    expect(terminalHtmlSource).toContain("msg.type === 'restore-keyboard-viewport'")
+    expect(restoreSource).toContain('resetSmoothScrollOffset();')
+    expect(restoreSource).toContain('clampPan();')
+    expect(restoreSource).toContain('updateTransform();')
+    expect(restoreSource).toContain('emitKeyboardAvoidanceMetrics();')
+    expect(restoreSource).not.toContain('term.resize(')
+    expect(restoreSource).not.toContain('applyFitScale(')
+  })
 })

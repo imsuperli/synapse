@@ -127,12 +127,19 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('terminalRef.current?.clear()')
   })
 
-  it('moves only terminal content that would be covered by the software keyboard', () => {
+  it('moves only covered terminal content and restores the full viewport after keyboard hide', () => {
     expect(routeSource).toContain('getTerminalKeyboardAvoidanceLift({')
     expect(routeSource).toContain('metrics: terminalKeyboardMetrics')
     expect(routeSource).toContain('onKeyboardAvoidanceMetrics={handleKeyboardAvoidanceMetrics}')
-    expect(routeSource).toContain('terminalKeyboardLift > 0 && { transform:')
+    expect(routeSource).toContain('{ transform: [{ translateY: -terminalKeyboardLift }] }')
+    expect(routeSource).not.toContain('terminalKeyboardLift > 0 && { transform:')
     expect(routeSource).toContain('terminalRef.current?.revealLiveInput()')
+    expect(routeSource).toContain('terminalRef.current?.restoreKeyboardViewport()')
+    expect(routeSource).toContain('const restoreTerminalAfterKeyboard = useCallback(() => {')
+    expect(routeSource).toContain("Keyboard.addListener('keyboardDidHide', restoreTerminalAfterKeyboard)")
+    expect(routeSource).toContain('if (!Keyboard.isVisible()) {')
+    expect(routeSource).toContain('liveInputRef.current?.blur()')
+    expect(routeSource).toContain('Keyboard.dismiss()')
     expect(routeSource).toContain("overflow: 'hidden'")
     expect(routeSource).toContain("Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'")
   })

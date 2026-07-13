@@ -1,5 +1,4 @@
 import type { TerminalOscLinkRange } from './terminal-osc-link-ranges'
-import type { MobileTerminalTheme } from './mobile-terminal-theme'
 
 export type { MobileTerminalTheme } from './mobile-terminal-theme'
 
@@ -61,6 +60,7 @@ export type TerminalWebViewHandle = {
   measureFitDimensions: (containerHeight?: number) => Promise<{ cols: number; rows: number } | null>
   resetZoom: () => void
   revealLiveInput: () => void
+  restoreKeyboardViewport: () => void
   cancelSelect: () => void
   doSelectAll: () => void
   // Why: lets callers await the WebView-side `init` rAF chain (term.open

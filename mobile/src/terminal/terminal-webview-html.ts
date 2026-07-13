@@ -1045,6 +1045,8 @@ window.onerror = function(msg) {
       applyFitScale('reset-zoom-msg');
     } else if (msg.type === 'reveal-live-input') {
       revealLiveInput();
+    } else if (msg.type === 'restore-keyboard-viewport') {
+      restoreKeyboardViewport();
     } else if (msg.type === 'set-theme') {
       applyTerminalTheme(msg.terminalTheme);
     } else if (msg.type === 'cancel-select') {
@@ -1217,6 +1219,14 @@ window.onerror = function(msg) {
       updateTransform();
     }
     updateScrollIndicator(false);
+    emitKeyboardAvoidanceMetrics();
+  }
+
+  function restoreKeyboardViewport() {
+    if (!term) return;
+    resetSmoothScrollOffset();
+    clampPan();
+    updateTransform();
     emitKeyboardAvoidanceMetrics();
   }
 
