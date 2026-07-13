@@ -15,7 +15,9 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(subscribeIndex).toBeGreaterThanOrEqual(0)
     expect(snapshotIndex).toBeGreaterThan(subscribeIndex)
     expect(applyIndex).toBeGreaterThan(snapshotIndex)
-    expect(routeSource).toContain('terminalRef.current?.init(\n        viewport.cols,\n        viewport.rows,')
+    expect(routeSource).toContain('const viewport = updateTerminalViewportFromDesktop(snapshot, false)')
+    expect(routeSource).toContain('const fitPromise = fitTerminalRowsToPhone(')
+    expect(routeSource).toContain('await fitPromise')
     expect(routeSource).toContain('sinceSeq: options.sinceSeq ?? terminalHistoryRef.current.lastSeq')
     expect(routeSource).toContain('capabilities: { terminalBinaryStream: 1 }')
     expect(routeSource).toContain('parseTerminalSubscribedEvent(payload)')
@@ -41,9 +43,11 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('loads older terminal history when the WebView reaches the top of scrollback', () => {
     expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_BYTES = 192 * 1024')
     expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_CHUNKS = 50_000')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_PREFETCH_BYTES = 768 * 1024')
     expect(routeSource).toContain('const handleHistoryTopReached = useCallback(() => {')
-    expect(routeSource).toContain('beforeSeq,\n          limitBytes: TERMINAL_HISTORY_PAGE_BYTES')
-    expect(routeSource).toContain('prependRemoteTerminalHistoryPage(terminalHistoryRef.current, history)')
+    expect(routeSource).toContain('await prefetchOlderTerminalHistory()')
+    expect(routeSource).toContain('takePrefetchedRemoteTerminalHistory(prefetch)')
+    expect(routeSource).toContain('prependRemoteTerminalHistoryPage(\n            terminalHistoryRef.current,\n            page')
     expect(routeSource).toContain('buildRemoteTerminalInitialData(terminalHistoryRef.current)')
     expect(routeSource).toContain('onHistoryTopReached={handleHistoryTopReached}')
     expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
@@ -111,14 +115,12 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('terminalSubscribeParamsRef.current.sinceSeq = terminalHistoryRef.current.lastSeq')
   })
 
-  it('resizes the mobile xterm without replacing history when desktop pane dimensions change', () => {
-    expect(routeSource).toContain('terminalRef.current?.resize(historyViewport.cols, historyViewport.rows)')
-    const viewportBranch = routeSource.slice(
-      routeSource.indexOf('if (!sameTerminalViewport(historyViewport, viewportRef.current))'),
-      routeSource.indexOf('if (history.gap)')
-    )
-    expect(viewportBranch).not.toContain('reloadSnapshotForCurrentRun')
-    expect(viewportBranch).not.toContain('resetRemoteTerminalHistoryState')
+  it('keeps mobile rows independent while following desktop column changes', () => {
+    expect(routeSource).toContain('const desktopViewportRef = useRef<RemoteTerminalViewport>')
+    expect(routeSource).toContain('const fittedPhoneRowsRef = useRef(0)')
+    expect(routeSource).toContain('resolveMobileTerminalViewport(')
+    expect(routeSource).toContain('terminalRef.current?.resize(nextViewport.cols, nextViewport.rows)')
+    expect(routeSource).not.toContain('resizeTerminal(client')
   })
 
   it('routes user input and clear through Synapse terminal RPC helpers', () => {

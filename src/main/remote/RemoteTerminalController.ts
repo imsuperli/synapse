@@ -51,9 +51,13 @@ type TerminalStreamSnapshot = {
 };
 
 const TERMINAL_STREAM_CHUNK_BYTES = 48 * 1024;
-const TERMINAL_STREAM_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+// Keep the first terminal paint small. Older output remains available through
+// terminal.history and is prefetched by the mobile client after live streaming
+// is active.
+const TERMINAL_STREAM_SNAPSHOT_BYTES = 128 * 1024;
 const TERMINAL_STREAM_INCREMENT_BYTES = 512 * 1024;
-const TERMINAL_STREAM_SNAPSHOT_CHUNKS = 250_000;
+const TERMINAL_STREAM_SNAPSHOT_CHUNKS = 20_000;
+const TERMINAL_STREAM_INCREMENT_CHUNKS = 250_000;
 let nextTerminalStreamId = 1;
 
 export class RemoteTerminalController {
@@ -368,7 +372,7 @@ export class RemoteTerminalController {
     }
     const entries = limitHistoryEntriesForward(history.entries, {
       limitBytes: TERMINAL_STREAM_INCREMENT_BYTES,
-      limitChunks: TERMINAL_STREAM_SNAPSHOT_CHUNKS,
+      limitChunks: TERMINAL_STREAM_INCREMENT_CHUNKS,
     });
     const lastSeq = entries.at(-1)?.seq ?? sinceSeq;
     return {

@@ -548,6 +548,27 @@ describe('RemoteDispatcher', () => {
     });
   });
 
+  it('bounds the initial terminal snapshot so live rendering is not blocked by full history', async () => {
+    const harness = createHarness();
+
+    await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 0,
+      capabilities: { terminalBinaryStream: 1 },
+    });
+
+    expect(harness.processManager.getPtyHistoryEntriesBefore).toHaveBeenCalledWith(
+      'win-1',
+      'pane-1',
+      Number.MAX_SAFE_INTEGER,
+      {
+        limitBytes: 128 * 1024,
+        limitChunks: 20_000,
+      },
+    );
+  });
+
   it('replaces an ahead reconnect cursor and resumes output from the new process sequence', async () => {
     const harness = createHarness();
     const binaryEvents: Uint8Array[] = [];
