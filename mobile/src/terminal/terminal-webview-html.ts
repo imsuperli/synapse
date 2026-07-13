@@ -798,8 +798,11 @@ window.onerror = function(msg) {
       scrollback: 30000,
       disableStdin: true,
       cursorBlink: false,
-      cursorStyle: 'bar',
-      cursorInactiveStyle: 'none',
+      // RN owns keyboard focus through its hidden TextInput, so this xterm is
+      // intentionally unfocused while the user types. Keep the inactive cursor
+      // visible and use a block that survives phone-width viewport scaling.
+      cursorStyle: 'block',
+      cursorInactiveStyle: 'block',
       convertEol: false,
       allowProposedApi: true
     });

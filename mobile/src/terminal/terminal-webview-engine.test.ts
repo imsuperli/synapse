@@ -121,6 +121,18 @@ describe('terminal WebView bundled engine', () => {
     expect(clearSource).toContain('emitKeyboardAvoidanceMetrics();')
   })
 
+  it('keeps the terminal cursor visible while React Native owns keyboard focus', () => {
+    const terminalStart = terminalHtmlSource.indexOf('term = new Terminal({')
+    const terminalEnd = terminalHtmlSource.indexOf('});', terminalStart)
+    expect(terminalStart).toBeGreaterThanOrEqual(0)
+    expect(terminalEnd).toBeGreaterThan(terminalStart)
+    const terminalOptions = terminalHtmlSource.slice(terminalStart, terminalEnd)
+
+    expect(terminalOptions).toContain("cursorStyle: 'block'")
+    expect(terminalOptions).toContain("cursorInactiveStyle: 'block'")
+    expect(terminalOptions).not.toContain("cursorInactiveStyle: 'none'")
+  })
+
   it('reports scaled cursor coordinates and can return live input to the latest line', () => {
     const metricsStart = terminalHtmlSource.indexOf('function emitKeyboardAvoidanceMetrics()')
     const metricsEnd = terminalHtmlSource.indexOf('function attachTermObservers()', metricsStart)
