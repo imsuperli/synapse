@@ -19,10 +19,11 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { connect, type RpcClient } from './rpc-client'
+import type { RpcClient } from './rpc-client'
 import { subscribeConnectionRevivalTriggers } from './connection-revival-triggers'
 import { loadHosts } from './host-store'
 import type { ConnectionState, HostProfile } from './types'
+import { connectToHost } from '../synapse/remote'
 
 type StoreEntry = {
   client: RpcClient
@@ -145,7 +146,7 @@ export function RpcClientProvider({ children }: { children: ReactNode }) {
 
       let client: RpcClient
       try {
-        client = connect(host.endpoint, host.deviceToken, host.publicKeyB64)
+        client = connectToHost(host)
       } catch {
         // Why: connect() can throw synchronously if the public key is
         // malformed or the endpoint URL is invalid. Notify so the UI

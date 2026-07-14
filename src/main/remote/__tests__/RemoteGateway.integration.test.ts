@@ -216,6 +216,84 @@ describe('RemoteGateway integration', () => {
     });
   });
 
+  it('restores the saved relay session after the desktop gateway restarts', async () => {
+    relay = new SynapseRelayServer({
+      host: '127.0.0.1',
+      port: 0,
+      heartbeatIntervalMs: 1_000,
+      cleanupIntervalMs: 1_000,
+    });
+    await relay.start();
+
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    gateway = new RemoteGateway({
+      processManager: createProcessManager() as any,
+      userDataPath: tempDir,
+      hostName: 'Synapse Test',
+      appVersion: '9.9.9',
+      transportOptions: {
+        host: '127.0.0.1',
+        port: 0,
+      },
+    });
+    await gateway.updateSettings({
+      enabled: true,
+      relayEnabled: true,
+      relayEndpoint: `${relay.endpoint}${relay.relayPath}`,
+    });
+
+    const pairing = gateway.createPairingOffer({});
+    expect(pairing.available).toBe(true);
+    if (!pairing.available) {
+      throw new Error('pairing unavailable');
+    }
+    const offer = parsePairingCode(pairing.pairingUrl);
+    expect(offer).not.toBeNull();
+
+    await waitFor(() => relay!.getStats().sessions === 1);
+    socket = await openWebSocket(buildRelayClientUrl(offer!.relayEndpoint!, {
+      sessionId: offer!.relaySessionId!,
+      clientToken: offer!.relayClientToken!,
+    }));
+    await authenticateEncryptedClient(socket, offer!);
+    socket.close();
+    socket = null;
+
+    await gateway.stop();
+    gateway = new RemoteGateway({
+      processManager: createProcessManager() as any,
+      userDataPath: tempDir,
+      hostName: 'Synapse Test',
+      appVersion: '9.9.9',
+      transportOptions: {
+        host: '127.0.0.1',
+        port: 0,
+      },
+    });
+    await gateway.startFromSavedSettings();
+
+    await waitFor(() => relay!.getStats().sessions === 1);
+    socket = await openWebSocket(buildRelayClientUrl(offer!.relayEndpoint!, {
+      sessionId: offer!.relaySessionId!,
+      clientToken: offer!.relayClientToken!,
+    }));
+    const sharedKey = await authenticateEncryptedClient(socket, offer!);
+    socket.send(encrypt(JSON.stringify({
+      id: 'req-after-restart',
+      method: REMOTE_METHODS.STATUS_GET,
+    }), sharedKey));
+
+    const statusMessage = decrypt(rawToString(await waitForMessage(socket)), sharedKey);
+    expect(JSON.parse(statusMessage ?? '')).toMatchObject({
+      id: 'req-after-restart',
+      ok: true,
+      result: {
+        ok: true,
+        protocolVersion: 1,
+      },
+    });
+  });
+
   it('accepts direct LAN and relay clients for the same desktop at the same time', async () => {
     relay = new SynapseRelayServer({
       host: '127.0.0.1',
