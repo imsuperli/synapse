@@ -34,6 +34,7 @@ import {
   matchesActiveTerminalFocusRequest,
 } from '../utils/terminalFocus';
 import { createTerminalOsc8Guard, OSC8_HYPERLINK_CLOSE } from '../utils/terminalOsc8Guard';
+import { installTerminalScrollbackPreservation } from '../utils/terminalScrollbackPreservation';
 import { renderMarkdownLike } from './agent/RichText';
 
 const completedReplaySessions = new Set<string>();
@@ -2021,6 +2022,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     terminal.open(terminalContainerRef.current);
     const pasteCaptureBlockMs = 300;
     const disposeImeFix = installTerminalImeFix(terminal, imeCompositionStateRef.current);
+    const disposeScrollbackPreservation = installTerminalScrollbackPreservation(terminal);
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
@@ -2517,6 +2519,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       suppressPtyWriteRef.current = false;
       lastLiveOutputQueuedAtRef.current = Number.NEGATIVE_INFINITY;
       hasCompletedReplayForCurrentSessionRef.current = false;
+      disposeScrollbackPreservation();
       disposeImeFix();
       dataDisposable.dispose();
       binaryDisposable?.dispose();
