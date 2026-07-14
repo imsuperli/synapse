@@ -62,6 +62,157 @@ This document is both a design and an implementation checklist. As of the curren
 | Public direct tunnel | Partially implemented | Settings accept manual endpoints and pairing can advertise `wss://`; tunnel setup docs and provider smoke tests remain pending. |
 | Hosted relay | Pending | Official Synapse Relay remains a separate Phase 8/9 production boundary. |
 
+## 2026-07-14 Terminal Session Performance Correction
+
+### Problems Recorded
+
+The implemented mobile terminal route exposed two related performance defects that were not
+covered by the original single-terminal design.
+
+#### Window-group tab switches are cold starts
+
+The terminal tabs currently call `router.replace()` with another
+`/h/[hostId]/t/[windowId]/[paneId]` route. Losing focus runs the route cleanup, which:
+
+1. unsubscribes the terminal stream;
+2. closes the host WebSocket;
+3. clears terminal history and prefetch state;
+4. destroys the xterm WebView;
+5. reconnects, reloads the window list, subscribes, replays history, and measures the viewport.
+
+The visible tabs therefore behave like navigation links, not resident terminal tabs. Repeatedly
+switching between two running terminals costs several seconds each time and loses the local xterm
+viewport state.
+
+#### Foreground recovery replays accumulated animation
+
+When Android suspends the app, terminal output can accumulate in either the native WebSocket event
+queue or desktop PTY history. On foreground:
+
+1. a live socket may deliver every queued output frame;
+2. a reconnected subscription may send a 512 KiB incremental snapshot;
+3. `terminal.history` then catches up in 192 KiB pages;
+4. every intermediate chunk is appended to the xterm asynchronous write queue.
+
+For Codex and other TUIs this replays transient working indicators and screen repaints that are no
+longer useful. Network transfer can finish quickly while xterm still spends many seconds parsing
+old frames, producing the visible rapid-refresh catch-up effect.
+
+### Corrected User Experience
+
+1. Entering a window group loads the selected terminal first.
+2. A terminal loads at most once while resident. The initial implementation warms a terminal on its
+   first activation; idle-time prewarming of untouched tabs may be added after memory/relay traffic
+   measurements prove it does not compete with the active terminal.
+3. Switching between resident tabs changes the visible terminal without route navigation, socket
+   reconnect, history replay, or viewport remeasurement.
+4. Hidden resident terminals continue tracking output without affecting desktop layout.
+5. At least the two most recently used terminals remain resident; a bounded LRU policy prevents an
+   unbounded number of Android WebViews.
+6. Returning from background never animates through a large backlog. No output means no redraw;
+   small deltas are coalesced into one write; large deltas replace the active mobile snapshot once.
+7. Desktop PTY dimensions, desktop focus, and desktop terminal rendering remain untouched.
+
+### Mobile Session Container
+
+Replace route-owned singleton terminal state with a host-scoped session container. The route params
+identify the initial terminal only; subsequent tab changes update `activeHandle` in the container.
+
+Each `windowId:paneId` session owns:
+
+```text
+identity: windowId, paneId, runtimeKey
+stream: unsubscribe, subscription generation, last received sequence
+render: TerminalWebView ref, initialized flag, last rendered sequence
+history: scrollback state, older-history prefetch state
+viewport: desktop dimensions, mobile fitted rows, scroll/zoom-preserving WebView state
+recovery: foreground dirty flag, recovery generation, loading/error state
+lifecycle: last-used timestamp, resident/prewarmed/disposed state
+```
+
+The host container owns one `RpcClient`, the window/group list, app-state handling, and the resident
+session LRU. `TerminalPaneView` is reused directly: inactive terminal WebViews stay mounted at
+`opacity: 0` with pointer events disabled, preserving xterm buffers and scroll positions.
+
+### Subscription Policy
+
+1. One host connection multiplexes all resident `terminal.subscribe` streams.
+2. The active terminal subscribes immediately.
+3. Newly activated group terminals warm one at a time. Do not eagerly subscribe every untouched
+   tab until Android WebView memory and relay traffic budgets are measured.
+4. Resident hidden terminals update their history state continuously.
+5. Hidden WebViews do not have to repaint every frame. Output may be coalesced until activation.
+6. When the resident limit is exceeded, dispose the least recently used inactive WebView and its
+   subscription, retaining a bounded recent snapshot and sequence cursor for incremental restore.
+7. Removing a pane/window from a group disposes exactly that session. Leaving the terminal screen
+   disposes the entire host container.
+
+Initial resident limit: three terminals. This covers the common two-terminal workflow while keeping
+Android WebView memory bounded. The limit must be a named constant and covered by LRU tests.
+
+### Foreground Recovery Protocol
+
+`terminal.history` responses for `sinceSeq` need to expose the desktop high-water mark separately
+from the final entry included in the current page:
+
+```ts
+type TerminalHistoryResult = {
+  // existing fields
+  latestSeq: number
+  hasMoreAfter: boolean
+}
+```
+
+Recovery uses `lastRenderedSeq`, not merely `lastReceivedSeq`:
+
+1. On background, mark every resident session render-paused and record its rendered cursor.
+2. Incoming events may advance received history, but they must not enqueue unbounded xterm writes.
+3. On foreground, recover the active session first and query from `lastRenderedSeq` with a bounded
+   probe.
+4. If `latestSeq === lastRenderedSeq`, resume without reinitializing.
+5. If the complete delta fits the small-delta budget, merge and issue one coalesced WebView write.
+6. If `hasMoreAfter` is true, pending data overflowed, the stream has a gap, or the delta exceeds the
+   budget, resubscribe with `sinceSeq: 0` and apply the compact latest snapshot once.
+7. After the latest screen is visible, resume live rendering and prefetch older history separately.
+8. Recover inactive resident sessions lazily or at lower priority so they cannot delay the active
+   terminal.
+
+Initial small-delta budget: 256 KiB. The existing 128 KiB compact subscription snapshot remains the
+large-backlog recovery source. Increasing page size alone is explicitly rejected because it still
+forces xterm to parse every obsolete intermediate TUI frame.
+
+### Concurrency Rules
+
+1. Every session operation checks host run id, session generation, runtime key, and client identity.
+2. A terminal restarted on desktop invalidates its old history, prefetch, and foreground recovery.
+3. Live output arriving during snapshot construction is buffered by the desktop subscription and
+   appended after the snapshot without duplication.
+4. A foreground recovery and a tab activation for the same session share one in-flight promise.
+5. Deleting or stopping a terminal cancels delayed prewarm/recovery work before routing to a
+   replacement tab.
+6. The command dock always reads `activeHandle` at send time; closures must not retain a previous
+   tab's window or pane ids.
+
+### Verification Matrix
+
+Required tests include:
+
+1. Repeated A/B/A/B group-tab switching does not call `router.replace`, reconnect the host, or
+   request another initial snapshot for resident sessions.
+2. Output produced in hidden terminal B is visible immediately when B becomes active.
+3. Input, clear, stop, history loading, and pane deletion target the active session only.
+4. Three resident terminals remain mounted; activating a fourth evicts only the least recently used
+   inactive terminal.
+5. Foreground with no output performs no xterm init/write.
+6. Foreground with a small delta performs one coalesced write.
+7. Foreground with a large delta performs one compact snapshot replacement and does not replay the
+   intermediate pages into xterm.
+8. Live output racing with recovery is neither lost nor duplicated.
+9. Desktop restart, pane deletion, socket reconnect, app background, and tab switch combinations
+   reject stale responses by generation.
+10. Android layout keeps inactive WebViews mounted without overlap, touch interception, or keyboard
+    movement.
+
 ## Orca Design Findings
 
 The relevant Orca implementation is split across these areas:

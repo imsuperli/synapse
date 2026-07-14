@@ -24,7 +24,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('parseTerminalScrollbackEvent(payload)')
     expect(routeSource).toContain('parseTerminalDataEvent(payload)')
     expect(routeSource).toContain('parseTerminalStreamErrorEvent(payload)')
-    expect(routeSource).toContain('const terminalHistoryRef = useRef(createRemoteTerminalHistoryState())')
+    expect(routeSource).toContain('terminalHistoryRef: { current: createRemoteTerminalHistoryState() }')
     expect(routeSource).toContain('const buildTerminalInitialData = useCallback(() => {')
     expect(routeSource).toContain('replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)')
     expect(routeSource).toContain('screenSnapshotOffset?: number')
@@ -36,7 +36,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).not.toContain('parseTerminalOutputEvent(payload)')
     expect(routeSource).not.toContain('parseTerminalSubscribeResult(payload)')
     expect(routeSource).not.toContain('loadTerminalHistorySnapshot(client, runId)')
-    expect(routeSource).toContain('terminalRef.current?.resetZoom()')
+    expect(routeSource).toContain('runtime?.terminalRef.current?.resetZoom()')
     expect(routeSource).toContain('undefined,\n        true')
   })
 
@@ -49,7 +49,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('takePrefetchedRemoteTerminalHistory(prefetch)')
     expect(routeSource).toContain('prependRemoteTerminalHistoryPage(\n            terminalHistoryRef.current,\n            page')
     expect(routeSource).toContain('buildRemoteTerminalInitialData(terminalHistoryRef.current)')
-    expect(routeSource).toContain('onHistoryTopReached={handleHistoryTopReached}')
+    expect(routeSource).toContain('handleHistoryTopReachedRef.current?.()')
     expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
   })
 
@@ -63,7 +63,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain(
       'function terminalPaneRuntimeKey(pane: RemotePaneSummary | null | undefined): string | null'
     )
-    expect(routeSource).toContain('const currentPaneRuntimeKeyRef = useRef<string | null>(null)')
+    expect(routeSource).toContain('currentPaneRuntimeKeyRef: { current: null as string | null }')
     expect(routeSource).toContain('const previousRuntimeKey = currentPaneRuntimeKeyRef.current')
     expect(routeSource).toContain('previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey')
     expect(routeSource).toContain('await reloadCurrentTerminalStream(client)')
@@ -78,8 +78,8 @@ describe('Synapse Mobile terminal route wiring', () => {
   })
 
   it('guards terminal background polling against overlapping stale responses', () => {
-    expect(routeSource).toContain('const terminalIncrementSyncInFlightRef = useRef(false)')
-    expect(routeSource).toContain('const paneStatusSyncInFlightRef = useRef(false)')
+    expect(routeSource).toContain('terminalIncrementSyncInFlightRef: { current: false }')
+    expect(routeSource).toContain('paneStatusSyncInFlightRef: { current: false }')
     expect(routeSource).toContain('terminalIncrementSyncInFlightRef.current')
     expect(routeSource).toContain('paneStatusSyncInFlightRef.current')
     expect(routeSource).toContain('runIdRef.current !== runId || clientRef.current !== client')
@@ -90,8 +90,8 @@ describe('Synapse Mobile terminal route wiring', () => {
   })
 
   it('invalidates stale subscription frames and history responses after an in-place reload', () => {
-    expect(routeSource).toContain('const terminalSubscriptionGenerationRef = useRef(0)')
-    expect(routeSource).toContain('const terminalHistoryGenerationRef = useRef(0)')
+    expect(routeSource).toContain('terminalSubscriptionGenerationRef: { current: 0 }')
+    expect(routeSource).toContain('terminalHistoryGenerationRef: { current: 0 }')
     expect(routeSource).toContain(
       'terminalSubscriptionGenerationRef.current !== subscriptionGeneration'
     )
@@ -116,15 +116,15 @@ describe('Synapse Mobile terminal route wiring', () => {
   })
 
   it('keeps mobile rows independent while following desktop column changes', () => {
-    expect(routeSource).toContain('const desktopViewportRef = useRef<RemoteTerminalViewport>')
-    expect(routeSource).toContain('const fittedPhoneRowsRef = useRef(0)')
+    expect(routeSource).toContain('desktopViewportRef: {')
+    expect(routeSource).toContain('fittedPhoneRowsRef: { current: 0 }')
     expect(routeSource).toContain('resolveMobileTerminalViewport(')
     expect(routeSource).toContain('terminalRef.current?.resize(nextViewport.cols, nextViewport.rows)')
     expect(routeSource).not.toContain('resizeTerminal(client')
   })
 
   it('routes user input and clear through Synapse terminal RPC helpers', () => {
-    expect(routeSource).toContain('onTerminalInput={handleTerminalInput}')
+    expect(routeSource).toContain('handleTerminalInput(bytes)')
     expect(routeSource).toContain('sendTerminalInput(client, windowId, paneId, bytes)')
     expect(routeSource).toContain('const result = await clearTerminal(client, windowId, paneId)')
     expect(routeSource).toContain('terminalHistoryRef.current.lastSeq = result.lastSeq')
@@ -134,11 +134,11 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('moves only covered terminal content and restores the full viewport after keyboard hide', () => {
     expect(routeSource).toContain('getTerminalKeyboardAvoidanceLift({')
     expect(routeSource).toContain('metrics: terminalKeyboardMetrics')
-    expect(routeSource).toContain('onKeyboardAvoidanceMetrics={handleKeyboardAvoidanceMetrics}')
+    expect(routeSource).toContain('handleKeyboardAvoidanceMetrics(metrics)')
     expect(routeSource).toContain('{ transform: [{ translateY: -terminalKeyboardLift }] }')
     expect(routeSource).not.toContain('terminalKeyboardLift > 0 && { transform:')
-    expect(routeSource).toContain('terminalRef.current?.revealLiveInput()')
-    expect(routeSource).toContain('terminalRef.current?.restoreKeyboardViewport()')
+    expect(routeSource).toContain('runtime?.terminalRef.current?.revealLiveInput()')
+    expect(routeSource).toContain('runtime?.terminalRef.current?.restoreKeyboardViewport()')
     expect(routeSource).toContain('const restoreTerminalAfterKeyboard = useCallback(() => {')
     expect(routeSource).toContain("Keyboard.addListener('keyboardDidHide', restoreTerminalAfterKeyboard)")
     expect(routeSource).toContain('if (!Keyboard.isVisible()) {')
@@ -182,10 +182,26 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('renders same-window terminal pane tabs without changing desktop layout', () => {
     expect(routeSource).toContain('requestWindowList(client)')
     expect(routeSource).toContain('windowPanes.length > 1')
-    expect(routeSource).toContain('router.replace(targetPath)')
+    expect(routeSource).toContain('activateTerminalTarget(pane.windowId, pane.paneId)')
     expect(routeSource).toContain('startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)')
     expect(routeSource).not.toContain('pane.focus')
     expect(routeSource).not.toContain('window.activate')
+  })
+
+  it('keeps recent terminal tabs resident instead of navigating through cold routes', () => {
+    expect(routeSource).toContain('const [residentTerminalHandles, setResidentTerminalHandles]')
+    expect(routeSource).toContain('selectRemoteTerminalResidentSessions({')
+    expect(routeSource).toContain('residentTerminalHandles.map((handle) => (')
+    expect(routeSource).toContain('<TerminalPaneView')
+    expect(routeSource).not.toContain('router.replace(targetPath)')
+  })
+
+  it('coalesces small foreground deltas and replaces large backlogs with a compact snapshot', () => {
+    expect(routeSource).toContain('terminalRenderPausedRef.current = true')
+    expect(routeSource).toContain('decideRemoteTerminalForegroundRecovery({')
+    expect(routeSource).toContain("decision === 'compact-snapshot'")
+    expect(routeSource).toContain("decision === 'coalesced-write'")
+    expect(routeSource).toContain('limitBytes: TERMINAL_FOREGROUND_SMALL_DELTA_BYTES')
   })
 
   it('renders window tabs for grouped windows before falling back to same-window pane tabs', () => {

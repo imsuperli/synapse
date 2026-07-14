@@ -71,6 +71,8 @@ export type TerminalHistoryResult = {
   chunks: string[]
   firstSeq: number
   lastSeq: number
+  latestSeq: number
+  hasMoreAfter: boolean
   gap: boolean
   hasMoreBefore: boolean
   evictedBeforeSeq: number
@@ -829,6 +831,8 @@ export function parseTerminalHistory(value: unknown): TerminalHistoryResult {
       : [],
     firstSeq: typeof result.firstSeq === 'number' ? result.firstSeq : 0,
     lastSeq: typeof result.lastSeq === 'number' ? result.lastSeq : 0,
+    latestSeq: typeof result.latestSeq === 'number' ? result.latestSeq : 0,
+    hasMoreAfter: result.hasMoreAfter === true,
     gap: result.gap === true,
     hasMoreBefore: result.hasMoreBefore === true,
     evictedBeforeSeq: typeof result.evictedBeforeSeq === 'number' ? result.evictedBeforeSeq : 0,

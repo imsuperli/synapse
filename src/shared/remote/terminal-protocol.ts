@@ -32,6 +32,8 @@ export type TerminalHistoryResult = {
   chunks: string[];
   firstSeq: number;
   lastSeq: number;
+  latestSeq: number;
+  hasMoreAfter: boolean;
   gap: boolean;
   hasMoreBefore: boolean;
   evictedBeforeSeq: number;

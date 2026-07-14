@@ -274,6 +274,8 @@ describe('RemoteDispatcher', () => {
         chunks: [' world'],
         firstSeq: 5,
         lastSeq: 5,
+        latestSeq: 5,
+        hasMoreAfter: false,
         gap: false,
         hasMoreBefore: false,
         evictedBeforeSeq: 0,
@@ -282,6 +284,39 @@ describe('RemoteDispatcher', () => {
       },
     });
     expect(harness.processManager.getPtyHistoryEntriesSince).toHaveBeenCalledWith('win-1', 'pane-1', 4);
+  });
+
+  it('reports the desktop high-water mark when an incremental page is incomplete', async () => {
+    const harness = createHarness();
+    harness.processManager.getPtyHistoryEntriesSince.mockReturnValueOnce({
+      entries: [
+        { seq: 3, data: 'three' },
+        { seq: 4, data: 'four' },
+        { seq: 5, data: 'five' },
+      ],
+      firstSeq: 3,
+      lastSeq: 5,
+      evictedBeforeSeq: 0,
+      hasMoreBefore: false,
+      gap: false,
+    });
+
+    const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_HISTORY, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 2,
+      limitChunks: 1,
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        chunks: ['three'],
+        lastSeq: 3,
+        latestSeq: 5,
+        hasMoreAfter: true,
+      },
+    });
   });
 
   it('reports a history gap when the client cursor is ahead of the current process', async () => {
@@ -334,6 +369,8 @@ describe('RemoteDispatcher', () => {
         chunks: ['older', ' page'],
         firstSeq: 2,
         lastSeq: 3,
+        latestSeq: 5,
+        hasMoreAfter: false,
         gap: false,
         hasMoreBefore: true,
         evictedBeforeSeq: 0,

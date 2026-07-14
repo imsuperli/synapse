@@ -7,6 +7,7 @@ import {
   type TerminalModes,
   type TerminalWebViewHandle
 } from '../terminal/TerminalWebView'
+import type { TerminalTextScaleMode } from '../terminal/terminal-webview-messages'
 
 type TerminalPaneViewProps = {
   handle: string
@@ -14,6 +15,7 @@ type TerminalPaneViewProps = {
   keyboardLift: number
   terminalTheme?: MobileTerminalTheme
   textScale: number
+  textScaleMode?: TerminalTextScaleMode
   onRef: (handle: string, ref: TerminalWebViewHandle | null) => void
   onWebReady: (handle: string) => void
   onSelectionMode: (handle: string, active: boolean) => void
@@ -27,6 +29,8 @@ type TerminalPaneViewProps = {
   onFileTap: (handle: string, pathText: string, line: number | null, column: number | null) => void
   onOpenUrl: (handle: string, url: string) => void
   onTextScaleChange: (scale: number) => void
+  onEngineError?: (handle: string, message: string) => void
+  onHistoryTopReached?: (handle: string) => void
 }
 
 export function TerminalPaneView({
@@ -35,6 +39,7 @@ export function TerminalPaneView({
   keyboardLift,
   terminalTheme,
   textScale,
+  textScaleMode,
   onRef,
   onWebReady,
   onSelectionMode,
@@ -47,7 +52,9 @@ export function TerminalPaneView({
   onTerminalTap,
   onFileTap,
   onOpenUrl,
-  onTextScaleChange
+  onTextScaleChange,
+  onEngineError,
+  onHistoryTopReached
 }: TerminalPaneViewProps) {
   const setRef = useCallback(
     (ref: TerminalWebViewHandle | null) => {
@@ -72,6 +79,7 @@ export function TerminalPaneView({
         style={styles.terminalWebView}
         terminalTheme={terminalTheme}
         textScale={textScale}
+        textScaleMode={textScaleMode}
         onWebReady={() => onWebReady(handle)}
         onSelectionMode={(a) => onSelectionMode(handle, a)}
         onSelectionCopy={(t) => onSelectionCopy(handle, t)}
@@ -84,6 +92,8 @@ export function TerminalPaneView({
         onFileTap={(pathText, line, column) => onFileTap(handle, pathText, line, column)}
         onOpenUrl={(url) => onOpenUrl(handle, url)}
         onTextScaleChange={onTextScaleChange}
+        onEngineError={(message) => onEngineError?.(handle, message)}
+        onHistoryTopReached={() => onHistoryTopReached?.(handle)}
       />
     </View>
   )
