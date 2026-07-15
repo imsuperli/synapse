@@ -37,6 +37,10 @@ import { ISSHConnectionPool, SSHConnectionPool } from './ssh/SSHConnectionPool';
 import { ISSHKnownHostsStore } from './ssh/SSHKnownHostsStore';
 import { SSHPtySession } from './ssh/SSHPtySession';
 import type { ISSHHostKeyPromptService } from './ssh/SSHHostKeyPromptService';
+import {
+  consumeTerminalOscColorQueries,
+  type TerminalOscColorQueryReplyColors,
+} from '../../shared/terminal-osc-color-query';
 
 type PaneHistoryEntry = {
   seq: number;
@@ -97,6 +101,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   private processCleanupTimers: Map<number, NodeJS.Timeout>;
   private ptyOutputBuffers: Map<number, PtyOutputChunk[]>; // 缂撳瓨 PTY 鍒濆杈撳嚭
   private ptyDataSubscribers: Map<number, Set<(chunk: PtyOutputChunk) => void>>;
+  private terminalOscColorQueryPending: Map<number, string>;
   private paneHistoryBuffers: Map<string, PaneHistoryBuffer>;
   private terminalScreenSnapshots: Map<string, TerminalScreenSnapshot>;
   private paneIndex: Map<string, number>; // "windowId:paneId" 鈫?pid 绱㈠紩锛岀敤浜?O(1) 鏌ユ壘
@@ -133,6 +138,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.processCleanupTimers = new Map();
     this.ptyOutputBuffers = new Map();
     this.ptyDataSubscribers = new Map();
+    this.terminalOscColorQueryPending = new Map();
     this.paneHistoryBuffers = new Map();
     this.terminalScreenSnapshots = new Map();
     this.paneIndex = new Map();
@@ -331,13 +337,36 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
     // 绔嬪嵆寮€濮嬬紦瀛?PTY 杈撳嚭锛堝湪浠讳綍璁㈤槄涔嬪墠锛?
     const onDataDisposable = ptyProcess.onData((data: string) => {
-      if (this.tmuxCompatService && config.windowId && config.paneId) {
-        this.tmuxCompatService.observePaneOutput(config.windowId, config.paneId, data);
+      const colorQueryResult = consumeTerminalOscColorQueries(
+        data,
+        this.terminalOscColorQueryPending.get(pid) ?? '',
+        this.getTerminalOscColorQueryReplyColors(),
+      );
+      if (colorQueryResult.pending) {
+        this.terminalOscColorQueryPending.set(pid, colorQueryResult.pending);
+      } else {
+        this.terminalOscColorQueryPending.delete(pid);
       }
-      const seq = this.appendPaneHistory(config.windowId, config.paneId, data);
+      for (const reply of colorQueryResult.replies) {
+        // Keep protocol replies in the PTY output callback so renderer frame
+        // scheduling and remote input cannot overtake Codex's query timeout.
+        try {
+          ptyProcess.write(reply);
+        } catch {
+          // The PTY can exit between its final output event and this reply.
+        }
+      }
+      const outputData = colorQueryResult.output;
+      if (!outputData) {
+        return;
+      }
+      if (this.tmuxCompatService && config.windowId && config.paneId) {
+        this.tmuxCompatService.observePaneOutput(config.windowId, config.paneId, outputData);
+      }
+      const seq = this.appendPaneHistory(config.windowId, config.paneId, outputData);
       const buffer = this.ptyOutputBuffers.get(pid);
       if (buffer) {
-        buffer.push({ data, seq });
+        buffer.push({ data: outputData, seq });
         // 闄愬埗缂撳啿鍖哄ぇ灏忥紝閬垮厤鍐呭瓨娉勬紡锛堝鍔犲埌 500 鏉℃秷鎭紝瑕嗙洊鏇村鍚姩杈撳嚭锛?
         if (buffer.length > 500) {
           buffer.shift();
@@ -346,12 +375,12 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
       const subscribers = this.ptyDataSubscribers.get(pid);
       if (subscribers && subscribers.size > 0) {
-        const chunk = { data, seq };
+        const chunk = { data: outputData, seq };
         for (const subscriber of subscribers) {
           subscriber(chunk);
         }
       }
-      this.statusDetector.onPtyData(pid, data);
+      this.statusDetector.onPtyData(pid, outputData);
     });
 
     // Register PTY listeners for status detection and save disposables
@@ -718,6 +747,20 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
    */
   subscribeStatusChange(callback: (pid: number, status: WindowStatus) => void): () => void {
     return this.statusDetector.subscribeStatusChange(callback);
+  }
+
+  private getTerminalOscColorQueryReplyColors(): TerminalOscColorQueryReplyColors {
+    const presetId = this.getSettings?.()?.appearance?.skin?.presetId;
+    return {
+      foreground: presetId === 'paper'
+        ? '#1f2329'
+        : presetId === 'obsidian' || presetId === 'custom'
+          ? '#d7d7d7'
+          : '#cccccc',
+      // TerminalPane uses a transparent xterm background; xterm reports its
+      // transparent color channel as black for OSC 11.
+      background: '#000000',
+    };
   }
 
   /**
@@ -1114,6 +1157,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     // 涓嶇瓑寰呰繘绋嬮€€鍑猴紝鐩存帴娓呯悊
     this.processes.clear();
     this.ptys.clear();
+    this.terminalOscColorQueryPending.clear();
     this.paneHistoryBuffers.clear();
     this.paneIndex.clear();
     this.sessionIndex.clear();
@@ -1937,6 +1981,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
     this.disposePtyDisposables(pid);
     this.ptyOutputBuffers.delete(pid);
+    this.terminalOscColorQueryPending.delete(pid);
     this.ptys.delete(pid);
     if (processInfo.paneId) {
       this.paneHistoryBuffers.delete(this.getPaneKey(processInfo.windowId, processInfo.paneId));

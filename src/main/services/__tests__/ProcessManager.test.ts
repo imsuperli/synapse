@@ -663,6 +663,54 @@ describe('ProcessManager', () => {
   });
 
   describe('PTY history', () => {
+    it('answers OSC color queries before publishing sanitized terminal output', async () => {
+      const ptyModule = getPtyModule();
+      let dataListener: ((data: string) => void) | undefined;
+      const events: string[] = [];
+      const ptyProcess = {
+        ...makeMockPtyProcess(4324),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListener = handler;
+          return { dispose: vi.fn() };
+        }),
+        write: vi.fn((data: string) => events.push(`input:${data}`)),
+      };
+      const themedProcessManager = new ProcessManager(() => ({
+        appearance: {
+          skin: { presetId: 'obsidian' },
+        },
+      }) as any);
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockReturnValue(ptyProcess as any);
+
+      try {
+        const handle = await themedProcessManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-color-query',
+          paneId: 'pane-color-query',
+        });
+        themedProcessManager.subscribePtyData(handle.pid, (data) => events.push(`output:${data}`));
+
+        dataListener?.('before\x1b]10;?;?\x1b\\after');
+
+        expect(events).toEqual([
+          'input:\x1b]10;rgb:d7d7/d7d7/d7d7\x1b\\',
+          'input:\x1b]11;rgb:0000/0000/0000\x1b\\',
+          'output:beforeafter',
+        ]);
+        expect(themedProcessManager.getPtyHistory('pane-color-query')).toEqual({
+          chunks: ['beforeafter'],
+          firstSeq: 1,
+          lastSeq: 1,
+          evictedBeforeSeq: 0,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
     it('stores replayable history per pane and resets it on a new session', async () => {
       const ptyModule = getPtyModule();
       const dataListeners: Array<(data: string) => void> = [];
