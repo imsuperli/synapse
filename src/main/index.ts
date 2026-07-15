@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, protocol, net } from 'electron';
 import fs from 'fs-extra';
+import { hostname } from 'os';
 import path from 'path';
 import { ProcessManager } from './services/ProcessManager';
 import { StatusPoller } from './services/StatusPoller';
@@ -595,7 +596,7 @@ if (hasSingleInstanceLock) {
     remoteGateway = new RemoteGateway({
       processManager,
       userDataPath: app.getPath('userData'),
-      hostName: APP_DISPLAY_NAME,
+      hostName: hostname(),
       appVersion: app.getVersion(),
       getCurrentWorkspace: () => currentWorkspace,
       onPaneProcessStarted: ({ windowId, paneId, pid }) => {

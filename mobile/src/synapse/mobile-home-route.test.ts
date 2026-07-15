@@ -10,4 +10,14 @@ describe('Synapse Mobile home route wiring', () => {
     expect(routeSource).toContain('await removeHost(hostId)')
     expect(routeSource).toContain('event.stopPropagation()')
   })
+
+  it('groups paired desktops by relay while showing each desktop name and IP address', () => {
+    expect(routeSource).toContain("from '../src/transport/host-display'")
+    expect(routeSource).toContain('const hostListItems = useMemo<HostListItem[]>(')
+    expect(routeSource).toContain('groupHostsByRelay(hosts).flatMap')
+    expect(routeSource).toContain("item.relayEndpoint ?? t('common.localNetwork')")
+    expect(routeSource).toContain('hostNetworkAddress(host.endpoint)')
+    expect(routeSource).toContain("t('common.desktopIp', { address })")
+    expect(routeSource).toContain("router.push(`/h/${host.id}/settings`)")
+  })
 })

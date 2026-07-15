@@ -161,6 +161,16 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).not.toContain('styles.hostSwitcherTab')
   })
 
+  it('groups the host switcher by relay and shows each paired desktop IP', () => {
+    expect(routeSource).toContain("from '../../../src/transport/host-display'")
+    expect(routeSource).toContain('const pairedHostGroups = useMemo(() => groupHostsByRelay(pairedHosts), [pairedHosts])')
+    expect(routeSource).toContain('pairedHostGroups.map((group) => (')
+    expect(routeSource).toContain("group.relayEndpoint ?? t('common.localNetwork')")
+    expect(routeSource).toContain('hostNetworkAddress(host.endpoint)')
+    expect(routeSource).toContain("t('common.desktopIp', { address })")
+    expect(routeSource).not.toContain('switcherHostEndpointLabel')
+  })
+
   it('places overview actions in the second toolbar row and keeps the native header simple', () => {
     expect(routeSource).toContain('<Stack.Screen')
     expect(routeSource).toContain("headerTitle: t('overview.windowsTitle')")

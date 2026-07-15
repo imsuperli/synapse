@@ -30,6 +30,7 @@ export default defineConfig({
     include: [
       'src/synapse/**/*.test.ts',
       'src/transport/host-store.test.ts',
+      'src/transport/host-display.test.ts',
       'src/transport/host-names.test.ts',
       'src/transport/pair-confirm-state.test.ts',
       'src/transport/pairing-connection-attempt.test.ts',

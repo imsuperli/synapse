@@ -1,11 +1,20 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { Link, useFocusEffect, useRouter } from 'expo-router'
-import { Languages, Plus, Server, Trash2 } from 'lucide-react-native'
+import { Languages, Pencil, Plus, Server, Trash2 } from 'lucide-react-native'
 import { loadHosts, removeHost } from '../src/transport/host-store'
 import type { HostProfile } from '../src/transport/types'
+import {
+  groupHostsByRelay,
+  hostDisplayName,
+  hostNetworkAddress
+} from '../src/transport/host-display'
 import { colors, radii, spacing, typography } from '../src/theme/mobile-theme'
 import { useMobileI18n } from '../src/i18n'
+
+type HostListItem =
+  | { type: 'group'; id: string; relayEndpoint: string | null }
+  | { type: 'host'; host: HostProfile }
 
 export default function HostListScreen() {
   const router = useRouter()
@@ -14,6 +23,14 @@ export default function HostListScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [removingHostId, setRemovingHostId] = useState<string | null>(null)
+  const hostListItems = useMemo<HostListItem[]>(
+    () =>
+      groupHostsByRelay(hosts).flatMap((group) => [
+        { type: 'group' as const, id: group.id, relayEndpoint: group.relayEndpoint },
+        ...group.hosts.map((host) => ({ type: 'host' as const, host }))
+      ]),
+    [hosts]
+  )
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
@@ -88,10 +105,10 @@ export default function HostListScreen() {
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <FlatList
-        data={hosts}
-        keyExtractor={(item) => item.id}
+        data={hostListItems}
+        keyExtractor={(item) => (item.type === 'group' ? item.id : `host:${item.host.id}`)}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
-        contentContainerStyle={hosts.length === 0 ? styles.emptyList : styles.list}
+        contentContainerStyle={hostListItems.length === 0 ? styles.emptyList : styles.list}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Server size={28} color={colors.textSecondary} />
@@ -104,37 +121,65 @@ export default function HostListScreen() {
             </Link>
           </View>
         }
-        renderItem={({ item }) => (
-          <Pressable
-            style={({ pressed }) => [styles.hostRow, pressed && styles.pressed]}
-            onPress={() => router.push(`/h/${item.id}`)}
-          >
-            <View style={styles.hostIcon}>
-              <Server size={18} color={colors.textPrimary} />
-            </View>
-            <View style={styles.hostMain}>
-              <Text style={styles.hostName}>{item.name}</Text>
-              <Text style={styles.hostEndpoint} numberOfLines={1}>
-                {item.relayEndpoint ? `${t('common.relay')} ${item.relayEndpoint}` : item.endpoint}
+        renderItem={({ item }) => {
+          if (item.type === 'group') {
+            return (
+              <Text style={styles.hostGroupHeader} numberOfLines={2}>
+                {item.relayEndpoint ?? t('common.localNetwork')}
               </Text>
-            </View>
+            )
+          }
+
+          const host = item.host
+          const removing = removingHostId === host.id
+          const name = hostDisplayName(host) ?? t('common.unnamedDesktop')
+          const address = hostNetworkAddress(host.endpoint)
+          return (
             <Pressable
-              disabled={removingHostId === item.id}
-              style={[styles.deleteHostButton, removingHostId === item.id && styles.deleteHostButtonDisabled]}
-              onPress={(event) => {
-                event.stopPropagation()
-                confirmRemoveHost(item)
-              }}
-              accessibilityLabel={t('home.removeHost')}
+              style={({ pressed }) => [styles.hostRow, pressed && styles.pressed]}
+              onPress={() => router.push(`/h/${host.id}`)}
+              accessibilityLabel={`${name}, ${t('common.desktopIp', { address })}`}
             >
-              {removingHostId === item.id ? (
-                <ActivityIndicator color={colors.statusRed} />
-              ) : (
-                <Trash2 size={17} color={colors.statusRed} />
-              )}
+              <View style={styles.hostIcon}>
+                <Server size={18} color={colors.textPrimary} />
+              </View>
+              <View style={styles.hostMain}>
+                <Text style={styles.hostName} numberOfLines={1}>
+                  {name}
+                </Text>
+                <Text style={styles.hostEndpoint} numberOfLines={1}>
+                  {t('common.desktopIp', { address })}
+                </Text>
+              </View>
+              <Pressable
+                disabled={removing}
+                style={[styles.editHostButton, removing && styles.editHostButtonDisabled]}
+                onPress={(event) => {
+                  event.stopPropagation()
+                  router.push(`/h/${host.id}/settings`)
+                }}
+                accessibilityLabel={t('nav.hostSettings')}
+              >
+                <Pencil size={16} color={colors.textPrimary} />
+              </Pressable>
+              <Pressable
+                disabled={removing}
+                style={[styles.deleteHostButton, removing && styles.deleteHostButtonDisabled]}
+                onPress={(event) => {
+                  event.stopPropagation()
+                  confirmRemoveHost(host)
+                }}
+                accessibilityLabel={t('home.removeHost')}
+              >
+                {removing ? (
+                  <ActivityIndicator color={colors.statusRed} />
+                ) : (
+                  <Trash2 size={17} color={colors.statusRed} />
+                )}
+              </Pressable>
             </Pressable>
-          </Pressable>
-        )}
+          )
+        }}
       />
     </View>
   )
@@ -220,6 +265,14 @@ const styles = StyleSheet.create({
   list: {
     gap: spacing.sm
   },
+  hostGroupHeader: {
+    color: colors.textMuted,
+    fontFamily: typography.monoFamily,
+    fontSize: typography.metaSize,
+    fontWeight: '700',
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.xs
+  },
   emptyList: {
     flexGrow: 1,
     justifyContent: 'center'
@@ -241,7 +294,7 @@ const styles = StyleSheet.create({
   hostRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
+    gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
     backgroundColor: colors.bgPanel,
@@ -279,6 +332,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgRaised,
     borderWidth: 1,
     borderColor: colors.borderSubtle
+  },
+  editHostButton: {
+    width: 34,
+    height: 34,
+    borderRadius: radii.button,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle
+  },
+  editHostButtonDisabled: {
+    opacity: 0.52
   },
   deleteHostButtonDisabled: {
     opacity: 0.52

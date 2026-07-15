@@ -47,6 +47,11 @@ import {
 import { loadHostOverviewData } from '../../../src/synapse/host-overview'
 import { loadHosts } from '../../../src/transport/host-store'
 import {
+  groupHostsByRelay,
+  hostDisplayName,
+  hostNetworkAddress
+} from '../../../src/transport/host-display'
+import {
   filterTerminals,
   filterWindows,
   normalizeTerminalSearchQuery
@@ -347,10 +352,6 @@ function filterSelectableWindowIds(
   )
 }
 
-function switcherHostEndpointLabel(host: HostProfile, t: MobileTranslate): string {
-  return host.relayEndpoint ? `${t('common.relay')} ${host.relayEndpoint}` : host.endpoint
-}
-
 function withSwitchTimeout<T>(promise: Promise<T>): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null
   const timeoutPromise = new Promise<T>((_, reject) => {
@@ -530,6 +531,7 @@ export default function HostOverviewScreen() {
   const hasSearchQuery = normalizedSearchQuery.length > 0
   const canUseGroupSelection = overviewMode === 'windows' && groupableWindowCount >= 2
   const hostSwitcherPanelWidth = Math.min(286, Math.max(220, screenWidth - spacing.lg * 2))
+  const pairedHostGroups = useMemo(() => groupHostsByRelay(pairedHosts), [pairedHosts])
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-80)
   }, [])
@@ -1471,43 +1473,55 @@ export default function HostOverviewScreen() {
               contentContainerStyle={styles.hostSwitcherListContent}
               showsVerticalScrollIndicator={false}
             >
-              {pairedHosts.map((host) => {
-                const current = host.id === hostId
-                const switching = switchingHostId === host.id
-                return (
-                  <Pressable
-                    key={host.id}
-                    disabled={current || switchingHostId !== null}
-                    style={({ pressed }) => [
-                      styles.hostSwitcherRow,
-                      current && styles.hostSwitcherRowCurrent,
-                      pressed && styles.pressed,
-                      switchingHostId !== null && !switching && !current && styles.disabledRow
-                    ]}
-                    onPress={() => void switchToHost(host)}
-                  >
-                    <View style={styles.hostSwitcherIcon}>
-                      {switching ? (
-                        <ActivityIndicator color={colors.textSecondary} />
-                      ) : (
-                        <Server size={16} color={colors.textPrimary} />
-                      )}
-                    </View>
-                    <View style={styles.hostSwitcherMain}>
-                      <Text style={styles.hostSwitcherName} numberOfLines={1}>
-                        {host.name}
-                      </Text>
-                      <Text style={styles.hostSwitcherEndpoint} numberOfLines={1}>
-                        {current
-                          ? t('overview.currentHost')
-                          : switching
-                            ? t('overview.switchingHost')
-                            : switcherHostEndpointLabel(host, t)}
-                      </Text>
-                    </View>
-                  </Pressable>
-                )
-              })}
+              {pairedHostGroups.map((group) => (
+                <View key={group.id} style={styles.hostSwitcherGroup}>
+                  <Text style={styles.hostSwitcherGroupTitle} numberOfLines={2}>
+                    {group.relayEndpoint ?? t('common.localNetwork')}
+                  </Text>
+                  <View style={styles.hostSwitcherGroupHosts}>
+                    {group.hosts.map((host) => {
+                      const current = host.id === hostId
+                      const switching = switchingHostId === host.id
+                      const name = hostDisplayName(host) ?? t('common.unnamedDesktop')
+                      const address = hostNetworkAddress(host.endpoint)
+                      return (
+                        <Pressable
+                          key={host.id}
+                          disabled={current || switchingHostId !== null}
+                          style={({ pressed }) => [
+                            styles.hostSwitcherRow,
+                            current && styles.hostSwitcherRowCurrent,
+                            pressed && styles.pressed,
+                            switchingHostId !== null && !switching && !current && styles.disabledRow
+                          ]}
+                          onPress={() => void switchToHost(host)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${name}, ${t('common.desktopIp', { address })}`}
+                          accessibilityState={{ selected: current, disabled: current || switchingHostId !== null }}
+                        >
+                          <View style={styles.hostSwitcherIcon}>
+                            {switching ? (
+                              <ActivityIndicator color={colors.textSecondary} />
+                            ) : current ? (
+                              <Check size={16} color={colors.accentBlue} />
+                            ) : (
+                              <Server size={16} color={colors.textPrimary} />
+                            )}
+                          </View>
+                          <View style={styles.hostSwitcherMain}>
+                            <Text style={styles.hostSwitcherName} numberOfLines={1}>
+                              {name}
+                            </Text>
+                            <Text style={styles.hostSwitcherEndpoint} numberOfLines={1}>
+                              {t('common.desktopIp', { address })}
+                            </Text>
+                          </View>
+                        </Pressable>
+                      )
+                    })}
+                  </View>
+                </View>
+              ))}
             </ScrollView>
             {hostSwitchError ? (
               <Text style={styles.hostSwitcherError}>{hostSwitchError}</Text>
@@ -1899,6 +1913,19 @@ const styles = StyleSheet.create({
     maxHeight: 320
   },
   hostSwitcherListContent: {
+    gap: spacing.xs
+  },
+  hostSwitcherGroup: {
+    gap: spacing.xs
+  },
+  hostSwitcherGroupTitle: {
+    color: colors.textMuted,
+    fontFamily: typography.monoFamily,
+    fontSize: typography.metaSize,
+    fontWeight: '700',
+    paddingHorizontal: spacing.xs
+  },
+  hostSwitcherGroupHosts: {
     gap: spacing.xs
   },
   hostSwitcherRow: {

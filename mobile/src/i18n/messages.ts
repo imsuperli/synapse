@@ -22,6 +22,9 @@ export const messages = {
     'common.authFailed': '认证失败',
     'common.disconnected': '已断开',
     'common.relay': '中转',
+    'common.localNetwork': '局域网',
+    'common.unnamedDesktop': '未命名电脑',
+    'common.desktopIp': '电脑 IP：{address}',
     'common.terminal': '终端',
     'common.starting': '正在启动',
 
@@ -230,6 +233,9 @@ export const messages = {
     'common.authFailed': 'Auth failed',
     'common.disconnected': 'Disconnected',
     'common.relay': 'Relay',
+    'common.localNetwork': 'Local network',
+    'common.unnamedDesktop': 'Unnamed desktop',
+    'common.desktopIp': 'Desktop IP: {address}',
     'common.terminal': 'Terminal',
     'common.starting': 'Starting',
 

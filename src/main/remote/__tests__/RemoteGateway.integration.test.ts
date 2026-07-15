@@ -13,7 +13,7 @@ import {
   generateKeyPair,
   publicKeyFromBase64,
 } from '../../../shared/remote/e2ee-crypto';
-import { RemoteGateway } from '../RemoteGateway';
+import { RemoteGateway, selectPreferredPairingAddress } from '../RemoteGateway';
 import { SynapseRelayServer } from '../../../relay/SynapseRelayServer';
 import { buildRelayClientUrl } from '../../../shared/remote/relay';
 
@@ -34,6 +34,17 @@ describe('RemoteGateway integration', () => {
       rmSync(tempDir, { recursive: true, force: true });
       tempDir = null;
     }
+  });
+
+  it('uses a real network address for relay pairing offers when none is selected', () => {
+    expect(selectPreferredPairingAddress({
+      ethernet: [{ family: 'IPv4', internal: false, address: '192.168.1.20' } as any],
+      tailscale: [{ family: 'IPv4', internal: false, address: '100.64.1.20' } as any],
+      loopback: [{ family: 'IPv4', internal: true, address: '127.0.0.1' } as any],
+    })).toBe('100.64.1.20');
+    expect(selectPreferredPairingAddress({
+      loopback: [{ family: 'IPv4', internal: true, address: '127.0.0.1' } as any],
+    })).toBeNull();
   });
 
   it('authenticates an encrypted WebSocket client and dispatches status.get', async () => {

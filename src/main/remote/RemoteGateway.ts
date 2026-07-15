@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'crypto';
+import { networkInterfaces, type NetworkInterfaceInfo } from 'os';
 import WebSocket, { type RawData } from 'ws';
 import type { ProcessManager } from '../services/ProcessManager';
 import { ProcessStatus } from '../types/process';
@@ -368,12 +369,16 @@ export class RemoteGateway {
     const relayEndpoint = settings.relayEnabled && settings.relayEndpoint
       ? normalizeRelayEndpoint(settings.relayEndpoint)
       : null;
-    const advertisedAddress = args.address ?? settings.manualEndpoint ?? settings.selectedAddress;
+    const configuredAddress = args.address
+      ?? settings.manualEndpoint
+      ?? settings.selectedAddress;
+    const advertisedAddress = configuredAddress
+      ?? (relayEndpoint ? selectPreferredPairingAddress(networkInterfaces()) : null);
     if (!relayEndpoint && !advertisedAddress?.trim()) {
       return { available: false };
     }
-    if (advertisedAddress?.trim()) {
-      validateEndpointOverride(advertisedAddress, settings.acceptedPlainWsNonLocal);
+    if (configuredAddress?.trim()) {
+      validateEndpointOverride(configuredAddress, settings.acceptedPlainWsNonLocal);
     }
     const endpoint = resolvePairingEndpoint(rawEndpoint, advertisedAddress);
     const device = args.rotate
@@ -710,6 +715,21 @@ export function resolvePairingEndpoint(rawEndpoint: string, address: string | nu
     endpoint.port = parsed.port;
   }
   return formatWebSocketUrl(endpoint);
+}
+
+export function selectPreferredPairingAddress(
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>,
+): string | null {
+  const addresses = Object.values(interfaces)
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => entry.family === 'IPv4' && !entry.internal)
+    .map((entry) => entry.address);
+  return addresses.find(isTailnetIPv4) ?? addresses[0] ?? null;
+}
+
+function isTailnetIPv4(address: string): boolean {
+  const [first, second] = address.split('.').map(Number);
+  return first === 100 && second >= 64 && second <= 127;
 }
 
 function parsePairingAddressOverride(address: string): { host: string; port: string | null } {
