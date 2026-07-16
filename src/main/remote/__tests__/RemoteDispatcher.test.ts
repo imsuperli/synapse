@@ -29,6 +29,25 @@ type MockProcessManager = {
   resizePty: ReturnType<typeof vi.fn>;
 };
 
+const defaultKeyboardState = {
+  applicationCursorKeysMode: false,
+  applicationKeypadMode: false,
+  bracketedPasteMode: false,
+  sendFocusMode: false,
+  win32InputMode: false,
+  mouseTracking: {
+    protocol: 'NONE',
+    encoding: 'DEFAULT',
+  },
+  kittyKeyboard: {
+    flags: 0,
+    mainFlags: 0,
+    altFlags: 0,
+    mainStack: [],
+    altStack: [],
+  },
+} as const;
+
 describe('RemoteDispatcher', () => {
   let tempDir: string | null = null;
 
@@ -128,6 +147,7 @@ describe('RemoteDispatcher', () => {
         evictedBeforeSeq: 0,
         gap: false,
         hasMoreBefore: false,
+        keyboardState: defaultKeyboardState,
       })),
       subscribePtyData: vi.fn((_pid: number, callback: (data: string, seq?: number) => void) => {
         outputCallback = callback;
@@ -585,6 +605,66 @@ describe('RemoteDispatcher', () => {
     });
   });
 
+  it('rehydrates active TUI mouse modes after truncated recent history', async () => {
+    const harness = createHarness();
+    const binaryEvents: Uint8Array[] = [];
+    harness.processManager.getPtyHistoryEntriesBefore.mockReturnValueOnce({
+      entries: [
+        { seq: 200, data: 'recent-output' },
+      ],
+      firstSeq: 200,
+      lastSeq: 200,
+      evictedBeforeSeq: 0,
+      gap: false,
+      hasMoreBefore: true,
+      keyboardState: {
+        ...defaultKeyboardState,
+        mouseTracking: {
+          protocol: 'DRAG',
+          encoding: 'SGR',
+        },
+      },
+    });
+    const screenSnapshot = '\u001b[?1049h\u001b[2J\u001b[Hworking 42s';
+    harness.processManager.getTerminalScreenSnapshot.mockReturnValueOnce({
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      cols: 132,
+      rows: 34,
+      cursorX: 12,
+      cursorY: 20,
+      alternate: true,
+      data: screenSnapshot,
+      capturedAt: '2026-07-15T06:00:00.000Z',
+      outputSeq: 200,
+    });
+
+    await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {
+      windowId: 'win-1',
+      paneId: 'pane-1',
+      sinceSeq: 0,
+      capabilities: { terminalBinaryStream: 1 },
+    }, [], binaryEvents);
+    await waitForSubscriptionActivation();
+
+    const frames = binaryEvents.map((event) => decodeTerminalStreamFrame(event));
+    const start = frames.find((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotStart);
+    const meta = decodeTerminalStreamJson<Record<string, unknown>>(start!.payload);
+    const snapshotText = frames
+      .filter((frame) => frame?.opcode === TerminalStreamOpcode.SnapshotChunk)
+      .map((frame) => decodeTerminalStreamText(frame!.payload))
+      .join('');
+
+    expect(snapshotText).not.toContain('\u001b[?1002;1006hrecent-output');
+    expect(snapshotText).toContain(screenSnapshot);
+    expect(snapshotText).toMatch(/\u001b\[\?1002;1006h$/);
+    expect(snapshotText.match(/\u001b\[\?1049h/g)).toHaveLength(1);
+    expect(meta).toMatchObject({
+      screenSnapshotOffset: 'recent-output'.length,
+      screenSnapshotLength: screenSnapshot.length,
+    });
+  });
+
   it('bounds the initial terminal snapshot so live rendering is not blocked by full history', async () => {
     const harness = createHarness();
 
@@ -694,6 +774,7 @@ describe('RemoteDispatcher', () => {
       evictedBeforeSeq: 5,
       gap: true,
       hasMoreBefore: false,
+      keyboardState: defaultKeyboardState,
     });
     harness.processManager.getLatestPaneOutputSeq.mockReturnValueOnce(5);
 
@@ -726,6 +807,7 @@ describe('RemoteDispatcher', () => {
         evictedBeforeSeq: 0,
         gap: false,
         hasMoreBefore: false,
+        keyboardState: defaultKeyboardState,
       };
     });
 
@@ -770,6 +852,8 @@ describe('RemoteDispatcher', () => {
       lastSeq: 5,
       evictedBeforeSeq: 2,
       gap: true,
+      hasMoreBefore: false,
+      keyboardState: defaultKeyboardState,
     });
 
     const response = await dispatch(harness, REMOTE_METHODS.TERMINAL_SUBSCRIBE, {

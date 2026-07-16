@@ -70,6 +70,10 @@ type PaneHistoryEntriesResult = {
   hasMoreBefore: boolean;
 };
 
+type PaneHistoryEntriesWithKeyboardStateResult = PaneHistoryEntriesResult & {
+  keyboardState: PtyKeyboardProtocolState;
+};
+
 type PaneHistoryReadLimits = {
   limitBytes?: number;
   limitChunks?: number;
@@ -945,19 +949,19 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     paneId: string,
     beforeSeq?: number,
     limits?: PaneHistoryReadLimits,
-  ): PaneHistoryEntriesResult;
+  ): PaneHistoryEntriesWithKeyboardStateResult;
   getPtyHistoryEntriesBefore(
     windowId: string,
     paneId: string,
     beforeSeq?: number,
     limits?: PaneHistoryReadLimits,
-  ): PaneHistoryEntriesResult;
+  ): PaneHistoryEntriesWithKeyboardStateResult;
   getPtyHistoryEntriesBefore(
     windowIdOrPaneId: string,
     paneIdOrBeforeSeq?: string | number,
     beforeSeqOrLimits?: number | PaneHistoryReadLimits,
     maybeLimits?: PaneHistoryReadLimits,
-  ): PaneHistoryEntriesResult {
+  ): PaneHistoryEntriesWithKeyboardStateResult {
     const paneId = typeof paneIdOrBeforeSeq === 'string' ? paneIdOrBeforeSeq : undefined;
     const beforeSeq = typeof paneIdOrBeforeSeq === 'number'
       ? paneIdOrBeforeSeq
@@ -978,6 +982,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
         evictedBeforeSeq: 0,
         gap: false,
         hasMoreBefore: false,
+        keyboardState: cloneKeyboardProtocolState(createDefaultKeyboardProtocolState()),
       };
     }
 
@@ -1011,6 +1016,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       evictedBeforeSeq: history.evictedBeforeSeq,
       gap: history.evictedBeforeSeq > 0 && !hasMoreBefore,
       hasMoreBefore,
+      keyboardState: cloneKeyboardProtocolState(history.keyboardState),
     };
   }
 

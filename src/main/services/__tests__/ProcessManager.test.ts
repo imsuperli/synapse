@@ -178,6 +178,7 @@ describe('ProcessManager', () => {
           evictedBeforeSeq: 2,
           gap: false,
           hasMoreBefore: true,
+          keyboardState: defaultKeyboardProtocolState,
         });
       } finally {
         spawnSpy.mockRestore();
@@ -1038,6 +1039,22 @@ describe('ProcessManager', () => {
               mainStack: [],
               altStack: [],
             },
+          },
+        });
+        expect(processManager.getPtyHistoryEntriesBefore(
+          'pane-keyboard-history',
+          Number.MAX_SAFE_INTEGER,
+          { limitChunks: 1 },
+        ).keyboardState).toEqual({
+          ...defaultKeyboardProtocolState,
+          bracketedPasteMode: true,
+          win32InputMode: true,
+          kittyKeyboard: {
+            flags: 7,
+            mainFlags: 7,
+            altFlags: 3,
+            mainStack: [],
+            altStack: [],
           },
         });
       } finally {

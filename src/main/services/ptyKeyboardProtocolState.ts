@@ -10,7 +10,7 @@ export type TrackedKeyboardProtocolState = PtyKeyboardProtocolState & {
 };
 
 const KEYBOARD_PROTOCOL_SEQUENCE_TAIL_LIMIT = 64;
-const KEYBOARD_PROTOCOL_SEQUENCE_PATTERN = /\x1b(?:\[(?:(\?)([0-9;]*)?([hl])|=([0-9]*)(?:;([0-9]+))?u|>([0-9]*)u|<([0-9]*)u)|([=>]))/g;
+const KEYBOARD_PROTOCOL_SEQUENCE_PATTERN = /\x1bc|\x1b\[!p|\x1b(?:\[(?:(\?)([0-9;]*)?([hl])|=([0-9]*)(?:;([0-9]+))?u|>([0-9]*)u|<([0-9]*)u)|([=>]))/g;
 
 export function createDefaultKeyboardProtocolState(): TrackedKeyboardProtocolState {
   return {
@@ -56,6 +56,55 @@ export function cloneKeyboardProtocolState(state: TrackedKeyboardProtocolState):
   };
 }
 
+export function buildPtyModeRehydrateSequence(state: PtyKeyboardProtocolState): string {
+  const hasActiveMode = state.applicationCursorKeysMode
+    || state.applicationKeypadMode
+    || state.bracketedPasteMode
+    || state.sendFocusMode
+    || state.win32InputMode
+    || state.mouseTracking.protocol !== 'NONE'
+    || state.mouseTracking.encoding !== 'DEFAULT';
+  if (!hasActiveMode) {
+    return '';
+  }
+
+  // The recent remote snapshot can start after a TUI enabled these modes. Reset
+  // replayed state first, then restore the authoritative state tracked by the PTY.
+  const sequences = [
+    '\x1b[?1;9;1000;1002;1003;1004;1006;1016;2004;9001l',
+    '\x1b>',
+  ];
+  if (state.applicationKeypadMode) {
+    sequences.push('\x1b=');
+  }
+
+  const enabledPrivateModes: number[] = [];
+  if (state.applicationCursorKeysMode) enabledPrivateModes.push(1);
+  switch (state.mouseTracking.protocol) {
+    case 'X10':
+      enabledPrivateModes.push(9);
+      break;
+    case 'VT200':
+      enabledPrivateModes.push(1000);
+      break;
+    case 'DRAG':
+      enabledPrivateModes.push(1002);
+      break;
+    case 'ANY':
+      enabledPrivateModes.push(1003);
+      break;
+  }
+  if (state.sendFocusMode) enabledPrivateModes.push(1004);
+  if (state.mouseTracking.encoding === 'SGR') enabledPrivateModes.push(1006);
+  if (state.mouseTracking.encoding === 'SGR_PIXELS') enabledPrivateModes.push(1016);
+  if (state.bracketedPasteMode) enabledPrivateModes.push(2004);
+  if (state.win32InputMode) enabledPrivateModes.push(9001);
+  if (enabledPrivateModes.length > 0) {
+    sequences.push(`\x1b[?${enabledPrivateModes.join(';')}h`);
+  }
+  return sequences.join('');
+}
+
 function getPendingKeyboardProtocolSequenceTail(data: string): string {
   const escapeStart = data.lastIndexOf('\x1b');
   const csiStart = data.lastIndexOf('\x1b[');
@@ -74,6 +123,7 @@ function getPendingKeyboardProtocolSequenceTail(data: string): string {
   if (
     tail === '\x1b'
     || tail === '\x1b['
+    || tail === '\x1b[!'
     || /^\x1b\[\?[0-9;]*$/.test(tail)
     || /^\x1b\[=[0-9]*(?:;[0-9]*)?$/.test(tail)
     || /^\x1b\[>[0-9]*$/.test(tail)
@@ -115,11 +165,23 @@ export function updateKeyboardProtocolStateFromOutput(state: TrackedKeyboardProt
   const scanData = state.pendingEscapeSequence
     ? `${state.pendingEscapeSequence}${data}`
     : data;
-  state.pendingEscapeSequence = getPendingKeyboardProtocolSequenceTail(scanData);
+  const pendingEscapeSequence = getPendingKeyboardProtocolSequenceTail(scanData);
   let match: RegExpExecArray | null;
 
   KEYBOARD_PROTOCOL_SEQUENCE_PATTERN.lastIndex = 0;
   while ((match = KEYBOARD_PROTOCOL_SEQUENCE_PATTERN.exec(scanData)) !== null) {
+    if (match[0] === '\x1bc') {
+      Object.assign(state, createDefaultKeyboardProtocolState());
+      continue;
+    }
+    if (match[0] === '\x1b[!p') {
+      const { activeAltBuffer, mouseTracking } = state;
+      Object.assign(state, createDefaultKeyboardProtocolState(), {
+        activeAltBuffer,
+        mouseTracking,
+      });
+      continue;
+    }
     const privateModePrefix = match[1];
     if (privateModePrefix === '?') {
       const params = (match[2] ?? '').split(';').map((value) => Number(value));
@@ -224,4 +286,5 @@ export function updateKeyboardProtocolStateFromOutput(state: TrackedKeyboardProt
       }
     }
   }
+  state.pendingEscapeSequence = pendingEscapeSequence;
 }

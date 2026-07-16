@@ -12,6 +12,7 @@ import {
   encodeTerminalStreamJson,
   iterateTerminalStreamTextPayloads,
 } from '../../shared/remote/terminal-stream-protocol';
+import { buildPtyModeRehydrateSequence } from '../services/ptyKeyboardProtocolState';
 
 export type TerminalOutputPayload = {
   windowId: string;
@@ -345,6 +346,7 @@ export class RemoteTerminalController {
       screenSnapshotOffset = insertOffset;
       screenSnapshotLength = screenSnapshot.data.length;
     }
+    serialized += buildPtyModeRehydrateSequence(history.keyboardState);
     return {
       serialized,
       firstSeq: history.firstSeq,
