@@ -194,4 +194,29 @@ describe('remote terminal history state', () => {
     expect(buildRemoteTerminalInitialData(state)).toBe('12345')
     expect(state.firstSeq).toBe(1)
   })
+
+  it('retains the desktop eviction boundary when older history is prepended', () => {
+    const state = createRemoteTerminalHistoryState()
+    replaceRemoteTerminalHistorySnapshot(state, {
+      serialized: 'recent',
+      firstSeq: 10,
+      lastSeq: 10,
+      hasMoreBefore: true
+    })
+
+    prependRemoteTerminalHistoryPage(state, {
+      chunks: ['old'],
+      firstSeq: 4,
+      lastSeq: 9,
+      hasMoreBefore: false,
+      gap: true,
+      evictedBeforeSeq: 3
+    })
+
+    expect(state).toMatchObject({
+      gap: true,
+      evictedBeforeSeq: 3,
+      hasMoreBefore: false
+    })
+  })
 })

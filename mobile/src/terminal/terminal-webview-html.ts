@@ -283,17 +283,37 @@ window.onerror = function(msg) {
   // immediately. In viewport-zoom mode, leave xterm metrics alone and persist a
   // CSS multiplier so remote TUI snapshots keep their desktop cursor grid.
   function applyTextScale(scale) {
+    var previousTextScale = currentTextScale;
     currentTextScale = snapToTextScalePreset(scale);
-    if (!term) return;
+    if (!term) {
+      emitDiagnostic('text-scale', {
+        previousTextScale: previousTextScale,
+        requestedTextScale: scale,
+        appliedTextScale: currentTextScale
+      });
+      return;
+    }
     if (isViewportZoomTextScale()) {
       userScale = 1;
       clampPan();
       updateTransform();
       emitKeyboardAvoidanceMetrics();
+      emitDiagnostic('text-scale', {
+        previousTextScale: previousTextScale,
+        requestedTextScale: scale,
+        appliedTextScale: currentTextScale
+      });
       return;
     }
     var px = fontPxForScale(scale);
-    if (term.options.fontSize === px) return;
+    if (term.options.fontSize === px) {
+      emitDiagnostic('text-scale', {
+        previousTextScale: previousTextScale,
+        requestedTextScale: scale,
+        appliedTextScale: currentTextScale
+      });
+      return;
+    }
     term.options.fontSize = px;
     requestAnimationFrame(function() {
       if (!term) return;
@@ -306,6 +326,11 @@ window.onerror = function(msg) {
         term.resize(cols, rows);
       }
       applyFitScale('text-scale');
+      emitDiagnostic('text-scale', {
+        previousTextScale: previousTextScale,
+        requestedTextScale: scale,
+        appliedTextScale: currentTextScale
+      });
     });
   }
   var panX = 0, panY = 0;
@@ -330,6 +355,8 @@ window.onerror = function(msg) {
   // scrollWidth past the previously-measured value gets re-scaled to fit.
   var firstDataPending = false;
   var lastHistoryTopNotifyAt = 0;
+  var lastGestureDiagnosticAt = 0;
+  var lastGestureDiagnosticRoute = '';
 
   // Diagnostic logger — bridges WebView console.log to RN via postMessage.
   // Tag with [fit] so it's easy to filter in the Expo/Metro logs.
@@ -341,6 +368,64 @@ window.onerror = function(msg) {
         }));
       }
     } catch (e) {}
+  }
+
+  function terminalDiagnosticMetrics(extra) {
+    var buffer = term && term.buffer && term.buffer.active ? term.buffer.active : null;
+    var metrics = {
+      textScaleMode: textScaleMode,
+      fitScale: currentScale,
+      textScale: currentTextScale,
+      totalScale: getTotalScale(),
+      panX: panX,
+      panY: panY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      cols: term ? term.cols || 0 : 0,
+      rows: term ? term.rows || 0 : 0,
+      cellWidth: getCellWidth(),
+      cellHeight: getCellHeight(),
+      bufferType: buffer && typeof buffer.type === 'string' ? buffer.type : 'unknown',
+      bufferLength: buffer ? buffer.length || 0 : 0,
+      baseY: buffer ? buffer.baseY || 0 : 0,
+      viewportY: buffer ? buffer.viewportY || 0 : 0
+    };
+    if (extra && typeof extra === 'object') {
+      var keys = Object.keys(extra);
+      for (var i = 0; i < keys.length; i++) {
+        var value = extra[keys[i]];
+        if (
+          typeof value === 'string' ||
+          typeof value === 'number' ||
+          typeof value === 'boolean' ||
+          value === null
+        ) {
+          metrics[keys[i]] = value;
+        }
+      }
+    }
+    return metrics;
+  }
+
+  function emitDiagnostic(event, extra) {
+    notify({
+      type: 'diagnostic',
+      event: event,
+      metrics: terminalDiagnosticMetrics(extra)
+    });
+  }
+
+  function emitGestureDiagnostic(route, dx, dy, panChanged) {
+    var now = Date.now();
+    if (route === lastGestureDiagnosticRoute && now - lastGestureDiagnosticAt < 750) return;
+    lastGestureDiagnosticRoute = route;
+    lastGestureDiagnosticAt = now;
+    emitDiagnostic('gesture-route', {
+      route: route,
+      dx: dx,
+      dy: dy,
+      panChanged: panChanged
+    });
   }
 
   function getCellWidth() {
@@ -577,6 +662,15 @@ window.onerror = function(msg) {
         vpWidth: vpW
       });
     }
+    emitDiagnostic('fit-scale', {
+      reason: reason,
+      attempts: attempts,
+      gate: gate,
+      preSnapScale: preSnapScale,
+      expectedWidth: expectedW,
+      renderedWidth: sw,
+      suspect: suspect
+    });
     repositionOverlay();
   }
 
@@ -850,6 +944,11 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
         initialOscLinkEvictionReady = true;
         applyFitScale('init-replay');
         notify({ type: 'ready', cols: cols, rows: rows });
+        emitDiagnostic('terminal-ready', {
+          initialDataChars: typeof replayData === 'string' ? replayData.length : 0,
+          preserveScroll: preserveScroll === true,
+          preserveFullInitialData: preserveFullInitialData === true
+        });
       });
     });
   }
@@ -894,6 +993,7 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     var now = Date.now();
     if (now - lastHistoryTopNotifyAt < 900) return;
     lastHistoryTopNotifyAt = now;
+    emitDiagnostic('history-top', {});
     notify({ type: 'history-top' });
   }
 
@@ -967,6 +1067,10 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
         cellHeight: cellHeight,
         retriesLeft: retriesLeft
       });
+      emitDiagnostic('measure-fit', {
+        result: 'not-ready',
+        retriesLeft: retriesLeft
+      });
       notify({ type: 'measure-result', cols: null, rows: null });
       return;
     }
@@ -986,6 +1090,11 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
         cellWidth: cellWidth,
         cols: cols
       });
+      emitDiagnostic('measure-fit', {
+        result: 'small-width',
+        measuredCols: cols,
+        containerHeight: vpHeight
+      });
       notify({ type: 'measure-result', cols: null, rows: null });
       return;
     }
@@ -997,7 +1106,22 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     // safety margin between the prompt and the accessory bar must come
     // from RN layout (terminalFrame's flex bounds), not from undersizing
     // the PTY.
-    var rows = Math.max(8, Math.floor(vpHeight / cellHeight));
+    // Remote terminals retain the desktop column count and fit that fixed grid
+    // with a CSS scale. Row measurement must use the same scale or the xterm
+    // surface only occupies the top fraction of the phone viewport.
+    var fixedGridFitScale = Math.min(
+      1,
+      vpWidth / (cellWidth * Math.max(1, term.cols || cols))
+    );
+    if (fixedGridFitScale >= 0.95) fixedGridFitScale = 1;
+    var rows = Math.max(8, Math.floor(vpHeight / (cellHeight * fixedGridFitScale)));
+    emitDiagnostic('measure-fit', {
+      result: 'ok',
+      measuredCols: cols,
+      measuredRows: rows,
+      containerHeight: vpHeight,
+      fixedGridFitScale: fixedGridFitScale
+    });
     notify({ type: 'measure-result', cols: cols, rows: rows });
   }
 
@@ -1906,18 +2030,35 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
         var now = Date.now(), dt = now - ts.lastTime;
         var dx = x - ts.lastX;
         var dy = y - ts.lastY;
+        var viewportZoomPanHandoff = false;
 
         if (shouldPanViewportZoomGesture()) {
-          if (canPanScaledTerminalX()) panX += dx;
-          if (canPanScaledTerminalY()) panY += dy;
+          var previousPanX = panX;
+          var previousPanY = panY;
+          var horizontalDominant = Math.abs(dx) > Math.abs(dy);
+          if (horizontalDominant) {
+            if (canPanScaledTerminalX()) panX += dx;
+          } else if (canPanScaledTerminalY()) {
+            panY += dy;
+          }
           clampPan();
-          updateTransform();
-          ts.lastTime = now;
-          ts.velY = 0;
-          ts.accumDelta = 0;
-          ts.lastX = x;
-          ts.lastY = y;
-          return;
+          var panChanged =
+            Math.abs(panX - previousPanX) > 0.01 ||
+            Math.abs(panY - previousPanY) > 0.01;
+          if (panChanged) {
+            updateTransform();
+            emitGestureDiagnostic('viewport-pan', dx, dy, true);
+            ts.lastTime = now;
+            ts.velY = 0;
+            ts.accumDelta = 0;
+            ts.lastX = x;
+            ts.lastY = y;
+            return;
+          }
+          // At a clamped pan edge, hand the same gesture to xterm. Otherwise a
+          // zoomed terminal consumes every downward pull while neither the CSS
+          // viewport nor scrollback moves, so paged history is unreachable.
+          viewportZoomPanHandoff = true;
         }
 
         // Why: pan horizontally only when content overflows the viewport (larger
@@ -1934,6 +2075,12 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
         var deltaY = ts.lastY - y;
         ts.lastTime = now;
         if (shouldRouteScrollToTerminalInput()) {
+          emitGestureDiagnostic(
+            viewportZoomPanHandoff ? 'terminal-input-handoff' : 'terminal-input',
+            dx,
+            dy,
+            false
+          );
           updateTouchVelocity(deltaY, dt);
           resetSmoothScrollOffset();
           var effectiveCellH = getCellHeight() * getTotalScale();
@@ -1944,6 +2091,12 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
             routeScrollLines(lines, x, y);
           }
         } else {
+          emitGestureDiagnostic(
+            viewportZoomPanHandoff ? 'buffer-scroll-handoff' : 'buffer-scroll',
+            dx,
+            dy,
+            false
+          );
           if (enqueueNormalBufferScrollDelta(deltaY)) {
             updateTouchVelocity(deltaY, dt);
           } else {
@@ -2057,6 +2210,7 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
 
   if (window.Terminal) {
     notify({ type: 'web-ready' });
+    emitDiagnostic('web-ready', {});
   } else {
     reportEngineError('terminal engine missing', 'xterm failed to load', true);
   }

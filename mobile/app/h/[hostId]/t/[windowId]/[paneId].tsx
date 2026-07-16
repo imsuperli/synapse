@@ -18,6 +18,7 @@ import {
 import * as Clipboard from 'expo-clipboard'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import {
+  Bug,
   Check,
   Eraser,
   Keyboard as KeyboardIcon,
@@ -29,9 +30,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   type TerminalKeyboardAvoidanceMetrics,
+  type TerminalWebViewDiagnostic,
   type TerminalWebViewHandle
 } from '../../../../../src/terminal/TerminalWebView'
 import { TerminalPaneView } from '../../../../../src/session/TerminalPaneView'
+import { TerminalDiagnosticsModal } from '../../../../../src/components/TerminalDiagnosticsModal'
 import {
   clearTerminal,
   connectToHost,
@@ -100,6 +103,16 @@ import {
   DEFAULT_REMOTE_TERMINAL_RESIDENT_LIMIT,
   selectRemoteTerminalResidentSessions
 } from '../../../../../src/synapse/remote-terminal-resident-sessions'
+import {
+  appendTerminalDiagnostic,
+  createTerminalDiagnosticBuffer,
+  formatTerminalDiagnostics,
+  type TerminalDiagnosticSource
+} from '../../../../../src/diagnostics/terminal-diagnostics'
+import {
+  loadTerminalDiagnostics,
+  saveTerminalDiagnostics
+} from '../../../../../src/diagnostics/terminal-diagnostics-storage'
 
 type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryInput>
 
@@ -301,6 +314,15 @@ function terminalErrorMessage(err: unknown, t: MobileTranslate): string {
   return message
 }
 
+function terminalHistoryBoundaryMessage(
+  history: { gap: boolean; evictedBeforeSeq: number },
+  t: MobileTranslate
+): string {
+  return history.gap || history.evictedBeforeSeq > 0
+    ? t('terminal.historyEvictedOnDesktop')
+    : t('terminal.historyStartReached')
+}
+
 function parseTerminalSubscribedEvent(value: unknown): TerminalSubscribedEvent | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -443,6 +465,7 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
     terminalHistoryRef: { current: createRemoteTerminalHistoryState() },
     terminalHistoryPrefetchRef: { current: createRemoteTerminalHistoryPrefetchState() },
     terminalHistoryPrefetchPromiseRef: { current: null as Promise<void> | null },
+    initialHistoryActivatedRef: { current: false },
     terminalInitializedRef: { current: false },
     terminalWebReadyRef: { current: false },
     resyncingRef: { current: false },
@@ -506,6 +529,7 @@ export default function RemoteTerminalScreen() {
   const terminalHistoryRef = sessionRuntime.terminalHistoryRef
   const terminalHistoryPrefetchRef = sessionRuntime.terminalHistoryPrefetchRef
   const terminalHistoryPrefetchPromiseRef = sessionRuntime.terminalHistoryPrefetchPromiseRef
+  const initialHistoryActivatedRef = sessionRuntime.initialHistoryActivatedRef
   const terminalInitializedRef = sessionRuntime.terminalInitializedRef
   const terminalWebReadyRef = sessionRuntime.terminalWebReadyRef
   const resyncingRef = sessionRuntime.resyncingRef
@@ -539,6 +563,11 @@ export default function RemoteTerminalScreen() {
   const screenFocusedRef = useRef(false)
   const lastOpenedHandleRef = useRef<string | null>(null)
   const handleHistoryTopReachedRef = useRef<(() => void) | null>(null)
+  const diagnosticsBufferRef = useRef(createTerminalDiagnosticBuffer())
+  const diagnosticsVisibleRef = useRef(false)
+  const diagnosticsPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const diagnosticsStorageLoadedRef = useRef(false)
+  const diagnosticsPersistencePendingRef = useRef(false)
   const [connectionState, setConnectionState] = useState<ConnectionState | 'loading'>('loading')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -560,6 +589,8 @@ export default function RemoteTerminalScreen() {
   const [terminalTextScale, setTerminalTextScale] = useState(1)
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
   const [historyNotice, setHistoryNotice] = useState<string | null>(null)
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false)
+  const [diagnosticsRevision, setDiagnosticsRevision] = useState(0)
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const liveInputTerminalHandles = useMemo(() => new Set([terminalHandle]), [terminalHandle])
   const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set([terminalHandle]))
@@ -577,10 +608,114 @@ export default function RemoteTerminalScreen() {
   activeSessionTabTypeRef.current = 'terminal'
   liveInputTerminalHandlesRef.current = liveInputTerminalHandles
 
+  const flushDiagnosticsPersistence = useCallback(() => {
+    if (diagnosticsPersistTimerRef.current) {
+      clearTimeout(diagnosticsPersistTimerRef.current)
+      diagnosticsPersistTimerRef.current = null
+    }
+    if (!diagnosticsStorageLoadedRef.current) {
+      diagnosticsPersistencePendingRef.current = true
+      return
+    }
+    diagnosticsPersistencePendingRef.current = false
+    void saveTerminalDiagnostics(diagnosticsBufferRef.current).catch(() => {})
+  }, [])
+
+  const scheduleDiagnosticsPersistence = useCallback(() => {
+    diagnosticsPersistencePendingRef.current = true
+    if (!diagnosticsStorageLoadedRef.current) {
+      return
+    }
+    if (diagnosticsPersistTimerRef.current) {
+      clearTimeout(diagnosticsPersistTimerRef.current)
+    }
+    diagnosticsPersistTimerRef.current = setTimeout(() => {
+      diagnosticsPersistTimerRef.current = null
+      flushDiagnosticsPersistence()
+    }, 500)
+  }, [flushDiagnosticsPersistence])
+
+  const appendDiagnostic = useCallback(
+    (
+      source: TerminalDiagnosticSource,
+      event: string,
+      metrics: Record<string, unknown> = {},
+      ts?: number
+    ) => {
+      appendTerminalDiagnostic(diagnosticsBufferRef.current, {
+        source,
+        event,
+        metrics,
+        ...(typeof ts === 'number' ? { ts } : {})
+      })
+      if (diagnosticsVisibleRef.current) {
+        setDiagnosticsRevision((revision) => revision + 1)
+      }
+      scheduleDiagnosticsPersistence()
+    },
+    [scheduleDiagnosticsPersistence]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    void loadTerminalDiagnostics()
+      .then((persisted) => {
+        if (cancelled) {
+          return
+        }
+        const currentEntries = diagnosticsBufferRef.current.entries
+        const entriesByKey = new Map(
+          [...persisted.entries, ...currentEntries].map((entry) => [
+            `${entry.ts}:${entry.source}:${entry.event}:${JSON.stringify(entry.metrics)}`,
+            entry
+          ])
+        )
+        const merged = Array.from(entriesByKey.values())
+          .sort((a, b) => a.ts - b.ts)
+          .slice(-diagnosticsBufferRef.current.limit)
+        diagnosticsBufferRef.current.entries = merged
+        diagnosticsStorageLoadedRef.current = true
+        if (diagnosticsVisibleRef.current) {
+          setDiagnosticsRevision((revision) => revision + 1)
+        }
+        if (diagnosticsPersistencePendingRef.current) {
+          scheduleDiagnosticsPersistence()
+        }
+      })
+      .catch(() => {
+        if (cancelled) {
+          return
+        }
+        diagnosticsStorageLoadedRef.current = true
+        if (diagnosticsPersistencePendingRef.current) {
+          scheduleDiagnosticsPersistence()
+        }
+      })
+    return () => {
+      cancelled = true
+      if (diagnosticsStorageLoadedRef.current) {
+        flushDiagnosticsPersistence()
+      } else if (diagnosticsPersistTimerRef.current) {
+        clearTimeout(diagnosticsPersistTimerRef.current)
+        diagnosticsPersistTimerRef.current = null
+      }
+    }
+  }, [flushDiagnosticsPersistence, scheduleDiagnosticsPersistence])
+
   const appendLog = useCallback((entry: ConnectionLogEntry) => {
     logsRef.current = [...logsRef.current, entry].slice(-40)
     setLogs(logsRef.current)
-  }, [])
+    appendDiagnostic(
+      'network',
+      'connection-log',
+      {
+        level: entry.level,
+        message: entry.message,
+        detail: entry.detail ?? null
+      },
+      entry.ts
+    )
+  }, [appendDiagnostic])
 
   const enterTabDeleteMode = useCallback((mode: TabDeleteMode) => {
     tabDeleteModeRef.current = mode
@@ -853,17 +988,38 @@ export default function RemoteTerminalScreen() {
       }
       terminalHistoryGenerationRef.current += 1
       terminalHistoryPrefetchPromiseRef.current = null
+      initialHistoryActivatedRef.current = false
       replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)
       resetRemoteTerminalHistoryPrefetchState(
         terminalHistoryPrefetchRef.current,
         snapshot.firstSeq,
-        snapshot.hasMoreBefore
+        snapshot.hasMoreBefore,
+        snapshot.gap,
+        snapshot.evictedBeforeSeq
       )
       terminalHistoryRef.current.hasMoreBefore = terminalHistoryPrefetchRef.current.hasMoreBefore
+      appendDiagnostic('mobile', 'history-snapshot', {
+        handle: terminalHandle,
+        returnedFirstSeq: snapshot.firstSeq,
+        returnedLastSeq: snapshot.lastSeq,
+        returnedSeqCount:
+          snapshot.firstSeq > 0 && snapshot.lastSeq >= snapshot.firstSeq
+            ? snapshot.lastSeq - snapshot.firstSeq + 1
+            : 0,
+        returnedChars: snapshot.serialized.length,
+        pcRetainedFirstSeq: snapshot.lastSeq > 0 ? snapshot.evictedBeforeSeq + 1 : 0,
+        pcRetainedLastSeq: snapshot.lastSeq,
+        hasMoreBefore: snapshot.hasMoreBefore,
+        gap: snapshot.gap,
+        evictedBeforeSeq: snapshot.evictedBeforeSeq,
+        screenSnapshotChars: snapshot.screenSnapshotLength ?? 0
+      })
       updateTerminalSubscriptionCursor()
       if (activeHandleRef.current === terminalHandle) {
         setHistoryNotice(
-          snapshot.gap && !snapshot.hasMoreBefore ? t('terminal.historyStartReached') : null
+          snapshot.gap && !snapshot.hasMoreBefore
+            ? terminalHistoryBoundaryMessage(terminalHistoryRef.current, t)
+            : null
         )
       }
       const viewport = updateTerminalViewportFromDesktop(snapshot, false)
@@ -898,6 +1054,7 @@ export default function RemoteTerminalScreen() {
     },
     [
       buildTerminalInitialData,
+      appendDiagnostic,
       fitTerminalRowsToPhone,
       paneId,
       t,
@@ -955,6 +1112,13 @@ export default function RemoteTerminalScreen() {
             }
             const subscribed = parseTerminalSubscribedEvent(payload)
             if (subscribed) {
+              appendDiagnostic('mobile', 'terminal-subscribed', {
+                handle: terminalHandle,
+                streamId: subscribed.streamId,
+                firstSeq: subscribed.firstSeq,
+                lastSeq: subscribed.lastSeq,
+                gap: subscribed.gap
+              })
               return
             }
             const snapshot = parseTerminalScrollbackEvent(payload)
@@ -1049,6 +1213,7 @@ export default function RemoteTerminalScreen() {
     },
     [
       applyTerminalScrollbackSnapshot,
+      appendDiagnostic,
       paneId,
       stopTerminalSubscription,
       t,
@@ -1086,13 +1251,45 @@ export default function RemoteTerminalScreen() {
         ) {
           return
         }
+        const returnedChars = history.chunks.reduce((total, chunk) => total + chunk.length, 0)
+        appendDiagnostic('mobile', 'history-page', {
+          handle: terminalHandle,
+          requestedBeforeSeq: beforeSeq,
+          returnedFirstSeq: history.firstSeq,
+          returnedLastSeq: history.lastSeq,
+          returnedChunks: history.chunks.length,
+          returnedChars,
+          pcRetainedFirstSeq: history.latestSeq > 0 ? history.evictedBeforeSeq + 1 : 0,
+          pcRetainedLastSeq: history.latestSeq,
+          hasMoreBefore: history.hasMoreBefore,
+          gap: history.gap,
+          evictedBeforeSeq: history.evictedBeforeSeq
+        })
         if (!cacheRemoteTerminalHistoryPage(prefetch, history)) {
+          appendDiagnostic('mobile', 'history-prefetch-stopped', {
+            handle: terminalHandle,
+            reason: history.chunks.length > 0 ? 'invalid-page' : 'empty-page',
+            cachedPages: prefetch.pages.length,
+            cachedBytes: prefetch.cachedBytes,
+            hasMoreBefore: prefetch.hasMoreBefore,
+            gap: prefetch.gap,
+            evictedBeforeSeq: prefetch.evictedBeforeSeq
+          })
           if (history.chunks.length > 0) {
             prefetch.hasMoreBefore = false
             throw new Error('invalid_terminal_history_page')
           }
           return
         }
+        appendDiagnostic('mobile', 'history-prefetch-cached', {
+          handle: terminalHandle,
+          cachedPages: prefetch.pages.length,
+          cachedBytes: prefetch.cachedBytes,
+          nextBeforeSeq: prefetch.nextBeforeSeq,
+          hasMoreBefore: prefetch.hasMoreBefore,
+          gap: prefetch.gap,
+          evictedBeforeSeq: prefetch.evictedBeforeSeq
+        })
       }
     })().finally(() => {
       if (terminalHistoryPrefetchPromiseRef.current === request) {
@@ -1101,7 +1298,175 @@ export default function RemoteTerminalScreen() {
     })
     terminalHistoryPrefetchPromiseRef.current = request
     return request
-  }, [paneId, windowId])
+  }, [appendDiagnostic, paneId, terminalHandle, windowId])
+
+  const activatePrefetchedTerminalHistory = useCallback(
+    async (trigger: 'initial' | 'history-top'): Promise<boolean | null> => {
+      const client = clientRef.current
+      if (
+        !client ||
+        loadingOlderHistoryRef.current ||
+        (trigger === 'history-top' && resyncingRef.current)
+      ) {
+        return null
+      }
+      const runId = runIdRef.current
+      const historyGeneration = terminalHistoryGenerationRef.current
+      const prefetch = terminalHistoryPrefetchRef.current
+      const hadCachedPages = prefetch.pages.length > 0
+      appendDiagnostic('mobile', 'history-activation-start', {
+        handle: terminalHandle,
+        trigger,
+        cachedPages: prefetch.pages.length,
+        cachedBytes: prefetch.cachedBytes,
+        nextBeforeSeq: prefetch.nextBeforeSeq,
+        hasMoreBefore: prefetch.hasMoreBefore
+      })
+      loadingOlderHistoryRef.current = true
+      if (trigger === 'history-top') {
+        setLoadingOlderHistory(!hadCachedPages)
+        setHistoryNotice(null)
+      }
+      try {
+        if (!hadCachedPages && prefetch.hasMoreBefore) {
+          await prefetchOlderTerminalHistory()
+        }
+        if (
+          runIdRef.current !== runId ||
+          clientRef.current !== client ||
+          terminalHistoryGenerationRef.current !== historyGeneration
+        ) {
+          return null
+        }
+
+        const prefetched = takePrefetchedRemoteTerminalHistory(prefetch)
+        terminalHistoryRef.current.hasMoreBefore = prefetched.hasMoreBefore
+        terminalHistoryRef.current.gap ||= prefetched.gap
+        terminalHistoryRef.current.evictedBeforeSeq = Math.max(
+          terminalHistoryRef.current.evictedBeforeSeq,
+          prefetched.evictedBeforeSeq
+        )
+        if (prefetched.pages.length === 0) {
+          appendDiagnostic('mobile', 'history-activation-result', {
+            handle: terminalHandle,
+            trigger,
+            result: 'no-pages',
+            historyFirstSeq: terminalHistoryRef.current.firstSeq,
+            historyLastSeq: terminalHistoryRef.current.lastSeq,
+            hasMoreBefore: prefetched.hasMoreBefore,
+            gap: terminalHistoryRef.current.gap,
+            evictedBeforeSeq: terminalHistoryRef.current.evictedBeforeSeq
+          })
+          if (trigger === 'history-top' && !prefetched.hasMoreBefore) {
+            setHistoryNotice(terminalHistoryBoundaryMessage(terminalHistoryRef.current, t))
+          }
+          return false
+        }
+
+        let prependedCount = 0
+        for (const page of prefetched.pages) {
+          prependedCount += prependRemoteTerminalHistoryPage(
+            terminalHistoryRef.current,
+            page
+          ).length
+        }
+        terminalHistoryRef.current.hasMoreBefore = prefetched.hasMoreBefore
+        if (prependedCount === 0) {
+          appendDiagnostic('mobile', 'history-activation-result', {
+            handle: terminalHandle,
+            trigger,
+            result: 'overlap-only',
+            pages: prefetched.pages.length,
+            historyFirstSeq: terminalHistoryRef.current.firstSeq,
+            historyLastSeq: terminalHistoryRef.current.lastSeq,
+            hasMoreBefore: prefetched.hasMoreBefore,
+            gap: terminalHistoryRef.current.gap,
+            evictedBeforeSeq: terminalHistoryRef.current.evictedBeforeSeq
+          })
+          if (trigger === 'history-top' && !prefetched.hasMoreBefore) {
+            setHistoryNotice(terminalHistoryBoundaryMessage(terminalHistoryRef.current, t))
+          }
+          return false
+        }
+
+        const viewport = viewportRef.current
+        terminalRef.current?.init(
+          viewport.cols,
+          viewport.rows,
+          buildTerminalInitialData(),
+          true,
+          undefined,
+          true
+        )
+        await terminalRef.current?.awaitReady()
+        appendDiagnostic('mobile', 'history-activation-result', {
+          handle: terminalHandle,
+          trigger,
+          result: 'activated',
+          pages: prefetched.pages.length,
+          prependedChunks: prependedCount,
+          historyFirstSeq: terminalHistoryRef.current.firstSeq,
+          historyLastSeq: terminalHistoryRef.current.lastSeq,
+          hasMoreBefore: prefetched.hasMoreBefore,
+          gap: terminalHistoryRef.current.gap,
+          evictedBeforeSeq: terminalHistoryRef.current.evictedBeforeSeq
+        })
+        if (
+          runIdRef.current === runId &&
+          clientRef.current === client &&
+          terminalHistoryGenerationRef.current === historyGeneration &&
+          prefetch.hasMoreBefore
+        ) {
+          void prefetchOlderTerminalHistory().catch(() => {})
+        }
+        return true
+      } finally {
+        if (runIdRef.current === runId && clientRef.current === client) {
+          loadingOlderHistoryRef.current = false
+          if (trigger === 'history-top') {
+            setLoadingOlderHistory(false)
+          }
+        }
+      }
+    },
+    [appendDiagnostic, buildTerminalInitialData, prefetchOlderTerminalHistory, t, terminalHandle]
+  )
+
+  const prefetchAndActivateInitialTerminalHistory = useCallback(async (): Promise<void> => {
+    if (initialHistoryActivatedRef.current) {
+      return
+    }
+    const client = clientRef.current
+    if (!client) {
+      return
+    }
+    const runId = runIdRef.current
+    const historyGeneration = terminalHistoryGenerationRef.current
+    let activated: boolean | null
+    try {
+      activated = await activatePrefetchedTerminalHistory('initial')
+    } catch (err) {
+      appendDiagnostic('mobile', 'history-activation-error', {
+        handle: terminalHandle,
+        trigger: 'initial',
+        message: err instanceof Error ? err.message : String(err)
+      })
+      throw err
+    }
+    if (
+      activated !== null &&
+      runIdRef.current === runId &&
+      clientRef.current === client &&
+      terminalHistoryGenerationRef.current === historyGeneration
+    ) {
+      initialHistoryActivatedRef.current = true
+    }
+  }, [
+    activatePrefetchedTerminalHistory,
+    appendDiagnostic,
+    initialHistoryActivatedRef,
+    terminalHandle
+  ])
 
   const syncTerminalIncrement = useCallback(async () => {
     const client = clientRef.current
@@ -1123,7 +1488,7 @@ export default function RemoteTerminalScreen() {
         return false
       }
       setTerminalRunning(true)
-      void prefetchOlderTerminalHistory().catch(() => {})
+      void prefetchAndActivateInitialTerminalHistory().catch(() => {})
       return true
     }
     try {
@@ -1226,7 +1591,7 @@ export default function RemoteTerminalScreen() {
   }, [
     loading,
     paneId,
-    prefetchOlderTerminalHistory,
+    prefetchAndActivateInitialTerminalHistory,
     startTerminalSubscription,
     stopTerminalSubscription,
     t,
@@ -1294,7 +1659,7 @@ export default function RemoteTerminalScreen() {
           return
         }
         terminalRenderedSeqRef.current = terminalHistoryRef.current.lastSeq
-        void prefetchOlderTerminalHistory().catch(() => {})
+        void prefetchAndActivateInitialTerminalHistory().catch(() => {})
       } else if (decision === 'coalesced-write') {
         const viewport = viewportRef.current
         terminalRef.current?.init(
@@ -1333,7 +1698,7 @@ export default function RemoteTerminalScreen() {
     connectionState,
     loading,
     paneId,
-    prefetchOlderTerminalHistory,
+    prefetchAndActivateInitialTerminalHistory,
     startTerminalSubscription,
     t,
     updateTerminalSubscriptionCursor,
@@ -1365,7 +1730,7 @@ export default function RemoteTerminalScreen() {
         if (activeHandleRef.current === terminalHandle) {
           setTerminalRunning(true)
         }
-        void prefetchOlderTerminalHistory().catch(() => {})
+        void prefetchAndActivateInitialTerminalHistory().catch(() => {})
       } catch (err) {
         if (
           runIdRef.current === runId &&
@@ -1383,7 +1748,7 @@ export default function RemoteTerminalScreen() {
         }
       }
     },
-    [prefetchOlderTerminalHistory, startTerminalSubscription, t, terminalHandle]
+    [prefetchAndActivateInitialTerminalHistory, startTerminalSubscription, t, terminalHandle]
   )
 
   const syncPaneStatus = useCallback(async () => {
@@ -1457,6 +1822,7 @@ export default function RemoteTerminalScreen() {
         foregroundRecoveryRequestedRef.current = true
         void recoverTerminalAfterForegroundRef.current?.()
       }
+      void prefetchAndActivateInitialTerminalHistory().catch(() => {})
       return
     }
     setLoading(true)
@@ -1473,6 +1839,7 @@ export default function RemoteTerminalScreen() {
     setHistoryNotice(null)
     resetRemoteTerminalHistoryState(terminalHistoryRef.current)
     resetRemoteTerminalHistoryPrefetchState(terminalHistoryPrefetchRef.current)
+    initialHistoryActivatedRef.current = false
     terminalInitializedRef.current = false
     loadingOlderHistoryRef.current = false
     currentPaneRuntimeKeyRef.current = null
@@ -1499,6 +1866,10 @@ export default function RemoteTerminalScreen() {
           onStateChange: (state) => {
             if (runIdRef.current === runId) {
               setConnectionState(state)
+              appendDiagnostic('network', 'connection-state', {
+                state,
+                transport: loadedHost.relayEndpoint ? 'relay' : 'direct'
+              })
             }
           },
           onLog: (entry) => {
@@ -1523,7 +1894,7 @@ export default function RemoteTerminalScreen() {
       if (activeHandleRef.current === terminalHandle) {
         setLoading(false)
       }
-      void prefetchOlderTerminalHistory().catch(() => {})
+      void prefetchAndActivateInitialTerminalHistory().catch(() => {})
     } catch (err) {
       if (runIdRef.current !== runId) {
         return
@@ -1535,9 +1906,10 @@ export default function RemoteTerminalScreen() {
     }
   }, [
     appendLog,
+    appendDiagnostic,
     hostId,
     loadWindowPaneTabs,
-    prefetchOlderTerminalHistory,
+    prefetchAndActivateInitialTerminalHistory,
     refitTerminalToPhone,
     sessionRuntime,
     startTerminalSubscription,
@@ -1554,6 +1926,7 @@ export default function RemoteTerminalScreen() {
       setKeyboardHeight(Keyboard.isVisible() ? Math.max(0, keyboardMetrics?.height ?? 0) : 0)
       void openTerminalRef.current?.()
       const subscription = AppState.addEventListener('change', (state) => {
+        appendDiagnostic('mobile', 'app-state', { state })
         if (state !== 'active') {
           for (const runtime of sessionRuntimesRef.current.values()) {
             runtime.terminalRenderPausedRef.current = true
@@ -1563,6 +1936,7 @@ export default function RemoteTerminalScreen() {
           Keyboard.dismiss()
           setKeyboardHeight(0)
           cancelKeyboardViewportRestore()
+          flushDiagnosticsPersistence()
           return
         }
         const activeRuntime = activeHandleRef.current
@@ -1594,7 +1968,9 @@ export default function RemoteTerminalScreen() {
       }
     }, [
       cancelKeyboardViewportRestore,
+      appendDiagnostic,
       cleanup,
+      flushDiagnosticsPersistence,
       restoreTerminalAfterKeyboard
     ])
   )
@@ -2211,6 +2587,16 @@ export default function RemoteTerminalScreen() {
     void saveTerminalTextScale(scale)
   }, [])
 
+  const handleTerminalWebViewDiagnostic = useCallback(
+    (targetHandle: string, diagnostic: TerminalWebViewDiagnostic) => {
+      appendDiagnostic('webview', diagnostic.event, {
+        handle: targetHandle,
+        ...diagnostic.metrics
+      })
+    },
+    [appendDiagnostic]
+  )
+
   const handleHistoryTopReached = useCallback(() => {
     const client = clientRef.current
     if (
@@ -2224,79 +2610,26 @@ export default function RemoteTerminalScreen() {
     const prefetch = terminalHistoryPrefetchRef.current
     if (prefetch.pages.length === 0 && !prefetch.hasMoreBefore) {
       terminalHistoryRef.current.hasMoreBefore = false
-      setHistoryNotice(t('terminal.historyStartReached'))
+      terminalHistoryRef.current.gap ||= prefetch.gap
+      terminalHistoryRef.current.evictedBeforeSeq = Math.max(
+        terminalHistoryRef.current.evictedBeforeSeq,
+        prefetch.evictedBeforeSeq
+      )
+      setHistoryNotice(terminalHistoryBoundaryMessage(terminalHistoryRef.current, t))
       return
     }
     const runId = runIdRef.current
-    const historyGeneration = terminalHistoryGenerationRef.current
-    const hasCachedPages = prefetch.pages.length > 0
-    loadingOlderHistoryRef.current = true
-    setLoadingOlderHistory(!hasCachedPages)
-    setHistoryNotice(null)
-    void (async () => {
-      try {
-        if (!hasCachedPages) {
-          await prefetchOlderTerminalHistory()
-        }
-        if (
-          runIdRef.current !== runId ||
-          clientRef.current !== client ||
-          terminalHistoryGenerationRef.current !== historyGeneration
-        ) {
-          return
-        }
-        const prefetched = takePrefetchedRemoteTerminalHistory(prefetch)
-        if (prefetched.pages.length === 0) {
-          terminalHistoryRef.current.hasMoreBefore = prefetched.hasMoreBefore
-          if (!prefetched.hasMoreBefore) {
-            setHistoryNotice(t('terminal.historyStartReached'))
-          }
-          return
-        }
-        let prependedCount = 0
-        for (const page of prefetched.pages) {
-          prependedCount += prependRemoteTerminalHistoryPage(
-            terminalHistoryRef.current,
-            page
-          ).length
-        }
-        terminalHistoryRef.current.hasMoreBefore = prefetched.hasMoreBefore
-        if (prependedCount === 0) {
-          if (!prefetched.hasMoreBefore) {
-            setHistoryNotice(t('terminal.historyStartReached'))
-          }
-          return
-        }
-        const viewport = viewportRef.current
-        terminalRef.current?.init(
-          viewport.cols,
-          viewport.rows,
-          buildTerminalInitialData(),
-          true,
-          undefined,
-          true
-        )
-        await terminalRef.current?.awaitReady()
-        if (
-          runIdRef.current === runId &&
-          clientRef.current === client &&
-          terminalHistoryGenerationRef.current === historyGeneration &&
-          prefetch.hasMoreBefore
-        ) {
-          void prefetchOlderTerminalHistory().catch(() => {})
-        }
-      } catch (err) {
-        if (runIdRef.current === runId && clientRef.current === client) {
-          setError(terminalErrorMessage(err, t))
-        }
-      } finally {
-        if (runIdRef.current === runId && clientRef.current === client) {
-          loadingOlderHistoryRef.current = false
-          setLoadingOlderHistory(false)
-        }
+    void activatePrefetchedTerminalHistory('history-top').catch((err) => {
+      if (runIdRef.current === runId && clientRef.current === client) {
+        appendDiagnostic('mobile', 'history-activation-error', {
+          handle: terminalHandle,
+          trigger: 'history-top',
+          message: err instanceof Error ? err.message : String(err)
+        })
+        setError(terminalErrorMessage(err, t))
       }
-    })()
-  }, [buildTerminalInitialData, loading, prefetchOlderTerminalHistory, t])
+    })
+  }, [activatePrefetchedTerminalHistory, appendDiagnostic, loading, t, terminalHandle])
   handleHistoryTopReachedRef.current = handleHistoryTopReached
 
   const setTerminalWebViewRef = useCallback(
@@ -2392,6 +2725,61 @@ export default function RemoteTerminalScreen() {
   })
   const passiveDictationState = { isStarting: false, isRecording: false, isProcessing: false }
   const showGroupWindowTabs = groupWindowTabs.length > 1
+  const openDiagnostics = useCallback(() => {
+    diagnosticsVisibleRef.current = true
+    setDiagnosticsRevision((revision) => revision + 1)
+    setDiagnosticsVisible(true)
+  }, [])
+  const closeDiagnostics = useCallback(() => {
+    diagnosticsVisibleRef.current = false
+    setDiagnosticsVisible(false)
+  }, [])
+  const diagnosticsText = useMemo(() => {
+    if (!diagnosticsVisible) {
+      return ''
+    }
+    const history = terminalHistoryRef.current
+    const prefetch = terminalHistoryPrefetchRef.current
+    const viewport = viewportRef.current
+    const desktopViewport = desktopViewportRef.current
+    return formatTerminalDiagnostics(diagnosticsBufferRef.current, {
+      platform: Platform.OS,
+      connectionState,
+      handle: terminalHandle,
+      terminalRunning,
+      loading,
+      resyncing: resyncingRef.current,
+      textScale: terminalTextScale,
+      terminalFrameHeight,
+      viewportCols: viewport.cols,
+      viewportRows: viewport.rows,
+      desktopCols: desktopViewport.cols,
+      desktopRows: desktopViewport.rows,
+      historyFirstSeq: history.firstSeq,
+      historyLastSeq: history.lastSeq,
+      historyChunks: history.chunks.length,
+      historyHasMoreBefore: history.hasMoreBefore,
+      historyGap: history.gap,
+      evictedBeforeSeq: history.evictedBeforeSeq,
+      pendingDataEntries: history.pendingDataBySeq.size,
+      pendingDataBytes: history.pendingDataBytes,
+      prefetchedPages: prefetch.pages.length,
+      prefetchedBytes: prefetch.cachedBytes,
+      prefetchNextBeforeSeq: prefetch.nextBeforeSeq,
+      prefetchHasMoreBefore: prefetch.hasMoreBefore,
+      prefetchGap: prefetch.gap,
+      diagnosticsEntries: diagnosticsBufferRef.current.entries.length
+    })
+  }, [
+    connectionState,
+    diagnosticsRevision,
+    diagnosticsVisible,
+    loading,
+    terminalFrameHeight,
+    terminalHandle,
+    terminalRunning,
+    terminalTextScale
+  ])
 
   return (
     <>
@@ -2400,6 +2788,14 @@ export default function RemoteTerminalScreen() {
           headerTitle: '',
           headerRight: () => (
             <View style={styles.navActions}>
+              <Pressable
+                style={styles.navIconButton}
+                onPress={openDiagnostics}
+                accessibilityRole="button"
+                accessibilityLabel={t('terminal.openDiagnostics')}
+              >
+                <Bug size={18} color={colors.textPrimary} />
+              </Pressable>
               <Pressable
                 style={[
                   styles.navIconButton,
@@ -2434,6 +2830,15 @@ export default function RemoteTerminalScreen() {
             </View>
           )
         }}
+      />
+      <TerminalDiagnosticsModal
+        visible={diagnosticsVisible}
+        text={diagnosticsText}
+        title={t('terminal.diagnosticsTitle')}
+        copyLabel={t('terminal.copyDiagnostics')}
+        copiedLabel={t('terminal.diagnosticsCopied')}
+        closeLabel={t('terminal.closeDiagnostics')}
+        onClose={closeDiagnostics}
       />
       <View style={styles.container}>
 
@@ -2625,6 +3030,7 @@ export default function RemoteTerminalScreen() {
                   handleHistoryTopReachedRef.current?.()
                 }
               }}
+              onDiagnostic={handleTerminalWebViewDiagnostic}
             />
           ))}
         </View>

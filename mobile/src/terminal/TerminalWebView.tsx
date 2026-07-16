@@ -6,6 +6,7 @@ import type { TerminalOscLinkRange } from './terminal-osc-link-ranges'
 import type {
   MobileTerminalTheme,
   TerminalSelectionEvents,
+  TerminalWebViewDiagnostic,
   TerminalWebViewHandle
 } from './terminal-webview-contract'
 import {
@@ -23,6 +24,7 @@ export type {
   TerminalKeyboardAvoidanceMetrics,
   TerminalModes,
   TerminalSelectionEvents,
+  TerminalWebViewDiagnostic,
   TerminalWebViewHandle
 } from './terminal-webview-contract'
 
@@ -57,7 +59,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     onFileTap,
     onOpenUrl,
     onTextScaleChange,
-    onHistoryTopReached
+    onHistoryTopReached,
+    onDiagnostic
   },
   ref
 ) {
@@ -212,6 +215,20 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         }
       } else if (msg.type === 'history-top') {
         onHistoryTopReached?.()
+      } else if (msg.type === 'diagnostic') {
+        const diagnosticEvent = typeof msg.event === 'string' ? msg.event : ''
+        const metrics = msg.metrics
+        if (
+          diagnosticEvent &&
+          metrics &&
+          typeof metrics === 'object' &&
+          !Array.isArray(metrics)
+        ) {
+          onDiagnostic?.({
+            event: diagnosticEvent,
+            metrics: metrics as TerminalWebViewDiagnostic['metrics']
+          })
+        }
       } else if (msg.type === 'mobile-clip-cancel-by-pinch') {
         // eslint-disable-next-line no-console
         console.warn('[mobile-clip] selection cancelled by pinch')
@@ -234,7 +251,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       onFileTap,
       onOpenUrl,
       onTextScaleChange,
-      onHistoryTopReached
+      onHistoryTopReached,
+      onDiagnostic
     ]
   )
 

@@ -5,6 +5,7 @@ import {
   type MobileTerminalTheme,
   type TerminalKeyboardAvoidanceMetrics,
   type TerminalModes,
+  type TerminalWebViewDiagnostic,
   type TerminalWebViewHandle
 } from '../terminal/TerminalWebView'
 import type { TerminalTextScaleMode } from '../terminal/terminal-webview-messages'
@@ -31,6 +32,7 @@ type TerminalPaneViewProps = {
   onTextScaleChange: (scale: number) => void
   onEngineError?: (handle: string, message: string) => void
   onHistoryTopReached?: (handle: string) => void
+  onDiagnostic?: (handle: string, diagnostic: TerminalWebViewDiagnostic) => void
 }
 
 export function TerminalPaneView({
@@ -54,7 +56,8 @@ export function TerminalPaneView({
   onOpenUrl,
   onTextScaleChange,
   onEngineError,
-  onHistoryTopReached
+  onHistoryTopReached,
+  onDiagnostic
 }: TerminalPaneViewProps) {
   const setRef = useCallback(
     (ref: TerminalWebViewHandle | null) => {
@@ -94,6 +97,7 @@ export function TerminalPaneView({
         onTextScaleChange={onTextScaleChange}
         onEngineError={(message) => onEngineError?.(handle, message)}
         onHistoryTopReached={() => onHistoryTopReached?.(handle)}
+        onDiagnostic={(diagnostic) => onDiagnostic?.(handle, diagnostic)}
       />
     </View>
   )

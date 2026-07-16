@@ -20,6 +20,11 @@ export type TerminalKeyboardAvoidanceMetrics = {
   rowHeightPx: number
 }
 
+export type TerminalWebViewDiagnostic = {
+  event: string
+  metrics: Record<string, string | number | boolean | null>
+}
+
 export type TerminalSelectionEvents = {
   onSelectionMode?: (active: boolean) => void
   onSelectionCopy?: (text: string) => void
@@ -39,6 +44,7 @@ export type TerminalSelectionEvents = {
   // Why: remote terminal history is paged. The WebView owns scroll gestures,
   // so it notifies RN when the user asks for output above the loaded buffer.
   onHistoryTopReached?: () => void
+  onDiagnostic?: (diagnostic: TerminalWebViewDiagnostic) => void
 }
 
 export type TerminalWebViewHandle = {

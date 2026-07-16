@@ -3,6 +3,8 @@ export type RemoteTerminalHistoryState = {
   firstSeq: number
   lastSeq: number
   hasMoreBefore: boolean
+  gap: boolean
+  evictedBeforeSeq: number
   screenSnapshotData: string
   screenSnapshotTailChunkCount: number
   pendingDataBySeq: Map<number, string>
@@ -14,6 +16,8 @@ export type RemoteTerminalSnapshot = {
   firstSeq: number
   lastSeq: number
   hasMoreBefore: boolean
+  gap?: boolean
+  evictedBeforeSeq?: number
   screenSnapshotOffset?: number
   screenSnapshotLength?: number
 }
@@ -23,6 +27,8 @@ export type RemoteTerminalHistoryPage = {
   firstSeq: number
   lastSeq: number
   hasMoreBefore: boolean
+  gap?: boolean
+  evictedBeforeSeq?: number
 }
 
 export type RemoteTerminalIncrementalSnapshot = {
@@ -48,6 +54,8 @@ export function createRemoteTerminalHistoryState(): RemoteTerminalHistoryState {
     firstSeq: 0,
     lastSeq: 0,
     hasMoreBefore: false,
+    gap: false,
+    evictedBeforeSeq: 0,
     screenSnapshotData: '',
     screenSnapshotTailChunkCount: 0,
     pendingDataBySeq: new Map(),
@@ -60,6 +68,8 @@ export function resetRemoteTerminalHistoryState(state: RemoteTerminalHistoryStat
   state.firstSeq = 0
   state.lastSeq = 0
   state.hasMoreBefore = false
+  state.gap = false
+  state.evictedBeforeSeq = 0
   state.screenSnapshotData = ''
   state.screenSnapshotTailChunkCount = 0
   state.pendingDataBySeq.clear()
@@ -75,6 +85,8 @@ export function replaceRemoteTerminalHistorySnapshot(
   state.firstSeq = snapshot.firstSeq
   state.lastSeq = snapshot.lastSeq
   state.hasMoreBefore = snapshot.hasMoreBefore
+  state.gap = snapshot.gap === true
+  state.evictedBeforeSeq = Math.max(0, Math.floor(snapshot.evictedBeforeSeq ?? 0))
   state.screenSnapshotData = extracted.screenSnapshotData
   state.screenSnapshotTailChunkCount = extracted.tailChunkCount
   state.pendingDataBySeq.clear()
@@ -126,6 +138,11 @@ export function appendRemoteTerminalHistoryIncrement(
   state: RemoteTerminalHistoryState,
   page: RemoteTerminalHistoryPage
 ): RemoteTerminalAppendResult {
+  state.gap ||= page.gap === true
+  state.evictedBeforeSeq = Math.max(
+    state.evictedBeforeSeq,
+    Math.max(0, Math.floor(page.evictedBeforeSeq ?? 0))
+  )
   if (page.chunks.length === 0) {
     return {
       data: '',
@@ -196,6 +213,11 @@ export function prependRemoteTerminalHistoryPage(
   state: RemoteTerminalHistoryState,
   page: RemoteTerminalHistoryPage
 ): string[] {
+  state.gap ||= page.gap === true
+  state.evictedBeforeSeq = Math.max(
+    state.evictedBeforeSeq,
+    Math.max(0, Math.floor(page.evictedBeforeSeq ?? 0))
+  )
   if (page.chunks.length === 0) {
     state.hasMoreBefore = page.hasMoreBefore
     return []

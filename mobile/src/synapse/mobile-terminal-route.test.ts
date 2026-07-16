@@ -51,6 +51,11 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('buildRemoteTerminalInitialData(terminalHistoryRef.current)')
     expect(routeSource).toContain('handleHistoryTopReachedRef.current?.()')
     expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
+    expect(routeSource).toContain('const prefetchAndActivateInitialTerminalHistory = useCallback(')
+    expect(routeSource).toContain("activatePrefetchedTerminalHistory('initial')")
+    expect(routeSource).toContain('initialHistoryActivatedRef.current = true')
+    expect(routeSource).toContain('snapshot.evictedBeforeSeq')
+    expect(routeSource).toContain('terminalHistoryBoundaryMessage(terminalHistoryRef.current, t)')
   })
 
   it('resynchronizes from history when the terminal subscription reports a gap', () => {
@@ -177,6 +182,17 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('textScale={terminalTextScale}')
     expect(routeSource).toContain('textScaleMode="viewport-zoom"')
     expect(routeSource).toContain('onTextScaleChange={handleTextScaleChange}')
+  })
+
+  it('exposes bounded copyable terminal diagnostics directly on mobile', () => {
+    expect(routeSource).toContain('createTerminalDiagnosticBuffer()')
+    expect(routeSource).toContain("appendDiagnostic('network', 'connection-state'")
+    expect(routeSource).toContain("appendDiagnostic('mobile', 'history-page'")
+    expect(routeSource).toContain("appendDiagnostic('mobile', 'history-activation-result'")
+    expect(routeSource).toContain('onDiagnostic={handleTerminalWebViewDiagnostic}')
+    expect(routeSource).toContain('<TerminalDiagnosticsModal')
+    expect(routeSource).toContain('formatTerminalDiagnostics(diagnosticsBufferRef.current')
+    expect(routeSource).toContain("accessibilityLabel={t('terminal.openDiagnostics')}")
   })
 
   it('renders same-window terminal pane tabs without changing desktop layout', () => {

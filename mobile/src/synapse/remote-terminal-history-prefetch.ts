@@ -5,6 +5,8 @@ export type RemoteTerminalHistoryPrefetchState = {
   nextBeforeSeq: number
   hasMoreBefore: boolean
   cachedBytes: number
+  gap: boolean
+  evictedBeforeSeq: number
 }
 
 export function createRemoteTerminalHistoryPrefetchState(): RemoteTerminalHistoryPrefetchState {
@@ -12,19 +14,25 @@ export function createRemoteTerminalHistoryPrefetchState(): RemoteTerminalHistor
     pages: [],
     nextBeforeSeq: 0,
     hasMoreBefore: false,
-    cachedBytes: 0
+    cachedBytes: 0,
+    gap: false,
+    evictedBeforeSeq: 0
   }
 }
 
 export function resetRemoteTerminalHistoryPrefetchState(
   state: RemoteTerminalHistoryPrefetchState,
   firstSeq = 0,
-  hasMoreBefore = false
+  hasMoreBefore = false,
+  gap = false,
+  evictedBeforeSeq = 0
 ): void {
   state.pages = []
   state.nextBeforeSeq = Math.max(0, Math.floor(firstSeq))
   state.hasMoreBefore = hasMoreBefore && state.nextBeforeSeq > 1
   state.cachedBytes = 0
+  state.gap = gap
+  state.evictedBeforeSeq = Math.max(0, Math.floor(evictedBeforeSeq))
 }
 
 export function canPrefetchRemoteTerminalHistory(
@@ -38,6 +46,11 @@ export function cacheRemoteTerminalHistoryPage(
   state: RemoteTerminalHistoryPrefetchState,
   page: RemoteTerminalHistoryPage
 ): boolean {
+  state.gap ||= page.gap === true
+  state.evictedBeforeSeq = Math.max(
+    state.evictedBeforeSeq,
+    Math.max(0, Math.floor(page.evictedBeforeSeq ?? 0))
+  )
   if (page.chunks.length === 0) {
     state.hasMoreBefore = false
     return false
@@ -58,9 +71,19 @@ export function cacheRemoteTerminalHistoryPage(
 
 export function takePrefetchedRemoteTerminalHistory(
   state: RemoteTerminalHistoryPrefetchState
-): { pages: RemoteTerminalHistoryPage[]; hasMoreBefore: boolean } {
+): {
+  pages: RemoteTerminalHistoryPage[]
+  hasMoreBefore: boolean
+  gap: boolean
+  evictedBeforeSeq: number
+} {
   const pages = state.pages
   state.pages = []
   state.cachedBytes = 0
-  return { pages, hasMoreBefore: state.hasMoreBefore }
+  return {
+    pages,
+    hasMoreBefore: state.hasMoreBefore,
+    gap: state.gap,
+    evictedBeforeSeq: state.evictedBeforeSeq
+  }
 }

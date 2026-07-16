@@ -70,4 +70,24 @@ describe('remote terminal history prefetch', () => {
     })).toBe(false)
     expect(state.nextBeforeSeq).toBe(10)
   })
+
+  it('preserves the desktop eviction boundary through cache activation', () => {
+    const state = createRemoteTerminalHistoryPrefetchState()
+    resetRemoteTerminalHistoryPrefetchState(state, 10, true)
+
+    cacheRemoteTerminalHistoryPage(state, {
+      chunks: ['retained'],
+      firstSeq: 4,
+      lastSeq: 9,
+      hasMoreBefore: false,
+      gap: true,
+      evictedBeforeSeq: 3
+    })
+
+    expect(takePrefetchedRemoteTerminalHistory(state)).toMatchObject({
+      gap: true,
+      evictedBeforeSeq: 3,
+      hasMoreBefore: false
+    })
+  })
 })

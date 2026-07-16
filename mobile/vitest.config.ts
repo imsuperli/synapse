@@ -28,6 +28,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: [
+      'src/diagnostics/**/*.test.ts',
       'src/synapse/**/*.test.ts',
       'src/transport/host-store.test.ts',
       'src/transport/host-display.test.ts',
@@ -44,6 +45,7 @@ export default defineConfig({
       'src/terminal/terminal-keyboard-avoidance.test.ts',
       'src/terminal/terminal-webview-engine-error.test.ts',
       'src/terminal/terminal-webview-engine.test.ts',
+      'src/terminal/terminal-webview-pinch-zoom.test.ts',
       'src/terminal/terminal-webview-reflow.test.ts',
       'src/terminal/terminal-webview-scrollback-preservation.test.ts',
       'src/terminal/terminal-webview-scroll-routing.test.ts',

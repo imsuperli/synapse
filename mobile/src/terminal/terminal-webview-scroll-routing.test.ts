@@ -164,6 +164,30 @@ describe('TerminalWebView scroll routing', () => {
     expect(source).toContain('if (deltaY < 0) notifyHistoryTopReached();')
   })
 
+  it('only consumes viewport zoom gestures when the canvas actually moves', () => {
+    const touchMoveBlock = sliceBetween(
+      "targetSurface.addEventListener('touchmove'",
+      '}, { capture: true, passive: false });'
+    )
+    expect(touchMoveBlock).toContain('var horizontalDominant = Math.abs(dx) > Math.abs(dy);')
+    expect(touchMoveBlock).toContain('if (panChanged)')
+    expect(touchMoveBlock).toContain("viewportZoomPanHandoff ? 'buffer-scroll-handoff'")
+    expect(touchMoveBlock.indexOf('if (panChanged)')).toBeLessThan(
+      touchMoveBlock.indexOf('if (shouldRouteScrollToTerminalInput())')
+    )
+  })
+
+  it('accounts for fixed-grid CSS fit scale when measuring terminal rows', () => {
+    const measureBlock = sliceBetween(
+      'function measureFitDimensions(containerHeightPx, retriesLeft)',
+      'function handleMsg(msg)'
+    )
+    expect(measureBlock).toContain('var fixedGridFitScale = Math.min(')
+    expect(measureBlock).toContain(
+      'var rows = Math.max(8, Math.floor(vpHeight / (cellHeight * fixedGridFitScale)));'
+    )
+  })
+
   it('does not apply fractional smooth scroll transforms to terminal content', () => {
     const updateTransformBlock = sliceBetween(
       'function updateTransform()',
