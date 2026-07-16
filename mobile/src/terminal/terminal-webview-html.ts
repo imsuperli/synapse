@@ -229,6 +229,7 @@ window.onerror = function(msg) {
   // fatal/non-fatal decision so a transient reflow cannot blank a live terminal.
   var everReady = false;
   var currentScale = 1;
+  var preservePanOnNextFit = false;
   // Why: userScale is transient pinch zoom (CSS) for smooth feedback DURING a
   // gesture only; it resets to 1 on release. In normal font-size mode, the
   // persistent text size is the real xterm fontSize. In viewport-zoom mode
@@ -286,11 +287,13 @@ window.onerror = function(msg) {
     var previousTextScale = currentTextScale;
     currentTextScale = snapToTextScalePreset(scale);
     if (!term) {
-      emitDiagnostic('text-scale', {
-        previousTextScale: previousTextScale,
-        requestedTextScale: scale,
-        appliedTextScale: currentTextScale
-      });
+      if (previousTextScale !== currentTextScale) {
+        emitDiagnostic('text-scale', {
+          previousTextScale: previousTextScale,
+          requestedTextScale: scale,
+          appliedTextScale: currentTextScale
+        });
+      }
       return;
     }
     if (isViewportZoomTextScale()) {
@@ -298,20 +301,24 @@ window.onerror = function(msg) {
       clampPan();
       updateTransform();
       emitKeyboardAvoidanceMetrics();
-      emitDiagnostic('text-scale', {
-        previousTextScale: previousTextScale,
-        requestedTextScale: scale,
-        appliedTextScale: currentTextScale
-      });
+      if (previousTextScale !== currentTextScale) {
+        emitDiagnostic('text-scale', {
+          previousTextScale: previousTextScale,
+          requestedTextScale: scale,
+          appliedTextScale: currentTextScale
+        });
+      }
       return;
     }
     var px = fontPxForScale(scale);
     if (term.options.fontSize === px) {
-      emitDiagnostic('text-scale', {
-        previousTextScale: previousTextScale,
-        requestedTextScale: scale,
-        appliedTextScale: currentTextScale
-      });
+      if (previousTextScale !== currentTextScale) {
+        emitDiagnostic('text-scale', {
+          previousTextScale: previousTextScale,
+          requestedTextScale: scale,
+          appliedTextScale: currentTextScale
+        });
+      }
       return;
     }
     term.options.fontSize = px;
@@ -326,11 +333,13 @@ window.onerror = function(msg) {
         term.resize(cols, rows);
       }
       applyFitScale('text-scale');
-      emitDiagnostic('text-scale', {
-        previousTextScale: previousTextScale,
-        requestedTextScale: scale,
-        appliedTextScale: currentTextScale
-      });
+      if (previousTextScale !== currentTextScale) {
+        emitDiagnostic('text-scale', {
+          previousTextScale: previousTextScale,
+          requestedTextScale: scale,
+          appliedTextScale: currentTextScale
+        });
+      }
     });
   }
   var panX = 0, panY = 0;
@@ -355,8 +364,10 @@ window.onerror = function(msg) {
   // scrollWidth past the previously-measured value gets re-scaled to fit.
   var firstDataPending = false;
   var lastHistoryTopNotifyAt = 0;
-  var lastGestureDiagnosticAt = 0;
+  var surfaceTouchActive = false;
+  var historyTopPending = false;
   var lastGestureDiagnosticRoute = '';
+  var historyTopPullDistance = 0;
 
   // Diagnostic logger — bridges WebView console.log to RN via postMessage.
   // Tag with [fit] so it's easy to filter in the Expo/Metro logs.
@@ -416,10 +427,8 @@ window.onerror = function(msg) {
   }
 
   function emitGestureDiagnostic(route, dx, dy, panChanged) {
-    var now = Date.now();
-    if (route === lastGestureDiagnosticRoute && now - lastGestureDiagnosticAt < 750) return;
+    if (route === lastGestureDiagnosticRoute) return;
     lastGestureDiagnosticRoute = route;
-    lastGestureDiagnosticAt = now;
     emitDiagnostic('gesture-route', {
       route: route,
       dx: dx,
@@ -464,9 +473,15 @@ window.onerror = function(msg) {
   function computeFitScale() {
     if (!term) return 1;
     var termWidth = getLogicalTerminalWidth();
-    if (termWidth <= 0) return 1;
-    var vpWidth = window.innerWidth;
-    return Math.min(1, vpWidth / termWidth);
+    var termHeight = getLogicalTerminalHeight();
+    if (termWidth <= 0 || termHeight <= 0) return 1;
+    var widthScale = window.innerWidth / termWidth;
+    if (!isViewportZoomTextScale()) return Math.min(1, widthScale);
+    var heightScale = window.innerHeight / termHeight;
+    // Preserve the PTY's original aspect ratio and cover the phone viewport.
+    // Wide desktop grids overflow horizontally and remain pannable instead of
+    // crushing every glyph to fit hundreds of columns into the phone width.
+    return Math.max(widthScale, heightScale);
   }
 
   function getTotalScale() { return currentScale * persistentTextScaleMultiplier() * userScale; }
@@ -590,8 +605,10 @@ window.onerror = function(msg) {
   // so a backgrounded WebView never spins forever.
   var FIT_RETRY_MAX_FRAMES = 60;
   var fitRetryToken = 0;
-  function applyFitScale(reason) {
+  var afterFitCallbacks = [];
+  function applyFitScale(reason, afterCommit) {
     if (!term || !term.element) return;
+    if (typeof afterCommit === 'function') afterFitCallbacks.push(afterCommit);
     var token = ++fitRetryToken;
     var attempts = 0;
     var lastScrollWidth = -1;
@@ -633,10 +650,16 @@ window.onerror = function(msg) {
     // Why: when scale is very close to 1 (e.g. 0.97 from xterm scrollbar
     // sub-pixels) snap to 1 to avoid imperceptible shrinkage that prevents
     // a second applyFitScale from observing a "no-op needed" state.
-    if (currentScale >= 0.95) currentScale = 1;
+    if (currentScale >= 0.95 && currentScale <= 1.05) currentScale = 1;
     userScale = 1;
-    panX = 0;
-    panY = 0;
+    var preservePan = preservePanOnNextFit;
+    preservePanOnNextFit = false;
+    if (!preservePan) {
+      panX = 0;
+      panY = 0;
+    } else {
+      clampPan();
+    }
     smoothScrollOffsetY = 0;
     updateTransform();
     adjustRowsForViewport();
@@ -668,10 +691,14 @@ window.onerror = function(msg) {
       gate: gate,
       preSnapScale: preSnapScale,
       expectedWidth: expectedW,
+      expectedHeight: getLogicalTerminalHeight(),
       renderedWidth: sw,
       suspect: suspect
     });
     repositionOverlay();
+    var callbacks = afterFitCallbacks;
+    afterFitCallbacks = [];
+    for (var i = 0; i < callbacks.length; i++) callbacks[i]();
   }
 
   function isAltScreenActive(data) {
@@ -869,6 +896,7 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     var oldTerm = term;
     var oldSurface = surface;
     var nextSurface = null;
+    preservePanOnNextFit = !!(oldTerm && preserveScroll);
     disposeTermObservers();
     if (oldTerm) {
       nextSurface = document.createElement('div');
@@ -877,10 +905,13 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
       nextSurface.style.position = 'absolute';
       nextSurface.style.left = '0';
       nextSurface.style.top = '0';
+      nextSurface.style.transform = oldSurface.style.transform;
       document.getElementById('terminal-container').appendChild(nextSurface);
       surface = nextSurface;
       attachSurfaceEventHandlers(surface);
       oldSurface.removeAttribute('id');
+    } else {
+      surface.style.visibility = 'hidden';
     }
 
     applyTerminalTheme(nextTheme);
@@ -926,14 +957,6 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
       everReady = true;
       afterWritesDrained(function() {
         if (gen !== terminalGeneration) return;
-        if (nextSurface && oldSurface) {
-          nextSurface.style.visibility = 'visible';
-          nextSurface.style.position = '';
-          nextSurface.style.left = '';
-          nextSurface.style.top = '';
-          oldSurface.remove();
-          if (oldTerm) oldTerm.dispose();
-        }
         // Why: restore the reader's place after the rewrapped buffer replays.
         // Replay lands at bottom, so only act when they were scrolled up (rows>0).
         if (scrollAnchorRows > 0 && term && term.buffer && term.buffer.active) {
@@ -942,12 +965,25 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
         captureInitialOscLinkTexts();
         initialOscLinkRowOffset = 0;
         initialOscLinkEvictionReady = true;
-        applyFitScale('init-replay');
-        notify({ type: 'ready', cols: cols, rows: rows });
-        emitDiagnostic('terminal-ready', {
-          initialDataChars: typeof replayData === 'string' ? replayData.length : 0,
-          preserveScroll: preserveScroll === true,
-          preserveFullInitialData: preserveFullInitialData === true
+        // Keep the cold-start surface hidden, or the previous surface visible,
+        // until the new replay has its final uniform transform. Revealing it
+        // before this async fit commits produces a one-frame full-size flash.
+        applyFitScale('init-replay', function() {
+          if (gen !== terminalGeneration) return;
+          surface.style.visibility = 'visible';
+          if (nextSurface && oldSurface) {
+            nextSurface.style.position = '';
+            nextSurface.style.left = '';
+            nextSurface.style.top = '';
+            oldSurface.remove();
+            if (oldTerm) oldTerm.dispose();
+          }
+          notify({ type: 'ready', cols: cols, rows: rows });
+          emitDiagnostic('terminal-ready', {
+            initialDataChars: typeof replayData === 'string' ? replayData.length : 0,
+            preserveScroll: preserveScroll === true,
+            preserveFullInitialData: preserveFullInitialData === true
+          });
         });
       });
     });
@@ -990,11 +1026,32 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
   }
 
   function notifyHistoryTopReached() {
+    if (surfaceTouchActive) {
+      historyTopPending = true;
+      return;
+    }
     var now = Date.now();
     if (now - lastHistoryTopNotifyAt < 900) return;
     lastHistoryTopNotifyAt = now;
     emitDiagnostic('history-top', {});
     notify({ type: 'history-top' });
+  }
+
+  function flushPendingHistoryTopReached() {
+    if (!historyTopPending) return;
+    historyTopPending = false;
+    notifyHistoryTopReached();
+  }
+
+  function requestHistoryTopForDelta(deltaY) {
+    if (deltaY >= 0) {
+      historyTopPullDistance = 0;
+      return;
+    }
+    historyTopPullDistance += -deltaY;
+    if (historyTopPullDistance < 24) return;
+    historyTopPullDistance = 0;
+    notifyHistoryTopReached();
   }
 
   function engineErrorText(err) {
@@ -1106,21 +1163,12 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     // safety margin between the prompt and the accessory bar must come
     // from RN layout (terminalFrame's flex bounds), not from undersizing
     // the PTY.
-    // Remote terminals retain the desktop column count and fit that fixed grid
-    // with a CSS scale. Row measurement must use the same scale or the xterm
-    // surface only occupies the top fraction of the phone viewport.
-    var fixedGridFitScale = Math.min(
-      1,
-      vpWidth / (cellWidth * Math.max(1, term.cols || cols))
-    );
-    if (fixedGridFitScale >= 0.95) fixedGridFitScale = 1;
-    var rows = Math.max(8, Math.floor(vpHeight / (cellHeight * fixedGridFitScale)));
+    var rows = Math.max(8, Math.floor(vpHeight / cellHeight));
     emitDiagnostic('measure-fit', {
       result: 'ok',
       measuredCols: cols,
       measuredRows: rows,
-      containerHeight: vpHeight,
-      fixedGridFitScale: fixedGridFitScale
+      containerHeight: vpHeight
     });
     notify({ type: 'measure-result', cols: cols, rows: rows });
   }
@@ -1612,12 +1660,15 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     return buffer.viewportY > 0;
   }
 
-  function applyNormalBufferScrollDelta(deltaY) {
+  function applyNormalBufferScrollDelta(deltaY, allowHistoryRequest) {
     if (!term || deltaY === 0) return false;
     var effectiveCellH = getCellHeight() * getTotalScale();
     if (effectiveCellH <= 0) return false;
     if (!canScrollNormalBufferDelta(deltaY)) {
-      if (deltaY < 0) notifyHistoryTopReached();
+      // Momentum may reach the loaded top after the finger is already up. Do
+      // not replace the terminal surface from that animation; only an explicit
+      // pull gesture may request another history page.
+      if (allowHistoryRequest !== false) requestHistoryTopForDelta(deltaY);
       resetSmoothScrollOffset();
       return false;
     }
@@ -1644,7 +1695,7 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
   function enqueueNormalBufferScrollDelta(deltaY) {
     if (!term || deltaY === 0) return false;
     if (!canScrollNormalBufferDelta(deltaY)) {
-      if (deltaY < 0) notifyHistoryTopReached();
+      requestHistoryTopForDelta(deltaY);
       resetSmoothScrollOffset();
       return false;
     }
@@ -1951,6 +2002,10 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     var dist = getDistance(a, b);
     if (!isFinite(dist) || dist <= 0) return false;
     ts.isPinching = true;
+    historyTopPending = false;
+    historyTopPullDistance = 0;
+    ts.velY = 0;
+    ts.accumDelta = 0;
     smoothScrollOffsetY = 0;
     ts.pinchDist = dist;
     ts.pinchScale = (typeof userScale === 'number' && isFinite(userScale) && userScale > 0)
@@ -1975,6 +2030,9 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
 
     targetSurface.addEventListener('touchstart', function(e) {
       if (dispatcherShouldBlockSurface()) return;
+      surfaceTouchActive = true;
+      historyTopPullDistance = 0;
+      lastGestureDiagnosticRoute = '';
       if (ts.momentumId) {
         cancelAnimationFrame(ts.momentumId);
         ts.momentumId = null;
@@ -2135,11 +2193,14 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
           ts.lastTime = Date.now();
           ts.velY = 0;
           ts.accumDelta = 0;
+          return;
         }
-        return;
       }
 
       if (e.touches.length === 0) {
+        surfaceTouchActive = false;
+        flushPendingHistoryTopReached();
+        historyTopPullDistance = 0;
         emitKeyboardAvoidanceMetrics();
         var vel = ts.velY;
         var FRICTION = 0.972;
@@ -2158,7 +2219,7 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
               routeScrollLines(lines, ts.lastX, ts.lastY);
             }
           } else {
-            if (!applyNormalBufferScrollDelta(delta)) {
+            if (!applyNormalBufferScrollDelta(delta, false)) {
               ts.momentumId = null;
               return;
             }
@@ -2169,6 +2230,15 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
           ts.momentumId = requestAnimationFrame(momentumStep);
         }
       }
+    }, { capture: true, passive: true });
+
+    targetSurface.addEventListener('touchcancel', function() {
+      surfaceTouchActive = false;
+      flushPendingHistoryTopReached();
+      historyTopPullDistance = 0;
+      ts.isPinching = false;
+      ts.velY = 0;
+      ts.accumDelta = 0;
     }, { capture: true, passive: true });
   }
 

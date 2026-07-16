@@ -17,16 +17,12 @@ export function normalizeDesktopTerminalViewport(
 }
 
 export function resolveMobileTerminalViewport(
-  desktopViewport: RemoteTerminalViewport,
-  fittedPhoneRows: number
+  desktopViewport: RemoteTerminalViewport
 ): RemoteTerminalViewport {
-  const phoneRows = Number.isFinite(fittedPhoneRows) && fittedPhoneRows > 0
-    ? Math.floor(fittedPhoneRows)
-    : 0
-  return {
-    cols: desktopViewport.cols,
-    rows: Math.max(desktopViewport.rows, phoneRows)
-  }
+  // Remote output is replayed from a PTY that already used this exact grid.
+  // Changing only the mobile xterm rows alters cursor addressing, scroll
+  // regions, and clear operations, which can turn a valid snapshot blank.
+  return { ...desktopViewport }
 }
 
 export function sameRemoteTerminalViewport(

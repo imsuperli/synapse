@@ -123,6 +123,7 @@ const TERMINAL_PANE_STATUS_SYNC_MS = 3000
 const TERMINAL_HISTORY_PAGE_BYTES = 192 * 1024
 const TERMINAL_HISTORY_PAGE_CHUNKS = 50_000
 const TERMINAL_HISTORY_PREFETCH_BYTES = 768 * 1024
+const TERMINAL_HISTORY_NOTICE_MS = 3_000
 const TERMINAL_INCREMENTAL_SYNC_PAGE_LIMIT = 32
 
 type TerminalSubscribedEvent = {
@@ -461,11 +462,9 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
     terminalSubscribeParamsRef: { current: null as TerminalSubscribeParams | null },
     terminalSubscriptionGenerationRef: { current: 0 },
     terminalHistoryGenerationRef: { current: 0 },
-    terminalViewportFitGenerationRef: { current: 0 },
     terminalHistoryRef: { current: createRemoteTerminalHistoryState() },
     terminalHistoryPrefetchRef: { current: createRemoteTerminalHistoryPrefetchState() },
     terminalHistoryPrefetchPromiseRef: { current: null as Promise<void> | null },
-    initialHistoryActivatedRef: { current: false },
     terminalInitializedRef: { current: false },
     terminalWebReadyRef: { current: false },
     resyncingRef: { current: false },
@@ -476,7 +475,6 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
     viewportRef: {
       current: { cols: DEFAULT_COLS, rows: DEFAULT_ROWS } as RemoteTerminalViewport
     },
-    fittedPhoneRowsRef: { current: 0 },
     currentPaneRuntimeKeyRef: { current: null as string | null },
     terminalIncrementSyncInFlightRef: { current: false },
     syncTerminalIncrementRef: { current: null as (() => Promise<void>) | null },
@@ -523,20 +521,17 @@ export default function RemoteTerminalScreen() {
   const terminalSubscribeParamsRef = sessionRuntime.terminalSubscribeParamsRef
   const terminalSubscriptionGenerationRef = sessionRuntime.terminalSubscriptionGenerationRef
   const terminalHistoryGenerationRef = sessionRuntime.terminalHistoryGenerationRef
-  const terminalViewportFitGenerationRef = sessionRuntime.terminalViewportFitGenerationRef
   const windowListGenerationRef = useRef(0)
   const runIdRef = useRef(0)
   const terminalHistoryRef = sessionRuntime.terminalHistoryRef
   const terminalHistoryPrefetchRef = sessionRuntime.terminalHistoryPrefetchRef
   const terminalHistoryPrefetchPromiseRef = sessionRuntime.terminalHistoryPrefetchPromiseRef
-  const initialHistoryActivatedRef = sessionRuntime.initialHistoryActivatedRef
   const terminalInitializedRef = sessionRuntime.terminalInitializedRef
   const terminalWebReadyRef = sessionRuntime.terminalWebReadyRef
   const resyncingRef = sessionRuntime.resyncingRef
   const loadingOlderHistoryRef = sessionRuntime.loadingOlderHistoryRef
   const desktopViewportRef = sessionRuntime.desktopViewportRef
   const viewportRef = sessionRuntime.viewportRef
-  const fittedPhoneRowsRef = sessionRuntime.fittedPhoneRowsRef
   const activeHandleRef = useRef<string | null>(terminalHandle)
   const activeSessionTabTypeRef = useRef<'terminal' | null>('terminal')
   const liveInputRef = useRef<TextInput | null>(null)
@@ -575,7 +570,6 @@ export default function RemoteTerminalScreen() {
   const [liveInputCapture, setLiveInputCapture] = useState('')
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   const [terminalFrameHeight, setTerminalFrameHeight] = useState(0)
-  const terminalFrameHeightRef = useRef(0)
   const [terminalKeyboardMetrics, setTerminalKeyboardMetrics] =
     useState<TerminalKeyboardAvoidanceMetrics | null>(null)
   const [windowPanes, setWindowPanes] = useState<RemotePaneSummary[]>([])
@@ -598,6 +592,16 @@ export default function RemoteTerminalScreen() {
     () => getVisibleTerminalAccessoryKeys(getDefaultTerminalAccessoryBuiltInIds()),
     []
   )
+
+  useEffect(() => {
+    if (!historyNotice) {
+      return
+    }
+    const timer = setTimeout(() => {
+      setHistoryNotice(null)
+    }, TERMINAL_HISTORY_NOTICE_MS)
+    return () => clearTimeout(timer)
+  }, [historyNotice])
   const currentTabMode: TabDeleteMode | null = groupWindowTabs.length > 1
     ? 'group'
     : windowPanes.length > 1
@@ -797,7 +801,6 @@ export default function RemoteTerminalScreen() {
     for (const runtime of sessionRuntimesRef.current.values()) {
       runtime.terminalSubscriptionGenerationRef.current += 1
       runtime.terminalHistoryGenerationRef.current += 1
-      runtime.terminalViewportFitGenerationRef.current += 1
       runtime.unsubscribeRef.current?.()
       runtime.unsubscribeRef.current = null
       runtime.terminalSubscribeParamsRef.current = null
@@ -842,10 +845,7 @@ export default function RemoteTerminalScreen() {
     (source: { cols?: number; rows?: number } | null | undefined, resize = true) => {
       const desktopViewport = normalizeDesktopTerminalViewport(source, desktopViewportRef.current)
       desktopViewportRef.current = desktopViewport
-      const nextViewport = resolveMobileTerminalViewport(
-        desktopViewport,
-        fittedPhoneRowsRef.current
-      )
+      const nextViewport = resolveMobileTerminalViewport(desktopViewport)
       if (sameRemoteTerminalViewport(nextViewport, viewportRef.current)) {
         return nextViewport
       }
@@ -856,58 +856,6 @@ export default function RemoteTerminalScreen() {
       return nextViewport
     },
     [sessionRuntime]
-  )
-
-  const fitTerminalRowsToPhone = useCallback(
-    async (containerHeight = terminalFrameHeightRef.current, preserveScroll = true) => {
-      if (!terminalInitializedRef.current || containerHeight <= 0) {
-        return false
-      }
-      const runId = runIdRef.current
-      const historyGeneration = terminalHistoryGenerationRef.current
-      const fitGeneration = terminalViewportFitGenerationRef.current + 1
-      terminalViewportFitGenerationRef.current = fitGeneration
-      let measured = await terminalRef.current?.measureFitDimensions(containerHeight)
-      if (!measured) {
-        await terminalRef.current?.awaitReady()
-        if (
-          runIdRef.current !== runId ||
-          terminalHistoryGenerationRef.current !== historyGeneration ||
-          terminalViewportFitGenerationRef.current !== fitGeneration
-        ) {
-          return false
-        }
-        measured = await terminalRef.current?.measureFitDimensions(containerHeight)
-      }
-      if (
-        !measured ||
-        runIdRef.current !== runId ||
-        terminalHistoryGenerationRef.current !== historyGeneration ||
-        terminalViewportFitGenerationRef.current !== fitGeneration
-      ) {
-        return false
-      }
-      fittedPhoneRowsRef.current = measured.rows
-      const nextViewport = resolveMobileTerminalViewport(
-        desktopViewportRef.current,
-        measured.rows
-      )
-      if (sameRemoteTerminalViewport(nextViewport, viewportRef.current)) {
-        return false
-      }
-      viewportRef.current = nextViewport
-      terminalRef.current?.init(
-        nextViewport.cols,
-        nextViewport.rows,
-        buildTerminalInitialData(),
-        preserveScroll,
-        undefined,
-        true
-      )
-      await terminalRef.current?.awaitReady()
-      return true
-    },
-    [buildTerminalInitialData]
   )
 
   const handleTerminalWebReady = useCallback(() => {
@@ -926,10 +874,7 @@ export default function RemoteTerminalScreen() {
       undefined,
       true
     )
-    setTimeout(() => {
-      void fitTerminalRowsToPhone()
-    }, 0)
-  }, [buildTerminalInitialData, fitTerminalRowsToPhone, refitTerminalToPhone])
+  }, [buildTerminalInitialData, refitTerminalToPhone])
 
   const loadWindowPaneTabs = useCallback(
     async (client: RpcClient, expectedRunId = runIdRef.current) => {
@@ -988,7 +933,6 @@ export default function RemoteTerminalScreen() {
       }
       terminalHistoryGenerationRef.current += 1
       terminalHistoryPrefetchPromiseRef.current = null
-      initialHistoryActivatedRef.current = false
       replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)
       resetRemoteTerminalHistoryPrefetchState(
         terminalHistoryPrefetchRef.current,
@@ -1033,12 +977,7 @@ export default function RemoteTerminalScreen() {
         true
       )
       terminalInitializedRef.current = true
-      const fitPromise = fitTerminalRowsToPhone(
-        terminalFrameHeightRef.current,
-        preserveScroll
-      )
       await terminalRef.current?.awaitReady()
-      await fitPromise
       terminalRenderedSeqRef.current = Math.max(
         terminalRenderedSeqRef.current,
         snapshot.lastSeq
@@ -1055,7 +994,6 @@ export default function RemoteTerminalScreen() {
     [
       buildTerminalInitialData,
       appendDiagnostic,
-      fitTerminalRowsToPhone,
       paneId,
       t,
       updateTerminalSubscriptionCursor,
@@ -1237,55 +1175,66 @@ export default function RemoteTerminalScreen() {
     let request: Promise<void>
     request = (async () => {
       const prefetch = terminalHistoryPrefetchRef.current
-      while (canPrefetchRemoteTerminalHistory(prefetch, TERMINAL_HISTORY_PREFETCH_BYTES)) {
-        const beforeSeq = prefetch.nextBeforeSeq
-        const history = await requestTerminalHistory(client, windowId, paneId, {
-          beforeSeq,
-          limitBytes: TERMINAL_HISTORY_PAGE_BYTES,
-          limitChunks: TERMINAL_HISTORY_PAGE_CHUNKS
-        })
-        if (
-          runIdRef.current !== runId ||
-          clientRef.current !== client ||
-          terminalHistoryGenerationRef.current !== historyGeneration
-        ) {
-          return
-        }
-        const returnedChars = history.chunks.reduce((total, chunk) => total + chunk.length, 0)
-        appendDiagnostic('mobile', 'history-page', {
-          handle: terminalHandle,
-          requestedBeforeSeq: beforeSeq,
-          returnedFirstSeq: history.firstSeq,
-          returnedLastSeq: history.lastSeq,
-          returnedChunks: history.chunks.length,
-          returnedChars,
-          pcRetainedFirstSeq: history.latestSeq > 0 ? history.evictedBeforeSeq + 1 : 0,
-          pcRetainedLastSeq: history.latestSeq,
-          hasMoreBefore: history.hasMoreBefore,
-          gap: history.gap,
-          evictedBeforeSeq: history.evictedBeforeSeq
-        })
-        if (!cacheRemoteTerminalHistoryPage(prefetch, history)) {
-          appendDiagnostic('mobile', 'history-prefetch-stopped', {
-            handle: terminalHandle,
-            reason: history.chunks.length > 0 ? 'invalid-page' : 'empty-page',
-            cachedPages: prefetch.pages.length,
-            cachedBytes: prefetch.cachedBytes,
-            hasMoreBefore: prefetch.hasMoreBefore,
-            gap: prefetch.gap,
-            evictedBeforeSeq: prefetch.evictedBeforeSeq
+      const requestedBeforeSeq = prefetch.nextBeforeSeq
+      let fetchedPages = 0
+      let fetchedChunks = 0
+      let fetchedChars = 0
+      let returnedFirstSeq = 0
+      let returnedLastSeq = 0
+      let latestSeq = terminalHistoryRef.current.lastSeq
+      let result = 'cache-full'
+      try {
+        while (canPrefetchRemoteTerminalHistory(prefetch, TERMINAL_HISTORY_PREFETCH_BYTES)) {
+          const beforeSeq = prefetch.nextBeforeSeq
+          const history = await requestTerminalHistory(client, windowId, paneId, {
+            beforeSeq,
+            limitBytes: TERMINAL_HISTORY_PAGE_BYTES,
+            limitChunks: TERMINAL_HISTORY_PAGE_CHUNKS
           })
-          if (history.chunks.length > 0) {
-            prefetch.hasMoreBefore = false
-            throw new Error('invalid_terminal_history_page')
+          if (
+            runIdRef.current !== runId ||
+            clientRef.current !== client ||
+            terminalHistoryGenerationRef.current !== historyGeneration
+          ) {
+            result = 'stale'
+            return
           }
-          return
+          const returnedChars = history.chunks.reduce((total, chunk) => total + chunk.length, 0)
+          fetchedPages += history.chunks.length > 0 ? 1 : 0
+          fetchedChunks += history.chunks.length
+          fetchedChars += returnedChars
+          if (history.firstSeq > 0) {
+            returnedFirstSeq =
+              returnedFirstSeq > 0
+                ? Math.min(returnedFirstSeq, history.firstSeq)
+                : history.firstSeq
+          }
+          returnedLastSeq = Math.max(returnedLastSeq, history.lastSeq)
+          latestSeq = history.latestSeq
+          if (!cacheRemoteTerminalHistoryPage(prefetch, history)) {
+            result = history.chunks.length > 0 ? 'invalid-page' : 'history-end'
+            if (history.chunks.length > 0) {
+              prefetch.hasMoreBefore = false
+              throw new Error('invalid_terminal_history_page')
+            }
+            return
+          }
         }
-        appendDiagnostic('mobile', 'history-prefetch-cached', {
+      } finally {
+        appendDiagnostic('mobile', 'history-prefetch-batch', {
           handle: terminalHandle,
+          result,
+          requestedBeforeSeq,
+          returnedFirstSeq,
+          returnedLastSeq,
+          fetchedPages,
+          fetchedChunks,
+          fetchedChars,
           cachedPages: prefetch.pages.length,
           cachedBytes: prefetch.cachedBytes,
           nextBeforeSeq: prefetch.nextBeforeSeq,
+          pcRetainedFirstSeq: latestSeq > 0 ? prefetch.evictedBeforeSeq + 1 : 0,
+          pcRetainedLastSeq: latestSeq,
           hasMoreBefore: prefetch.hasMoreBefore,
           gap: prefetch.gap,
           evictedBeforeSeq: prefetch.evictedBeforeSeq
@@ -1301,13 +1250,9 @@ export default function RemoteTerminalScreen() {
   }, [appendDiagnostic, paneId, terminalHandle, windowId])
 
   const activatePrefetchedTerminalHistory = useCallback(
-    async (trigger: 'initial' | 'history-top'): Promise<boolean | null> => {
+    async (): Promise<boolean | null> => {
       const client = clientRef.current
-      if (
-        !client ||
-        loadingOlderHistoryRef.current ||
-        (trigger === 'history-top' && resyncingRef.current)
-      ) {
+      if (!client || loadingOlderHistoryRef.current || resyncingRef.current) {
         return null
       }
       const runId = runIdRef.current
@@ -1316,14 +1261,14 @@ export default function RemoteTerminalScreen() {
       const hadCachedPages = prefetch.pages.length > 0
       appendDiagnostic('mobile', 'history-activation-start', {
         handle: terminalHandle,
-        trigger,
+        trigger: 'history-top',
         cachedPages: prefetch.pages.length,
         cachedBytes: prefetch.cachedBytes,
         nextBeforeSeq: prefetch.nextBeforeSeq,
         hasMoreBefore: prefetch.hasMoreBefore
       })
       loadingOlderHistoryRef.current = true
-      if (trigger === 'history-top') {
+      if (activeHandleRef.current === terminalHandle) {
         setLoadingOlderHistory(!hadCachedPages)
         setHistoryNotice(null)
       }
@@ -1349,7 +1294,7 @@ export default function RemoteTerminalScreen() {
         if (prefetched.pages.length === 0) {
           appendDiagnostic('mobile', 'history-activation-result', {
             handle: terminalHandle,
-            trigger,
+            trigger: 'history-top',
             result: 'no-pages',
             historyFirstSeq: terminalHistoryRef.current.firstSeq,
             historyLastSeq: terminalHistoryRef.current.lastSeq,
@@ -1357,7 +1302,7 @@ export default function RemoteTerminalScreen() {
             gap: terminalHistoryRef.current.gap,
             evictedBeforeSeq: terminalHistoryRef.current.evictedBeforeSeq
           })
-          if (trigger === 'history-top' && !prefetched.hasMoreBefore) {
+          if (!prefetched.hasMoreBefore && activeHandleRef.current === terminalHandle) {
             setHistoryNotice(terminalHistoryBoundaryMessage(terminalHistoryRef.current, t))
           }
           return false
@@ -1374,7 +1319,7 @@ export default function RemoteTerminalScreen() {
         if (prependedCount === 0) {
           appendDiagnostic('mobile', 'history-activation-result', {
             handle: terminalHandle,
-            trigger,
+            trigger: 'history-top',
             result: 'overlap-only',
             pages: prefetched.pages.length,
             historyFirstSeq: terminalHistoryRef.current.firstSeq,
@@ -1383,7 +1328,7 @@ export default function RemoteTerminalScreen() {
             gap: terminalHistoryRef.current.gap,
             evictedBeforeSeq: terminalHistoryRef.current.evictedBeforeSeq
           })
-          if (trigger === 'history-top' && !prefetched.hasMoreBefore) {
+          if (!prefetched.hasMoreBefore && activeHandleRef.current === terminalHandle) {
             setHistoryNotice(terminalHistoryBoundaryMessage(terminalHistoryRef.current, t))
           }
           return false
@@ -1401,7 +1346,7 @@ export default function RemoteTerminalScreen() {
         await terminalRef.current?.awaitReady()
         appendDiagnostic('mobile', 'history-activation-result', {
           handle: terminalHandle,
-          trigger,
+          trigger: 'history-top',
           result: 'activated',
           pages: prefetched.pages.length,
           prependedChunks: prependedCount,
@@ -1423,7 +1368,7 @@ export default function RemoteTerminalScreen() {
       } finally {
         if (runIdRef.current === runId && clientRef.current === client) {
           loadingOlderHistoryRef.current = false
-          if (trigger === 'history-top') {
+          if (activeHandleRef.current === terminalHandle) {
             setLoadingOlderHistory(false)
           }
         }
@@ -1431,42 +1376,6 @@ export default function RemoteTerminalScreen() {
     },
     [appendDiagnostic, buildTerminalInitialData, prefetchOlderTerminalHistory, t, terminalHandle]
   )
-
-  const prefetchAndActivateInitialTerminalHistory = useCallback(async (): Promise<void> => {
-    if (initialHistoryActivatedRef.current) {
-      return
-    }
-    const client = clientRef.current
-    if (!client) {
-      return
-    }
-    const runId = runIdRef.current
-    const historyGeneration = terminalHistoryGenerationRef.current
-    let activated: boolean | null
-    try {
-      activated = await activatePrefetchedTerminalHistory('initial')
-    } catch (err) {
-      appendDiagnostic('mobile', 'history-activation-error', {
-        handle: terminalHandle,
-        trigger: 'initial',
-        message: err instanceof Error ? err.message : String(err)
-      })
-      throw err
-    }
-    if (
-      activated !== null &&
-      runIdRef.current === runId &&
-      clientRef.current === client &&
-      terminalHistoryGenerationRef.current === historyGeneration
-    ) {
-      initialHistoryActivatedRef.current = true
-    }
-  }, [
-    activatePrefetchedTerminalHistory,
-    appendDiagnostic,
-    initialHistoryActivatedRef,
-    terminalHandle
-  ])
 
   const syncTerminalIncrement = useCallback(async () => {
     const client = clientRef.current
@@ -1488,7 +1397,7 @@ export default function RemoteTerminalScreen() {
         return false
       }
       setTerminalRunning(true)
-      void prefetchAndActivateInitialTerminalHistory().catch(() => {})
+      void prefetchOlderTerminalHistory().catch(() => {})
       return true
     }
     try {
@@ -1591,7 +1500,7 @@ export default function RemoteTerminalScreen() {
   }, [
     loading,
     paneId,
-    prefetchAndActivateInitialTerminalHistory,
+    prefetchOlderTerminalHistory,
     startTerminalSubscription,
     stopTerminalSubscription,
     t,
@@ -1659,7 +1568,7 @@ export default function RemoteTerminalScreen() {
           return
         }
         terminalRenderedSeqRef.current = terminalHistoryRef.current.lastSeq
-        void prefetchAndActivateInitialTerminalHistory().catch(() => {})
+        void prefetchOlderTerminalHistory().catch(() => {})
       } else if (decision === 'coalesced-write') {
         const viewport = viewportRef.current
         terminalRef.current?.init(
@@ -1698,7 +1607,7 @@ export default function RemoteTerminalScreen() {
     connectionState,
     loading,
     paneId,
-    prefetchAndActivateInitialTerminalHistory,
+    prefetchOlderTerminalHistory,
     startTerminalSubscription,
     t,
     updateTerminalSubscriptionCursor,
@@ -1730,7 +1639,7 @@ export default function RemoteTerminalScreen() {
         if (activeHandleRef.current === terminalHandle) {
           setTerminalRunning(true)
         }
-        void prefetchAndActivateInitialTerminalHistory().catch(() => {})
+        void prefetchOlderTerminalHistory().catch(() => {})
       } catch (err) {
         if (
           runIdRef.current === runId &&
@@ -1748,7 +1657,7 @@ export default function RemoteTerminalScreen() {
         }
       }
     },
-    [prefetchAndActivateInitialTerminalHistory, startTerminalSubscription, t, terminalHandle]
+    [prefetchOlderTerminalHistory, startTerminalSubscription, t, terminalHandle]
   )
 
   const syncPaneStatus = useCallback(async () => {
@@ -1822,7 +1731,7 @@ export default function RemoteTerminalScreen() {
         foregroundRecoveryRequestedRef.current = true
         void recoverTerminalAfterForegroundRef.current?.()
       }
-      void prefetchAndActivateInitialTerminalHistory().catch(() => {})
+      void prefetchOlderTerminalHistory().catch(() => {})
       return
     }
     setLoading(true)
@@ -1839,15 +1748,11 @@ export default function RemoteTerminalScreen() {
     setHistoryNotice(null)
     resetRemoteTerminalHistoryState(terminalHistoryRef.current)
     resetRemoteTerminalHistoryPrefetchState(terminalHistoryPrefetchRef.current)
-    initialHistoryActivatedRef.current = false
     terminalInitializedRef.current = false
     loadingOlderHistoryRef.current = false
     currentPaneRuntimeKeyRef.current = null
     desktopViewportRef.current = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }
-    viewportRef.current = resolveMobileTerminalViewport(
-      desktopViewportRef.current,
-      fittedPhoneRowsRef.current
-    )
+    viewportRef.current = resolveMobileTerminalViewport(desktopViewportRef.current)
 
     try {
       let client = clientRef.current
@@ -1894,7 +1799,7 @@ export default function RemoteTerminalScreen() {
       if (activeHandleRef.current === terminalHandle) {
         setLoading(false)
       }
-      void prefetchAndActivateInitialTerminalHistory().catch(() => {})
+      void prefetchOlderTerminalHistory().catch(() => {})
     } catch (err) {
       if (runIdRef.current !== runId) {
         return
@@ -1909,7 +1814,7 @@ export default function RemoteTerminalScreen() {
     appendDiagnostic,
     hostId,
     loadWindowPaneTabs,
-    prefetchAndActivateInitialTerminalHistory,
+    prefetchOlderTerminalHistory,
     refitTerminalToPhone,
     sessionRuntime,
     startTerminalSubscription,
@@ -2115,6 +2020,9 @@ export default function RemoteTerminalScreen() {
         }
       }
       setResidentTerminalHandles(residency.handles)
+      setLoadingOlderHistory(false)
+      setHistoryNotice(null)
+      activeHandleRef.current = targetHandle
       setActiveTerminal({ windowId: targetWindowId, paneId: targetPaneId })
     },
     [residentTerminalHandles]
@@ -2432,14 +2340,10 @@ export default function RemoteTerminalScreen() {
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => {
       const nextHeight = Math.max(0, event.nativeEvent.layout.height)
-      terminalFrameHeightRef.current = nextHeight
       setTerminalFrameHeight((current) => current === nextHeight ? current : nextHeight)
       refitTerminalToPhone()
-      if (nextHeight > 0) {
-        void fitTerminalRowsToPhone(nextHeight)
-      }
     },
-    [fitTerminalRowsToPhone, refitTerminalToPhone]
+    [refitTerminalToPhone]
   )
 
   const handleKeyboardAvoidanceMetrics = useCallback(
@@ -2619,7 +2523,7 @@ export default function RemoteTerminalScreen() {
       return
     }
     const runId = runIdRef.current
-    void activatePrefetchedTerminalHistory('history-top').catch((err) => {
+    void activatePrefetchedTerminalHistory().catch((err) => {
       if (runIdRef.current === runId && clientRef.current === client) {
         appendDiagnostic('mobile', 'history-activation-error', {
           handle: terminalHandle,

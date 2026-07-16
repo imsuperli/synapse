@@ -16,8 +16,8 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(snapshotIndex).toBeGreaterThan(subscribeIndex)
     expect(applyIndex).toBeGreaterThan(snapshotIndex)
     expect(routeSource).toContain('const viewport = updateTerminalViewportFromDesktop(snapshot, false)')
-    expect(routeSource).toContain('const fitPromise = fitTerminalRowsToPhone(')
-    expect(routeSource).toContain('await fitPromise')
+    expect(routeSource).not.toContain('fitTerminalRowsToPhone')
+    expect(routeSource).not.toContain('fittedPhoneRowsRef')
     expect(routeSource).toContain('sinceSeq: options.sinceSeq ?? terminalHistoryRef.current.lastSeq')
     expect(routeSource).toContain('capabilities: { terminalBinaryStream: 1 }')
     expect(routeSource).toContain('parseTerminalSubscribedEvent(payload)')
@@ -51,9 +51,11 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('buildRemoteTerminalInitialData(terminalHistoryRef.current)')
     expect(routeSource).toContain('handleHistoryTopReachedRef.current?.()')
     expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
-    expect(routeSource).toContain('const prefetchAndActivateInitialTerminalHistory = useCallback(')
-    expect(routeSource).toContain("activatePrefetchedTerminalHistory('initial')")
-    expect(routeSource).toContain('initialHistoryActivatedRef.current = true')
+    expect(routeSource).toContain('void prefetchOlderTerminalHistory().catch(() => {})')
+    expect(routeSource).toContain('void activatePrefetchedTerminalHistory().catch((err) => {')
+    expect(routeSource).not.toContain('prefetchAndActivateInitialTerminalHistory')
+    expect(routeSource).not.toContain("activatePrefetchedTerminalHistory('initial')")
+    expect(routeSource).not.toContain('initialHistoryActivatedRef')
     expect(routeSource).toContain('snapshot.evictedBeforeSeq')
     expect(routeSource).toContain('terminalHistoryBoundaryMessage(terminalHistoryRef.current, t)')
   })
@@ -120,11 +122,12 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('terminalSubscribeParamsRef.current.sinceSeq = terminalHistoryRef.current.lastSeq')
   })
 
-  it('keeps mobile rows independent while following desktop column changes', () => {
+  it('preserves both desktop grid dimensions on mobile', () => {
     expect(routeSource).toContain('desktopViewportRef: {')
-    expect(routeSource).toContain('fittedPhoneRowsRef: { current: 0 }')
-    expect(routeSource).toContain('resolveMobileTerminalViewport(')
+    expect(routeSource).toContain('const nextViewport = resolveMobileTerminalViewport(desktopViewport)')
     expect(routeSource).toContain('terminalRef.current?.resize(nextViewport.cols, nextViewport.rows)')
+    expect(routeSource).not.toContain('fittedPhoneRowsRef')
+    expect(routeSource).not.toContain('measureFitDimensions(')
     expect(routeSource).not.toContain('resizeTerminal(client')
   })
 
@@ -187,12 +190,26 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('exposes bounded copyable terminal diagnostics directly on mobile', () => {
     expect(routeSource).toContain('createTerminalDiagnosticBuffer()')
     expect(routeSource).toContain("appendDiagnostic('network', 'connection-state'")
-    expect(routeSource).toContain("appendDiagnostic('mobile', 'history-page'")
+    expect(routeSource).toContain("appendDiagnostic('mobile', 'history-prefetch-batch'")
     expect(routeSource).toContain("appendDiagnostic('mobile', 'history-activation-result'")
     expect(routeSource).toContain('onDiagnostic={handleTerminalWebViewDiagnostic}')
     expect(routeSource).toContain('<TerminalDiagnosticsModal')
     expect(routeSource).toContain('formatTerminalDiagnostics(diagnosticsBufferRef.current')
     expect(routeSource).toContain("accessibilityLabel={t('terminal.openDiagnostics')}")
+  })
+
+  it('automatically dismisses the terminal history boundary notice', () => {
+    expect(routeSource).toContain('const TERMINAL_HISTORY_NOTICE_MS = 3_000')
+    expect(routeSource).toContain('if (!historyNotice) {')
+    expect(routeSource).toContain('setHistoryNotice(null)')
+    expect(routeSource).toContain('}, TERMINAL_HISTORY_NOTICE_MS)')
+    expect(routeSource).toContain('return () => clearTimeout(timer)')
+    expect(routeSource).toContain(
+      'if (!prefetched.hasMoreBefore && activeHandleRef.current === terminalHandle)'
+    )
+    expect(routeSource).toContain(
+      'setLoadingOlderHistory(false)\n      setHistoryNotice(null)\n      activeHandleRef.current = targetHandle\n      setActiveTerminal('
+    )
   })
 
   it('renders same-window terminal pane tabs without changing desktop layout', () => {

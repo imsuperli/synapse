@@ -55,7 +55,7 @@ describe('TerminalWebView scroll routing', () => {
 
     const momentumBlock = sliceBetween('function momentumStep()', 'if (Math.abs(vel) > MIN_VEL)')
     expect(momentumBlock.indexOf('if (shouldRouteScrollToTerminalInput())')).toBeLessThan(
-      momentumBlock.indexOf('if (!applyNormalBufferScrollDelta(delta))')
+      momentumBlock.indexOf('if (!applyNormalBufferScrollDelta(delta, false))')
     )
     expect(momentumBlock).toContain('routeScrollLines(lines, ts.lastX, ts.lastY);')
   })
@@ -77,7 +77,7 @@ describe('TerminalWebView scroll routing', () => {
   it('does not rubber-band normal scroll at scrollback edges', () => {
     expect(source).toContain('function canScrollNormalBufferDelta(deltaY)')
     const smoothScrollBlock = sliceBetween(
-      'function applyNormalBufferScrollDelta(deltaY)',
+      'function applyNormalBufferScrollDelta(deltaY, allowHistoryRequest)',
       'function enqueueNormalBufferScrollDelta(deltaY)'
     )
     expect(smoothScrollBlock).toContain('if (!canScrollNormalBufferDelta(deltaY))')
@@ -93,7 +93,7 @@ describe('TerminalWebView scroll routing', () => {
     expect(touchMoveBlock).toContain('ts.velY = 0;')
 
     const momentumBlock = sliceBetween('function momentumStep()', 'if (Math.abs(vel) > MIN_VEL)')
-    expect(momentumBlock).toContain('if (!applyNormalBufferScrollDelta(delta))')
+    expect(momentumBlock).toContain('if (!applyNormalBufferScrollDelta(delta, false))')
     expect(momentumBlock).toContain('ts.momentumId = null;')
   })
 
@@ -161,7 +161,17 @@ describe('TerminalWebView scroll routing', () => {
   it('notifies React Native when normal scrollback reaches the loaded top', () => {
     expect(source).toContain("notify({ type: 'history-top' });")
     expect(source).toContain('if (now - lastHistoryTopNotifyAt < 900) return;')
-    expect(source).toContain('if (deltaY < 0) notifyHistoryTopReached();')
+    expect(source).toContain('function requestHistoryTopForDelta(deltaY)')
+    expect(source).toContain('if (historyTopPullDistance < 24) return;')
+    expect(source).toContain('if (surfaceTouchActive)')
+    expect(source).toContain('historyTopPending = true;')
+    const touchEndBlock = sliceBetween(
+      "targetSurface.addEventListener('touchend'",
+      '}, { capture: true, passive: true });'
+    )
+    expect(touchEndBlock).toContain('surfaceTouchActive = false;')
+    expect(touchEndBlock).toContain('flushPendingHistoryTopReached();')
+    expect(touchEndBlock).toContain('applyNormalBufferScrollDelta(delta, false)')
   })
 
   it('only consumes viewport zoom gestures when the canvas actually moves', () => {
@@ -177,14 +187,36 @@ describe('TerminalWebView scroll routing', () => {
     )
   })
 
-  it('accounts for fixed-grid CSS fit scale when measuring terminal rows', () => {
+  it('never derives remote replay rows from the CSS viewport scale', () => {
     const measureBlock = sliceBetween(
       'function measureFitDimensions(containerHeightPx, retriesLeft)',
       'function handleMsg(msg)'
     )
-    expect(measureBlock).toContain('var fixedGridFitScale = Math.min(')
-    expect(measureBlock).toContain(
-      'var rows = Math.max(8, Math.floor(vpHeight / (cellHeight * fixedGridFitScale)));'
+    expect(measureBlock).toContain('var rows = Math.max(8, Math.floor(vpHeight / cellHeight));')
+    expect(measureBlock).not.toContain('fixedGridFitScale')
+  })
+
+  it('uses one uniform cover scale for fixed remote grids', () => {
+    const fitBlock = sliceBetween('function computeFitScale()', 'function getTotalScale()')
+    expect(fitBlock).toContain('var widthScale = window.innerWidth / termWidth;')
+    expect(fitBlock).toContain('var heightScale = window.innerHeight / termHeight;')
+    expect(fitBlock).toContain('return Math.max(widthScale, heightScale);')
+    expect(fitBlock).not.toContain('scaleX')
+    expect(fitBlock).not.toContain('scaleY')
+  })
+
+  it('reveals a replay surface only after its fit transform commits', () => {
+    const initBlock = sliceBetween(
+      'function init(cols, rows, initialData',
+      'function write(data)'
+    )
+    expect(initBlock).toContain("surface.style.visibility = 'hidden';")
+    expect(initBlock).toContain("applyFitScale('init-replay', function()")
+    expect(initBlock.indexOf("surface.style.visibility = 'visible';")).toBeLessThan(
+      initBlock.indexOf("notify({ type: 'ready', cols: cols, rows: rows });")
+    )
+    expect(initBlock.indexOf("applyFitScale('init-replay', function()")).toBeLessThan(
+      initBlock.indexOf("surface.style.visibility = 'visible';")
     )
   })
 

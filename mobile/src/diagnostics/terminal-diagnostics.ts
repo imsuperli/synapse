@@ -14,7 +14,7 @@ export type TerminalDiagnosticBuffer = {
   entries: TerminalDiagnosticEntry[]
 }
 
-const DEFAULT_TERMINAL_DIAGNOSTIC_LIMIT = 300
+const DEFAULT_TERMINAL_DIAGNOSTIC_LIMIT = 100
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1000
 
 const SECRET_KEY_FRAGMENTS = [

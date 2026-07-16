@@ -6,17 +6,17 @@ import {
 } from './remote-terminal-viewport'
 
 describe('remote terminal mobile viewport', () => {
-  it('fills the phone height without changing the desktop column count', () => {
+  it('preserves the desktop replay grid even when the phone could fit more rows', () => {
     const desktop = normalizeDesktopTerminalViewport(
       { cols: 120, rows: 4 },
       { cols: 80, rows: 30 }
     )
 
-    expect(resolveMobileTerminalViewport(desktop, 31)).toEqual({ cols: 120, rows: 31 })
+    expect(resolveMobileTerminalViewport(desktop)).toEqual({ cols: 120, rows: 4 })
   })
 
   it('never crops a desktop terminal that is taller than the phone fit', () => {
-    expect(resolveMobileTerminalViewport({ cols: 90, rows: 42 }, 30)).toEqual({
+    expect(resolveMobileTerminalViewport({ cols: 90, rows: 42 })).toEqual({
       cols: 90,
       rows: 42
     })

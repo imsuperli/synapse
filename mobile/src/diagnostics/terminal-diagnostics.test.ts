@@ -8,6 +8,10 @@ import {
 } from './terminal-diagnostics'
 
 describe('terminal diagnostics', () => {
+  it('limits the default copied diagnostics to 100 recent entries', () => {
+    expect(createTerminalDiagnosticBuffer().limit).toBe(100)
+  })
+
   it('keeps a bounded chronological ring', () => {
     const buffer = createTerminalDiagnosticBuffer(2)
     appendTerminalDiagnostic(buffer, { source: 'mobile', event: 'one', ts: 1 })

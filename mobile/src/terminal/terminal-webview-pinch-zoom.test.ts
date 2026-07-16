@@ -15,14 +15,23 @@ function bodyMarkup(): string {
   return XTERM_HTML.slice(start, end)
 }
 
-function makeTerminal() {
+type TerminalGeometry = {
+  cols: number
+  rows: number
+  cellWidth: number
+  cellHeight: number
+}
+
+function makeTerminal({ cols, rows, cellWidth, cellHeight }: TerminalGeometry) {
   return {
-    cols: 120,
-    rows: 24,
+    cols,
+    rows,
     options: { fontSize: 13 },
     modes: {},
-    element: { scrollWidth: 960, scrollHeight: 360 },
-    _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 15 } } } } },
+    element: { scrollWidth: cols * cellWidth, scrollHeight: rows * cellHeight },
+    _core: {
+      _renderService: { dimensions: { css: { cell: { width: cellWidth, height: cellHeight } } } }
+    },
     buffer: {
       active: {
         viewportY: 0,
@@ -61,11 +70,21 @@ function makeTerminal() {
 
 type PostedMessage = Record<string, unknown>
 
-function boot(): PostedMessage[] {
+function boot(overrides: Partial<TerminalGeometry> = {}): PostedMessage[] {
+  const geometry: TerminalGeometry = {
+    cols: overrides.cols ?? 120,
+    rows: overrides.rows ?? 24,
+    cellWidth: overrides.cellWidth ?? 8,
+    cellHeight: overrides.cellHeight ?? 15
+  }
   const posted: PostedMessage[] = []
   const webWindow = window as unknown as { Terminal: unknown; ReactNativeWebView: unknown }
-  webWindow.Terminal = function () {
-    return makeTerminal()
+  webWindow.Terminal = function (options: { cols?: number; rows?: number }) {
+    return makeTerminal({
+      ...geometry,
+      cols: options.cols ?? geometry.cols,
+      rows: options.rows ?? geometry.rows
+    })
   }
   webWindow.ReactNativeWebView = {
     postMessage(message: string) {
@@ -79,8 +98,8 @@ function boot(): PostedMessage[] {
     new MessageEvent('message', {
       data: JSON.stringify({
         type: 'init',
-        cols: 120,
-        rows: 24,
+        cols: geometry.cols,
+        rows: geometry.rows,
         initialData: '',
         fontScale: 1,
         textScaleMode: 'viewport-zoom'
@@ -153,7 +172,7 @@ describe('terminal WebView pinch zoom', () => {
       fireSurfaceTouch('touchstart', [{ x: 180, y: 280 }])
       fireSurfaceTouch('touchmove', [{ x: 181, y: 340 }])
 
-      expect(posted.some((message) => message.type === 'history-top')).toBe(true)
+      expect(posted.some((message) => message.type === 'history-top')).toBe(false)
       expect(posted).toContainEqual(
         expect.objectContaining({
           type: 'diagnostic',
@@ -161,8 +180,24 @@ describe('terminal WebView pinch zoom', () => {
           metrics: expect.objectContaining({ route: 'buffer-scroll-handoff' })
         })
       )
+
+      fireSurfaceTouch('touchmove', [{ x: 181, y: 380 }])
+      fireSurfaceTouch('touchend', [])
+
+      expect(posted.filter((message) => message.type === 'history-top')).toHaveLength(1)
     }
   )
+
+  it('does not load history for a small touch wobble at the loaded top', async () => {
+    const posted = boot()
+    await settle()
+
+    fireSurfaceTouch('touchstart', [{ x: 180, y: 280 }])
+    fireSurfaceTouch('touchmove', [{ x: 180, y: 300 }])
+    fireSurfaceTouch('touchend', [])
+
+    expect(posted.some((message) => message.type === 'history-top')).toBe(false)
+  })
 
   it('keeps consuming a dominant horizontal gesture when the zoomed canvas moves', async () => {
     const posted = boot()
@@ -186,7 +221,7 @@ describe('terminal WebView pinch zoom', () => {
     )
   })
 
-  it('measures rows against the fixed-grid fit scale', async () => {
+  it('keeps generic fit measurement independent of remote CSS scaling', async () => {
     const posted = boot()
     await settle()
 
@@ -195,7 +230,35 @@ describe('terminal WebView pinch zoom', () => {
     expect(posted.filter((message) => message.type === 'measure-result').at(-1)).toEqual({
       type: 'measure-result',
       cols: 45,
-      rows: 113
+      rows: 42
     })
+  })
+
+  it('preserves the logged 228x70 desktop grid and uniformly covers a 369x600 viewport', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 369, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    const posted = boot({
+      cols: 228,
+      rows: 70,
+      cellWidth: 7.547169811320755,
+      cellHeight: 15.09433962264151
+    })
+    await settle()
+
+    const fit = posted.find(
+      (message) => message.type === 'diagnostic' && message.event === 'fit-scale'
+    )
+    const fitIndex = posted.indexOf(fit ?? {})
+    const readyIndex = posted.findIndex((message) => message.type === 'ready')
+    const metrics = fit?.metrics as Record<string, number> | undefined
+    expect(metrics).toBeDefined()
+    expect(metrics?.cols).toBe(228)
+    expect(metrics?.rows).toBe(70)
+    expect(metrics?.fitScale).toBeCloseTo(600 / (70 * 15.09433962264151), 5)
+    expect((metrics?.expectedWidth ?? 0) * (metrics?.fitScale ?? 0)).toBeGreaterThan(369)
+    expect((metrics?.expectedHeight ?? 0) * (metrics?.fitScale ?? 0)).toBeCloseTo(600, 4)
+    expect(fitIndex).toBeGreaterThanOrEqual(0)
+    expect(readyIndex).toBeGreaterThan(fitIndex)
+    expect(document.getElementById('terminal-surface')?.style.visibility).toBe('visible')
   })
 })
