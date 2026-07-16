@@ -6,6 +6,7 @@ import type { MobileTerminalTheme } from './mobile-terminal-theme'
 import { TERMINAL_PATH_TAP_JS } from './terminal-path-tap-injected'
 import { XTERM_ENGINE_CSS, XTERM_ENGINE_JS } from './terminal-webview-engine.generated'
 import { TERMINAL_REFLOW_JS } from './terminal-webview-reflow-injected'
+import { TERMINAL_SCROLLBACK_PRESERVATION_JS } from './terminal-webview-scrollback-preservation-injected'
 import { TERMINAL_TAP_DISPATCH_JS } from './terminal-webview-tap-dispatch-injected'
 import { URL_TAP_WEBVIEW_JS } from './terminal-webview-url-tap'
 
@@ -595,6 +596,8 @@ window.onerror = function(msg) {
     return on > 0 ? data.slice(on) : data;
   }
 
+${TERMINAL_SCROLLBACK_PRESERVATION_JS}
+
   function updateMouseModeFromData(data) {
     if (typeof data !== 'string' || data.length === 0) return;
     var input = mouseModeScanTail + data;
@@ -807,6 +810,9 @@ window.onerror = function(msg) {
       allowProposedApi: true
     });
     term.open(surface);
+    // Codex scrolls a top-anchored region with CSI S. xterm's default handler
+    // deletes those rows instead of adding them to the normal scrollback.
+    installMobileTerminalScrollbackPreservation(term);
     if (window.WebglAddon && window.WebglAddon.WebglAddon) {
       try { var webglAddon = new window.WebglAddon.WebglAddon(); term.loadAddon(webglAddon); if (webglAddon.onContextLoss) webglAddon.onContextLoss(function() { try { webglAddon && webglAddon.dispose && webglAddon.dispose(); } catch (e) {} }); } catch (e) {}
     }

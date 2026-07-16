@@ -45,6 +45,7 @@ export default defineConfig({
       'src/terminal/terminal-webview-engine-error.test.ts',
       'src/terminal/terminal-webview-engine.test.ts',
       'src/terminal/terminal-webview-reflow.test.ts',
+      'src/terminal/terminal-webview-scrollback-preservation.test.ts',
       'src/terminal/terminal-webview-scroll-routing.test.ts',
       'src/terminal/terminal-webview-tap-routing.test.ts',
       'src/terminal/terminal-webview-text-zoom.test.ts',
