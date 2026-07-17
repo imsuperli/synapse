@@ -305,6 +305,149 @@ describe('RemoteGateway integration', () => {
     });
   });
 
+  it('replaces an unresponsive relay host socket without restarting the desktop gateway', async () => {
+    relay = new SynapseRelayServer({
+      host: '127.0.0.1',
+      port: 0,
+      heartbeatIntervalMs: 60_000,
+      cleanupIntervalMs: 60_000,
+    });
+    await relay.start();
+
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    gateway = new RemoteGateway({
+      processManager: createProcessManager() as any,
+      userDataPath: tempDir,
+      hostName: 'Synapse Test',
+      appVersion: '9.9.9',
+      transportOptions: {
+        host: '127.0.0.1',
+        port: 0,
+      },
+      relayOptions: {
+        heartbeatIntervalMs: 60_000,
+        reconnectDelayMs: 10,
+      },
+    });
+    await gateway.updateSettings({
+      enabled: true,
+      relayEnabled: true,
+      relayEndpoint: `${relay.endpoint}${relay.relayPath}`,
+    });
+
+    const pairing = gateway.createPairingOffer({});
+    expect(pairing.available).toBe(true);
+    if (!pairing.available) {
+      throw new Error('pairing unavailable');
+    }
+    const offer = parsePairingCode(pairing.pairingUrl);
+    expect(offer).not.toBeNull();
+
+    const relayHarness = gateway as unknown as RelayHealthHarness;
+    await waitFor(() => relayHarness.relaySockets.get(pairing.deviceId)?.readyState === WebSocket.OPEN);
+    const staleSocket = relayHarness.relaySockets.get(pairing.deviceId)!;
+    staleSocket.removeAllListeners('pong');
+
+    relayHarness.checkRelaySocketHealth();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    relayHarness.checkRelaySocketHealth();
+
+    await waitFor(() => {
+      const current = relayHarness.relaySockets.get(pairing.deviceId);
+      return Boolean(current && current !== staleSocket && current.readyState === WebSocket.OPEN);
+    });
+
+    socket = await openWebSocket(buildRelayClientUrl(offer!.relayEndpoint!, {
+      sessionId: offer!.relaySessionId!,
+      clientToken: offer!.relayClientToken!,
+    }));
+    const sharedKey = await authenticateEncryptedClient(socket, offer!);
+    socket.send(encrypt(JSON.stringify({
+      id: 'req-after-heartbeat-recovery',
+      method: REMOTE_METHODS.STATUS_GET,
+    }), sharedKey));
+
+    const statusMessage = decrypt(rawToString(await waitForMessage(socket)), sharedKey);
+    expect(JSON.parse(statusMessage ?? '')).toMatchObject({
+      id: 'req-after-heartbeat-recovery',
+      ok: true,
+      result: {
+        ok: true,
+        protocolVersion: 1,
+      },
+    });
+  });
+
+  it('re-registers the saved relay session after its server lifetime expires', async () => {
+    relay = new SynapseRelayServer({
+      host: '127.0.0.1',
+      port: 0,
+      sessionTtlMs: 1_000,
+      heartbeatIntervalMs: 60_000,
+      cleanupIntervalMs: 10,
+    });
+    await relay.start();
+
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    gateway = new RemoteGateway({
+      processManager: createProcessManager() as any,
+      userDataPath: tempDir,
+      hostName: 'Synapse Test',
+      appVersion: '9.9.9',
+      transportOptions: {
+        host: '127.0.0.1',
+        port: 0,
+      },
+      relayOptions: {
+        heartbeatIntervalMs: 60_000,
+        reconnectDelayMs: 10,
+      },
+    });
+    await gateway.updateSettings({
+      enabled: true,
+      relayEnabled: true,
+      relayEndpoint: `${relay.endpoint}${relay.relayPath}`,
+    });
+
+    const pairing = gateway.createPairingOffer({});
+    expect(pairing.available).toBe(true);
+    if (!pairing.available) {
+      throw new Error('pairing unavailable');
+    }
+
+    const relayHarness = gateway as unknown as RelayHealthHarness;
+    await waitFor(() => relayHarness.relaySockets.get(pairing.deviceId)?.readyState === WebSocket.OPEN);
+    const expiringSocket = relayHarness.relaySockets.get(pairing.deviceId)!;
+
+    await waitFor(() => {
+      const current = relayHarness.relaySockets.get(pairing.deviceId);
+      return Boolean(current && current !== expiringSocket && current.readyState === WebSocket.OPEN);
+    });
+    expect(gateway.getDeviceRegistry().getDevice(pairing.deviceId)?.relaySessionId).toBeTruthy();
+
+    const offer = parsePairingCode(pairing.pairingUrl);
+    expect(offer).not.toBeNull();
+    socket = await openWebSocket(buildRelayClientUrl(offer!.relayEndpoint!, {
+      sessionId: offer!.relaySessionId!,
+      clientToken: offer!.relayClientToken!,
+    }));
+    const sharedKey = await authenticateEncryptedClient(socket, offer!);
+    socket.send(encrypt(JSON.stringify({
+      id: 'req-after-session-expiry',
+      method: REMOTE_METHODS.STATUS_GET,
+    }), sharedKey));
+
+    const statusMessage = decrypt(rawToString(await waitForMessage(socket)), sharedKey);
+    expect(JSON.parse(statusMessage ?? '')).toMatchObject({
+      id: 'req-after-session-expiry',
+      ok: true,
+      result: {
+        ok: true,
+        protocolVersion: 1,
+      },
+    });
+  });
+
   it('accepts direct LAN and relay clients for the same desktop at the same time', async () => {
     relay = new SynapseRelayServer({
       host: '127.0.0.1',
@@ -450,6 +593,11 @@ describe('RemoteGateway integration', () => {
 
 type StopWindowPanesHarness = {
   stopWindowPanes(params: { windowId: string; paneIds: string[] }): Promise<void>;
+};
+
+type RelayHealthHarness = {
+  relaySockets: Map<string, WebSocket>;
+  checkRelaySocketHealth(): void;
 };
 
 function createProcessManager() {

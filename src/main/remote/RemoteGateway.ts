@@ -54,6 +54,11 @@ type RemoteGatewayOptions = {
   onRemoteWindowRuntimeUpdated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
   onRemoteWorkspaceLayoutUpdated?: (payload: { workspace: Workspace }) => void | Promise<void>;
   transportOptions?: Partial<RemoteWebSocketTransportOptions>;
+  relayOptions?: {
+    heartbeatIntervalMs?: number;
+    handshakeTimeoutMs?: number;
+    reconnectDelayMs?: number;
+  };
 };
 
 export type RemotePairingOfferResult =
@@ -68,7 +73,9 @@ export type RemotePairingOfferResult =
     };
 
 const RELAY_SESSION_TTL_SECONDS = 12 * 60 * 60;
-const RELAY_RECONNECT_DELAY_MS = 5_000;
+const DEFAULT_RELAY_RECONNECT_DELAY_MS = 5_000;
+const DEFAULT_RELAY_HEARTBEAT_INTERVAL_MS = 15_000;
+const DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS = 15_000;
 const RELAY_FAST_RECONNECT_DELAY_MS = 0;
 const RELAY_CLOSE_PEER_CHANGED = 4004;
 
@@ -79,6 +86,9 @@ export class RemoteGateway {
   private readonly appVersion: string | undefined;
   private readonly wsPort: number;
   private readonly transportOptions: Partial<RemoteWebSocketTransportOptions>;
+  private readonly relayHeartbeatIntervalMs: number;
+  private readonly relayHandshakeTimeoutMs: number;
+  private readonly relayReconnectDelayMs: number;
   private readonly getCurrentWorkspace: (() => Workspace | null) | undefined;
   private readonly onPaneProcessStarted: ((payload: { windowId: string; paneId: string; pid: number }) => void) | undefined;
   private readonly onPaneProcessStopped: ((payload: { windowId: string; paneId: string }) => void) | undefined;
@@ -100,8 +110,10 @@ export class RemoteGateway {
   private wsConnectionIds = new Map<WebSocket, string>();
   private relaySockets = new Map<string, WebSocket>();
   private relaySocketDeviceIds = new WeakMap<WebSocket, string>();
+  private relaySocketAlive = new WeakSet<WebSocket>();
   private relayReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private relayPendingExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private relayHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: RemoteGatewayOptions) {
     this.processManager = options.processManager;
@@ -110,6 +122,12 @@ export class RemoteGateway {
     this.appVersion = options.appVersion;
     this.wsPort = options.wsPort ?? DEFAULT_REMOTE_WS_PORT;
     this.transportOptions = options.transportOptions ?? {};
+    this.relayHeartbeatIntervalMs = options.relayOptions?.heartbeatIntervalMs
+      ?? DEFAULT_RELAY_HEARTBEAT_INTERVAL_MS;
+    this.relayHandshakeTimeoutMs = options.relayOptions?.handshakeTimeoutMs
+      ?? DEFAULT_RELAY_HANDSHAKE_TIMEOUT_MS;
+    this.relayReconnectDelayMs = options.relayOptions?.reconnectDelayMs
+      ?? DEFAULT_RELAY_RECONNECT_DELAY_MS;
     this.getCurrentWorkspace = options.getCurrentWorkspace;
     this.onPaneProcessStarted = options.onPaneProcessStarted;
     this.onPaneProcessStopped = options.onPaneProcessStopped;
@@ -576,17 +594,22 @@ export class RemoteGateway {
       clientTokenHash: device.relayClientTokenHash,
       ttlSeconds: RELAY_SESSION_TTL_SECONDS,
     });
-    const ws = new WebSocket(relayUrl);
+    const ws = new WebSocket(relayUrl, {
+      handshakeTimeout: this.relayHandshakeTimeoutMs,
+    });
     this.relaySockets.set(device.deviceId, ws);
     this.relaySocketDeviceIds.set(ws, device.deviceId);
+    this.startRelayHeartbeat();
 
+    ws.on('open', () => this.relaySocketAlive.add(ws));
+    ws.on('pong', () => this.relaySocketAlive.add(ws));
     ws.on('message', (data, isBinary) => {
       this.handleSocketMessage(ws, normalizeWebSocketMessage(data, isBinary));
     });
     ws.on('close', (code) => this.finalizeRelaySocket(ws, code));
     ws.on('error', () => {
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close();
+        ws.terminate();
       }
     });
   }
@@ -601,17 +624,19 @@ export class RemoteGateway {
       return;
     }
     this.relaySockets.delete(deviceId);
+    this.relaySocketAlive.delete(ws);
+    this.stopRelayHeartbeatIfIdle();
     this.scheduleRelayReconnect(
       deviceId,
       code === RELAY_CLOSE_PEER_CHANGED
         ? RELAY_FAST_RECONNECT_DELAY_MS
-        : RELAY_RECONNECT_DELAY_MS,
+        : this.relayReconnectDelayMs,
     );
   }
 
   private scheduleRelayReconnect(
     deviceId: string,
-    delayMs = RELAY_RECONNECT_DELAY_MS,
+    delayMs = this.relayReconnectDelayMs,
   ): void {
     const existingTimer = this.relayReconnectTimers.get(deviceId);
     if (existingTimer) {
@@ -676,6 +701,8 @@ export class RemoteGateway {
       return;
     }
     this.relaySockets.delete(deviceId);
+    this.relaySocketAlive.delete(ws);
+    this.stopRelayHeartbeatIfIdle();
     this.cleanupSocket(ws);
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
       ws.close();
@@ -683,6 +710,7 @@ export class RemoteGateway {
   }
 
   private stopRelayHostConnections(): void {
+    this.stopRelayHeartbeat();
     for (const timer of this.relayReconnectTimers.values()) {
       clearTimeout(timer);
     }
@@ -694,6 +722,49 @@ export class RemoteGateway {
     for (const deviceId of Array.from(this.relaySockets.keys())) {
       this.disconnectRelayDevice(deviceId);
     }
+  }
+
+  private startRelayHeartbeat(): void {
+    if (this.relayHeartbeatTimer) {
+      return;
+    }
+    this.relayHeartbeatTimer = setInterval(
+      () => this.checkRelaySocketHealth(),
+      this.relayHeartbeatIntervalMs,
+    );
+    this.relayHeartbeatTimer.unref?.();
+  }
+
+  private checkRelaySocketHealth(): void {
+    for (const ws of this.relaySockets.values()) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        continue;
+      }
+      if (!this.relaySocketAlive.has(ws)) {
+        ws.terminate();
+        continue;
+      }
+      this.relaySocketAlive.delete(ws);
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }
+  }
+
+  private stopRelayHeartbeatIfIdle(): void {
+    if (this.relaySockets.size === 0) {
+      this.stopRelayHeartbeat();
+    }
+  }
+
+  private stopRelayHeartbeat(): void {
+    if (!this.relayHeartbeatTimer) {
+      return;
+    }
+    clearInterval(this.relayHeartbeatTimer);
+    this.relayHeartbeatTimer = null;
   }
 }
 
