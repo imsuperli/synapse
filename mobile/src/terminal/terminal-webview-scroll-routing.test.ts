@@ -8,6 +8,7 @@ const source =
   readFileSync(new URL('./terminal-webview-pending-messages.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-url-tap.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-tap-dispatch-injected.ts', import.meta.url), 'utf8') +
+  readFileSync(new URL('./terminal-webview-mobile-reflow-injected.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-html.ts', import.meta.url), 'utf8')
 
 function sliceBetween(startPattern: string, endPattern: string): string {
@@ -207,8 +208,8 @@ describe('TerminalWebView scroll routing', () => {
 
   it('reveals a replay surface only after its fit transform commits', () => {
     const initBlock = sliceBetween(
-      'function init(cols, rows, initialData',
-      'function write(data)'
+      'function initDirect(cols, rows, initialData',
+      'function init(cols, rows, initialData'
     )
     expect(initBlock).toContain("surface.style.visibility = 'hidden';")
     expect(initBlock).toContain("applyFitScale('init-replay', function()")
@@ -217,6 +218,14 @@ describe('TerminalWebView scroll routing', () => {
     )
     expect(initBlock.indexOf("applyFitScale('init-replay', function()")).toBeLessThan(
       initBlock.indexOf("surface.style.visibility = 'visible';")
+    )
+    const mobileRevealBlock = sliceBetween(
+      'function revealMobileReplacement(',
+      'function finishMobileProjectionInit('
+    )
+    expect(mobileRevealBlock).toContain("applyFitScale(reason, function()")
+    expect(mobileRevealBlock.indexOf("surface.style.visibility = 'visible';")).toBeLessThan(
+      mobileRevealBlock.indexOf("notify({ type: 'ready', cols: term.cols, rows: term.rows });")
     )
   })
 

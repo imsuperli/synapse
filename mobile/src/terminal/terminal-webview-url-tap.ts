@@ -181,7 +181,8 @@ export const URL_TAP_WEBVIEW_JS = `
     for (var i = 0; i < initialOscLinks.length; i++) {
       var link = initialOscLinks[i];
       if (!link || typeof link.text === 'string') continue;
-      link.text = initialOscLinkTextAtRow(link, link.row);
+      if (link.row < initialOscLinkRowOffset) continue;
+      link.text = initialOscLinkTextAtRow(link, link.row - initialOscLinkRowOffset);
     }
   }
   function initialOscLinkTextStillMatches(link, row) {

@@ -2365,6 +2365,22 @@ export default function RemoteTerminalScreen() {
     []
   )
 
+  const handleMobileReflowRefreshRequest = useCallback((targetHandle: string) => {
+    const runtime = sessionRuntimesRef.current.get(targetHandle)
+    if (!runtime?.terminalInitializedRef.current || !runtime.terminalWebReadyRef.current) {
+      return
+    }
+    const viewport = runtime.viewportRef.current
+    runtime.terminalRef.current?.init(
+      viewport.cols,
+      viewport.rows,
+      buildRemoteTerminalInitialData(runtime.terminalHistoryRef.current),
+      true,
+      undefined,
+      true
+    )
+  }, [])
+
   const canSend = connectionState === 'connected' && !loading && terminalRunning && !stopping
 
   const sendLiveTerminalInput = useCallback(
@@ -2902,7 +2918,7 @@ export default function RemoteTerminalScreen() {
               keyboardLift={0}
               terminalTheme={terminalTheme}
               textScale={terminalTextScale}
-              textScaleMode="viewport-zoom"
+              textScaleMode="mobile-reflow"
               onRef={setTerminalWebViewRef}
               onWebReady={handleResidentTerminalWebReady}
               onSelectionMode={() => {}}
@@ -2934,6 +2950,7 @@ export default function RemoteTerminalScreen() {
                   handleHistoryTopReachedRef.current?.()
                 }
               }}
+              onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}
               onDiagnostic={handleTerminalWebViewDiagnostic}
             />
           ))}

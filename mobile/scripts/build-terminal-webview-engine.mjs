@@ -9,7 +9,12 @@ const mobileRoot = path.resolve(scriptDir, '..')
 const outputPath = path.join(mobileRoot, 'src', 'terminal', 'terminal-webview-engine.generated.ts')
 const target = 'chrome74'
 
-const packages = ['@xterm/xterm', '@xterm/addon-unicode11', '@xterm/addon-webgl']
+const packages = [
+  '@xterm/xterm',
+  '@xterm/addon-serialize',
+  '@xterm/addon-unicode11',
+  '@xterm/addon-webgl'
+]
 
 async function readPackageVersion(packageName) {
   // Why: a package.json module specifier must use '/' — path.join emits '\' on
@@ -28,6 +33,7 @@ async function buildEngineJs() {
     stdin: {
       contents: `
         import { Terminal } from '@xterm/xterm'
+        import { SerializeAddon } from '@xterm/addon-serialize'
         import { Unicode11Addon } from '@xterm/addon-unicode11'
         import { WebglAddon } from '@xterm/addon-webgl'
 
@@ -60,6 +66,7 @@ async function buildEngineJs() {
         }
 
         window.Terminal = Terminal
+        window.SerializeAddon = { SerializeAddon }
         window.Unicode11Addon = { Unicode11Addon }
         window.WebglAddon = { WebglAddon }
       `,
@@ -76,7 +83,10 @@ async function buildEngineJs() {
     logLevel: 'silent'
   })
 
-  return result.outputFiles[0].text
+  // SerializeAddon embeds clipboard HTML fragment markers inside JS strings.
+  // Encode the HTML-comment opener so an inline <script> tokenizer cannot enter
+  // escaped-script state even though the marker is never executed as markup.
+  return result.outputFiles[0].text.replace(/<!--/g, '\\x3c!--')
 }
 
 async function main() {

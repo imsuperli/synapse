@@ -44,6 +44,10 @@ export type TerminalSelectionEvents = {
   // Why: remote terminal history is paged. The WebView owns scroll gestures,
   // so it notifies RN when the user asks for output above the loaded buffer.
   onHistoryTopReached?: () => void
+  // Why: mobile-reflow keeps the desktop PTY grid canonical. After a complex
+  // normal-buffer update or a text-size change, RN replays its already-retained
+  // raw history once so the visible phone-width projection can be rebuilt.
+  onMobileReflowRefreshRequest?: () => void
   onDiagnostic?: (diagnostic: TerminalWebViewDiagnostic) => void
 }
 

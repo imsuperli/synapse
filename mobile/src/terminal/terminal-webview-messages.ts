@@ -1,7 +1,7 @@
 import type { TerminalOscLinkRange } from './terminal-osc-link-ranges'
 import type { MobileTerminalTheme } from './mobile-terminal-theme'
 
-export type TerminalTextScaleMode = 'font-size' | 'viewport-zoom'
+export type TerminalTextScaleMode = 'font-size' | 'viewport-zoom' | 'mobile-reflow'
 
 export type TerminalWebViewCommand =
   | { type: 'write'; id?: number; data: string }

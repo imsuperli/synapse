@@ -32,6 +32,7 @@ type TerminalPaneViewProps = {
   onTextScaleChange: (scale: number) => void
   onEngineError?: (handle: string, message: string) => void
   onHistoryTopReached?: (handle: string) => void
+  onMobileReflowRefreshRequest?: (handle: string) => void
   onDiagnostic?: (handle: string, diagnostic: TerminalWebViewDiagnostic) => void
 }
 
@@ -57,6 +58,7 @@ export function TerminalPaneView({
   onTextScaleChange,
   onEngineError,
   onHistoryTopReached,
+  onMobileReflowRefreshRequest,
   onDiagnostic
 }: TerminalPaneViewProps) {
   const setRef = useCallback(
@@ -97,6 +99,7 @@ export function TerminalPaneView({
         onTextScaleChange={onTextScaleChange}
         onEngineError={(message) => onEngineError?.(handle, message)}
         onHistoryTopReached={() => onHistoryTopReached?.(handle)}
+        onMobileReflowRefreshRequest={() => onMobileReflowRefreshRequest?.(handle)}
         onDiagnostic={(diagnostic) => onDiagnostic?.(handle, diagnostic)}
       />
     </View>

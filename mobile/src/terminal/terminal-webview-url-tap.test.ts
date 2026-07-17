@@ -199,6 +199,7 @@ describe('findUrlAtColumn', () => {
     expect(XTERM_HTML).toContain('function urlAtViewportPoint(')
     expect(XTERM_HTML).toContain(JSON.stringify(TERMINAL_HTTP_URL_REGEX_SOURCE))
     expect(XTERM_HTML).toContain('function oscLinkAtViewportPoint(')
+    expect(XTERM_HTML).toContain('link.row - initialOscLinkRowOffset')
     expect(XTERM_HTML).toContain('function resolveTerminalOscFileTap(')
     expect(XTERM_HTML).toContain('function resolveTerminalFileUrlTap(')
     expect(XTERM_HTML).toContain('function isLocalFileUriHostname(')

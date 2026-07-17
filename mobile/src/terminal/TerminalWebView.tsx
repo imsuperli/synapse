@@ -60,12 +60,15 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     onOpenUrl,
     onTextScaleChange,
     onHistoryTopReached,
+    onMobileReflowRefreshRequest,
     onDiagnostic
   },
   ref
 ) {
   const webViewRef = useRef<WebView<{}>>(null)
   const isWebReadyRef = useRef(false)
+  const textScaleRef = useRef(textScale)
+  textScaleRef.current = textScale
   const pendingMessages = useMemo(() => createTerminalWebViewPendingMessages(), [])
   const messageIdRef = useRef(0)
   const terminalThemeKey = useMemo(() => JSON.stringify(terminalTheme ?? null), [terminalTheme])
@@ -211,10 +214,15 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       } else if (msg.type === 'font-scale-changed') {
         const scale = typeof msg.fontScale === 'number' ? msg.fontScale : 0
         if (scale > 0) {
+          // Keep an immediate copy for a mobile-reflow refresh that can arrive
+          // before React commits the corresponding preference state update.
+          textScaleRef.current = scale
           onTextScaleChange?.(scale)
         }
       } else if (msg.type === 'history-top') {
         onHistoryTopReached?.()
+      } else if (msg.type === 'mobile-reflow-refresh') {
+        onMobileReflowRefreshRequest?.()
       } else if (msg.type === 'diagnostic') {
         const diagnosticEvent = typeof msg.event === 'string' ? msg.event : ''
         const metrics = msg.metrics
@@ -252,6 +260,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       onOpenUrl,
       onTextScaleChange,
       onHistoryTopReached,
+      onMobileReflowRefreshRequest,
       onDiagnostic
     ]
   )
@@ -316,7 +325,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
           initialData,
           oscLinks,
           terminalTheme,
-          fontScale: textScale,
+          fontScale: textScaleRef.current,
           textScaleMode,
           preserveScroll,
           preserveFullInitialData

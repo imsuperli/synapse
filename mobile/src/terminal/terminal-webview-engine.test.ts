@@ -49,6 +49,7 @@ describe('terminal WebView bundled engine', () => {
 
     expect(window).toMatchObject({
       Terminal: expect.any(Function),
+      SerializeAddon: { SerializeAddon: expect.any(Function) },
       Unicode11Addon: { Unicode11Addon: expect.any(Function) },
       WebglAddon: { WebglAddon: expect.any(Function) }
     })
@@ -117,7 +118,9 @@ describe('terminal WebView bundled engine', () => {
     const clearStart = terminalHtmlSource.indexOf("msg.type === 'clear'")
     const clearEnd = terminalHtmlSource.indexOf("msg.type === 'measure'", clearStart)
     const clearSource = terminalHtmlSource.slice(clearStart, clearEnd)
-    expect(clearSource).toContain('if (term) { term.clear(); term.reset(); }')
+    expect(clearSource).toContain('clearMobileReflowTerminals();')
+    expect(clearSource).toContain('term.clear();')
+    expect(clearSource).toContain('term.reset();')
     expect(clearSource).toContain('emitKeyboardAvoidanceMetrics();')
   })
 

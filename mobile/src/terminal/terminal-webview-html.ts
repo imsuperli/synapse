@@ -5,6 +5,7 @@ import { TERMINAL_TEXT_SCALES } from '../storage/preferences'
 import type { MobileTerminalTheme } from './mobile-terminal-theme'
 import { TERMINAL_PATH_TAP_JS } from './terminal-path-tap-injected'
 import { XTERM_ENGINE_CSS, XTERM_ENGINE_JS } from './terminal-webview-engine.generated'
+import { TERMINAL_MOBILE_REFLOW_JS } from './terminal-webview-mobile-reflow-injected'
 import { TERMINAL_REFLOW_JS } from './terminal-webview-reflow-injected'
 import { TERMINAL_SCROLLBACK_PRESERVATION_JS } from './terminal-webview-scrollback-preservation-injected'
 import { TERMINAL_TAP_DISPATCH_JS } from './terminal-webview-tap-dispatch-injected'
@@ -263,13 +264,18 @@ window.onerror = function(msg) {
     return Math.max(MIN_FONT_PX, Math.round(BASE_FONT_PX * scale));
   }
   function normalizeTextScaleMode(mode) {
-    return mode === 'viewport-zoom' ? 'viewport-zoom' : 'font-size';
+    if (mode === 'viewport-zoom') return 'viewport-zoom';
+    if (mode === 'mobile-reflow') return 'mobile-reflow';
+    return 'font-size';
   }
   function isViewportZoomTextScale() {
     return textScaleMode === 'viewport-zoom';
   }
+  function usesCssTextScale() {
+    return isViewportZoomTextScale() || isMobileReflowSourceLayout();
+  }
   function persistentTextScaleMultiplier() {
-    return isViewportZoomTextScale() ? currentTextScale : 1;
+    return usesCssTextScale() ? currentTextScale : 1;
   }
   function isIOSWebView() {
     if (/iP(ad|hone|od)/.test(navigator.userAgent)) return true;
@@ -287,6 +293,25 @@ window.onerror = function(msg) {
     var previousTextScale = currentTextScale;
     currentTextScale = snapToTextScalePreset(scale);
     if (!term) {
+      if (previousTextScale !== currentTextScale) {
+        emitDiagnostic('text-scale', {
+          previousTextScale: previousTextScale,
+          requestedTextScale: scale,
+          appliedTextScale: currentTextScale
+        });
+      }
+      return;
+    }
+    if (isMobileReflowTextScale()) {
+      if (isMobileReflowSourceLayout()) {
+        userScale = 1;
+        clampPan();
+        updateTransform();
+        emitKeyboardAvoidanceMetrics();
+      } else {
+        markMobileProjectionDirty('text-scale');
+        requestMobileProjectionRefresh('text-scale');
+      }
       if (previousTextScale !== currentTextScale) {
         emitDiagnostic('text-scale', {
           previousTextScale: previousTextScale,
@@ -401,6 +426,11 @@ window.onerror = function(msg) {
       baseY: buffer ? buffer.baseY || 0 : 0,
       viewportY: buffer ? buffer.viewportY || 0 : 0
     };
+    if (isMobileReflowTextScale()) {
+      metrics.mobileLayout = mobileReflowLayout;
+      metrics.sourceCols = mobileSourceCols;
+      metrics.sourceRows = mobileSourceRows;
+    }
     if (extra && typeof extra === 'object') {
       var keys = Object.keys(extra);
       for (var i = 0; i < keys.length; i++) {
@@ -476,6 +506,9 @@ window.onerror = function(msg) {
     var termHeight = getLogicalTerminalHeight();
     if (termWidth <= 0 || termHeight <= 0) return 1;
     var widthScale = window.innerWidth / termWidth;
+    if (isMobileReflowSourceLayout()) {
+      return Math.max(widthScale, window.innerHeight / termHeight);
+    }
     if (!isViewportZoomTextScale()) return Math.min(1, widthScale);
     var heightScale = window.innerHeight / termHeight;
     // Preserve the PTY's original aspect ratio and cover the phone viewport.
@@ -537,6 +570,9 @@ window.onerror = function(msg) {
     document.documentElement.style.background = background;
     document.body.style.background = background;
     if (term) term.options.theme = terminalTheme;
+    if (mobileSourceTerm && mobileSourceTerm !== term) {
+      mobileSourceTerm.options.theme = terminalTheme;
+    }
   }
 
   function getCellHeight() {
@@ -580,7 +616,7 @@ window.onerror = function(msg) {
 
   function shouldPanViewportZoomGesture() {
     return (
-      isViewportZoomTextScale() &&
+      usesCssTextScale() &&
       currentTextScale * userScale > 1.001 &&
       (canPanScaledTerminalX() || canPanScaledTerminalY())
     );
@@ -718,6 +754,7 @@ window.onerror = function(msg) {
   }
 
 ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
+${TERMINAL_MOBILE_REFLOW_JS}
 
   function updateMouseModeFromData(data) {
     if (typeof data !== 'string' || data.length === 0) return;
@@ -856,7 +893,7 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     pumpWrites(terminalGeneration);
   }
 
-  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
+  function initDirect(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
     textScaleMode = normalizeTextScaleMode(nextTextScaleMode);
     if (typeof nextFontScale === 'number' && nextFontScale > 0) currentTextScale = snapToTextScalePreset(nextFontScale);
     // Why: a width-reflow re-stream rewraps the same content at new cols.
@@ -899,6 +936,7 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     preservePanOnNextFit = !!(oldTerm && preserveScroll);
     disposeTermObservers();
     if (oldTerm) {
+      trackRetiredTerminalReplacement(oldTerm, oldSurface);
       nextSurface = document.createElement('div');
       nextSurface.id = 'terminal-surface';
       nextSurface.style.visibility = 'hidden';
@@ -975,9 +1013,8 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
             nextSurface.style.position = '';
             nextSurface.style.left = '';
             nextSurface.style.top = '';
-            oldSurface.remove();
-            if (oldTerm) oldTerm.dispose();
           }
+          disposeMobileRetiredReplacements(term, surface);
           notify({ type: 'ready', cols: cols, rows: rows });
           emitDiagnostic('terminal-ready', {
             initialDataChars: typeof replayData === 'string' ? replayData.length : 0,
@@ -989,8 +1026,41 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     });
   }
 
+  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
+    var nextMode = normalizeTextScaleMode(nextTextScaleMode);
+    if (nextMode === 'mobile-reflow') {
+      initMobileReflow(
+        cols,
+        rows,
+        initialData,
+        nextTheme,
+        nextFontScale,
+        preserveScroll,
+        nextOscLinks,
+        preserveFullInitialData
+      );
+      return;
+    }
+    disposeMobileSourceTerm(term);
+    initDirect(
+      cols,
+      rows,
+      initialData,
+      nextTheme,
+      nextFontScale,
+      preserveScroll,
+      nextOscLinks,
+      nextMode,
+      preserveFullInitialData
+    );
+  }
+
   function write(data) {
     updateMouseModeFromData(data);
+    if (isMobileReflowTextScale()) {
+      writeMobileReflow(data);
+      return;
+    }
     enqueueWrite(data);
     pumpWrites(terminalGeneration);
     // Why: first live data chunk after init may widen the buffer past
@@ -1008,6 +1078,10 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
   }
 
   function resize(cols, rows) {
+    if (isMobileReflowTextScale()) {
+      resizeMobileSource(cols, rows, 'resize-msg');
+      return;
+    }
     if (!term) return;
     initRows = rows || initRows;
     term.resize(cols || term.cols, rows || term.rows);
@@ -1187,16 +1261,25 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
       // currentTextScale) so the post-pinch state isn't reset; only apply changes.
       var nextFontScale = snapToTextScalePreset(msg.fontScale);
       if (nextFontScale !== currentTextScale) {
-        userScale = 1;
-        if (!isViewportZoomTextScale()) {
+        var previousFontScale = currentTextScale;
+        userScale = isMobileReflowAdaptiveLayout()
+          ? nextFontScale / previousFontScale
+          : 1;
+        if (!usesCssTextScale() && !isMobileReflowAdaptiveLayout()) {
           panX = 0;
           panY = 0;
         }
         applyTextScale(nextFontScale);
+        if (isMobileReflowAdaptiveLayout()) updateTransform();
       }
     } else if (msg.type === 'resize') {
       resize(msg.cols, msg.rows);
-    } else if (msg.type === 'reflow') { reflow(msg.cols, msg.rows);
+    } else if (msg.type === 'reflow') {
+      if (isMobileReflowTextScale()) {
+        resizeMobileSource(msg.cols, msg.rows, 'reflow-msg');
+      } else {
+        reflow(msg.cols, msg.rows);
+      }
     } else if (msg.type === 'write') {
       write(msg.data);
     } else if (msg.type === 'clear') {
@@ -1212,7 +1295,12 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
       initialOscLinks = [];
       initialOscLinkRowOffset = 0;
       initialOscLinkEvictionReady = false;
-      if (term) { term.clear(); term.reset(); }
+      if (isMobileReflowTextScale()) {
+        clearMobileReflowTerminals();
+      } else if (term) {
+        term.clear();
+        term.reset();
+      }
       emitModesIfChanged();
       emitKeyboardAvoidanceMetrics();
       resetEvictionCounter();
@@ -1223,7 +1311,11 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     } else if (msg.type === 'measure') {
       measureFitDimensions(msg.containerHeight);
     } else if (msg.type === 'reset-zoom') {
-      applyFitScale('reset-zoom-msg');
+      if (isMobileReflowAdaptiveLayout()) {
+        scheduleMobileProjectionRecovery('reset-zoom-msg');
+      } else {
+        applyFitScale('reset-zoom-msg');
+      }
     } else if (msg.type === 'reveal-live-input') {
       revealLiveInput();
     } else if (msg.type === 'restore-keyboard-viewport') {
@@ -1324,11 +1416,16 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
   }
 
   function emitModesIfChanged() {
-    if (!term) return;
-    var bp = !!(term.modes && term.modes.bracketedPasteMode);
+    var protocolTerm = mobileProtocolTerm();
+    if (!protocolTerm) return;
+    var bp = !!(protocolTerm.modes && protocolTerm.modes.bracketedPasteMode);
     var alt = false;
     var mouseTrackingMode = getMouseTrackingMode();
-    try { alt = term.buffer && term.buffer.active && term.buffer.active.type === 'alternate'; } catch (e) {}
+    try {
+      alt = protocolTerm.buffer
+        && protocolTerm.buffer.active
+        && protocolTerm.buffer.active.type === 'alternate';
+    } catch (e) {}
     if (
       bp !== lastEmittedModes.bracketedPasteMode ||
       alt !== lastEmittedModes.altScreen ||
@@ -1482,16 +1579,27 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
 
   function isAlternateBufferActive() {
     try {
-      return !!(term && term.buffer && term.buffer.active && term.buffer.active.type === 'alternate');
+      var protocolTerm = mobileProtocolTerm();
+      return !!(
+        protocolTerm &&
+        protocolTerm.buffer &&
+        protocolTerm.buffer.active &&
+        protocolTerm.buffer.active.type === 'alternate'
+      );
     } catch (e) {
       return false;
     }
   }
 
   function getMouseTrackingMode() {
+    var protocolTerm = mobileProtocolTerm();
     try {
-      if (term && term.modes && typeof term.modes.mouseTrackingMode === 'string') {
-        var mode = term.modes.mouseTrackingMode;
+      if (
+        protocolTerm &&
+        protocolTerm.modes &&
+        typeof protocolTerm.modes.mouseTrackingMode === 'string'
+      ) {
+        var mode = protocolTerm.modes.mouseTrackingMode;
         if (mode === 'x10' || mode === 'vt200' || mode === 'drag' || mode === 'any') return mode;
         return 'none';
       }
@@ -1515,8 +1623,15 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
 
   function buildArrowScrollSequence(lines) {
     var prefix = '[';
+    var protocolTerm = mobileProtocolTerm();
     try {
-      if (term && term.modes && term.modes.applicationCursorKeysMode) prefix = 'O';
+      if (
+        protocolTerm &&
+        protocolTerm.modes &&
+        protocolTerm.modes.applicationCursorKeysMode
+      ) {
+        prefix = 'O';
+      }
     } catch (e) {}
     return ESC + prefix + (lines < 0 ? 'A' : 'B');
   }
@@ -2178,9 +2293,11 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
         // remote replay grid unchanged.
         var target = snapToTextScalePreset(currentTextScale * userScale);
         var changed = target !== currentTextScale;
-        var keepViewportPan = isViewportZoomTextScale();
-        userScale = 1;
-        if (!keepViewportPan) {
+        var keepViewportPan = usesCssTextScale();
+        var keepAdaptivePreview = isMobileReflowAdaptiveLayout();
+        var previewScale = userScale;
+        userScale = keepAdaptivePreview ? previewScale : 1;
+        if (!keepViewportPan && !keepAdaptivePreview) {
           panX = 0; panY = 0;
         }
         applyTextScale(target);
@@ -2271,7 +2388,15 @@ ${TERMINAL_SCROLLBACK_PRESERVATION_JS}
     // size update). Re-fit so the scale matches the new vpWidth — without
     // this, opening the keyboard leaves the terminal at the old scale even
     // though there's now less vertical room and the fit ratio may differ.
-    applyFitScale('window-resize');
+    if (isMobileReflowAdaptiveLayout()) {
+      requestAnimationFrame(function() {
+        if (!resizeMobileProjectionForViewport('window-resize')) {
+          scheduleMobileProjectionRecovery('window-resize');
+        }
+      });
+    } else {
+      applyFitScale('window-resize');
+    }
     adjustRowsForViewport();
     repositionOverlay();
     clampPan();

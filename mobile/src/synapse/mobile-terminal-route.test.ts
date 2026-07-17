@@ -183,8 +183,11 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('saveTerminalTextScale(scale)')
     expect(routeSource).toContain('const [terminalTextScale, setTerminalTextScale] = useState(1)')
     expect(routeSource).toContain('textScale={terminalTextScale}')
-    expect(routeSource).toContain('textScaleMode="viewport-zoom"')
+    expect(routeSource).toContain('textScaleMode="mobile-reflow"')
     expect(routeSource).toContain('onTextScaleChange={handleTextScaleChange}')
+    expect(routeSource).toContain(
+      'onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}'
+    )
   })
 
   it('exposes bounded copyable terminal diagnostics directly on mobile', () => {

@@ -10,6 +10,10 @@ const terminalHtmlSource = readFileSync(
   new URL('./terminal-webview-html.ts', import.meta.url),
   'utf8'
 )
+const mobileReflowSource = readFileSync(
+  new URL('./terminal-webview-mobile-reflow-injected.ts', import.meta.url),
+  'utf8'
+)
 
 function extractStatusDotNormalizer() {
   const declarationStart = terminalHtmlSource.indexOf('  var CLAUDE_STATUS_DOT =')
@@ -117,7 +121,7 @@ describe('TerminalWebView text zoom', () => {
   })
 
   it('resets pending Claude status dot selector state when the terminal lifecycle resets', () => {
-    const initStart = terminalHtmlSource.indexOf('function init(')
+    const initStart = terminalHtmlSource.indexOf('function initDirect(')
     const initReplay = terminalHtmlSource.indexOf(
       'var replayData = preserveFullInitialData ? initialData : normalizeInitialData(initialData)'
     )
@@ -130,6 +134,8 @@ describe('TerminalWebView text zoom', () => {
     expect(terminalHtmlSource.slice(initStart, initReplay)).toContain(
       'statusDotPendingSelector = false'
     )
+    expect(mobileReflowSource).toContain('function initMobileReflow(')
+    expect(mobileReflowSource).toContain('statusDotPendingSelector = false;')
     expect(terminalHtmlSource.slice(clearStart, clearEnd)).toContain(
       'statusDotPendingSelector = false'
     )
@@ -209,7 +215,8 @@ describe('TerminalWebView text zoom', () => {
   })
 
   it('supports viewport zoom text scaling for remote snapshots without changing xterm font metrics', () => {
-    expect(terminalHtmlSource).toContain("mode === 'viewport-zoom' ? 'viewport-zoom' : 'font-size'")
+    expect(terminalHtmlSource).toContain("if (mode === 'viewport-zoom') return 'viewport-zoom'")
+    expect(terminalHtmlSource).toContain("if (mode === 'mobile-reflow') return 'mobile-reflow'")
     expect(terminalHtmlSource).toContain('function isViewportZoomTextScale()')
     expect(terminalHtmlSource).toContain('persistentTextScaleMultiplier() * userScale')
     expect(terminalHtmlSource).toContain('function getLogicalTerminalWidth()')
@@ -221,5 +228,10 @@ describe('TerminalWebView text zoom', () => {
     expect(terminalHtmlSource).toContain(
       'fontSize: fontPxForScale(isViewportZoomTextScale() ? 1 : currentTextScale)'
     )
+  })
+
+  it('uses the pinch scale immediately when mobile reflow requests an atomic replay', () => {
+    expect(terminalWebViewSource).toContain('textScaleRef.current = scale')
+    expect(terminalWebViewSource).toContain('fontScale: textScaleRef.current')
   })
 })
