@@ -204,7 +204,7 @@ export const TERMINAL_ACCESSORY_KEYS: TerminalAccessoryKey[] = [
   { id: 'tab', label: 'Tab', bytes: '\t', accessibilityLabel: 'Tab' },
   { id: 'enter', label: 'Enter', bytes: '\r', accessibilityLabel: 'Enter' },
   // Why: terminal apps recognize ESC [ Z as the reverse-tab sequence.
-  { id: 'shiftTab', label: 'Shift+Tab', bytes: '\x1b[Z', accessibilityLabel: 'Shift Tab' },
+  { id: 'shiftTab', label: '⇧Tab', bytes: '\x1b[Z', accessibilityLabel: 'Shift Tab' },
   { id: 'space', label: 'Space', bytes: ' ', accessibilityLabel: 'Space' },
   { id: 'backspace', label: '⌫', bytes: '\x7f', accessibilityLabel: 'Backspace', repeatable: true },
   {
@@ -236,6 +236,8 @@ export const TERMINAL_ACCESSORY_KEYS: TerminalAccessoryKey[] = [
     accessibilityLabel: 'Arrow Right',
     repeatable: true
   },
+  { id: 'home', label: 'Home', bytes: '\x1b[H', accessibilityLabel: 'Home' },
+  { id: 'end', label: 'End', bytes: '\x1b[F', accessibilityLabel: 'End' },
   { id: 'ctrlC', label: 'Ctrl+C', bytes: '\x03', accessibilityLabel: 'Interrupt terminal' },
   { id: 'ctrlD', label: 'Ctrl+D', bytes: '\x04', accessibilityLabel: 'Send EOF' },
   { id: 'ctrlL', label: 'Ctrl+L', bytes: '\x0c', accessibilityLabel: 'Clear screen' },

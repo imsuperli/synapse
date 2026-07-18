@@ -8,9 +8,24 @@ describe('TERMINAL_ACCESSORY_KEYS', () => {
 
     expect(key).toEqual({
       id: 'shiftTab',
-      label: 'Shift+Tab',
+      label: '⇧Tab',
       bytes: '\x1b[Z',
       accessibilityLabel: 'Shift Tab'
+    })
+  })
+
+  it('includes Home and End navigation keys', () => {
+    expect(TERMINAL_ACCESSORY_KEYS.find((candidate) => candidate.id === 'home')).toEqual({
+      id: 'home',
+      label: 'Home',
+      bytes: '\x1b[H',
+      accessibilityLabel: 'Home'
+    })
+    expect(TERMINAL_ACCESSORY_KEYS.find((candidate) => candidate.id === 'end')).toEqual({
+      id: 'end',
+      label: 'End',
+      bytes: '\x1b[F',
+      accessibilityLabel: 'End'
     })
   })
 

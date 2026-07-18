@@ -159,6 +159,10 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('uses terminal live input wiring for the command dock', () => {
     expect(routeSource).toContain('useTerminalLiveInputCommit({')
     expect(routeSource).toContain('MobileTerminalLiveInputStatus')
+    expect(routeSource).toContain('buildTerminalAccessoryPages(accessoryKeys)')
+    expect(routeSource).toContain('pagingEnabled')
+    expect(routeSource).toContain('disableIntervalMomentum')
+    expect(routeSource).toContain('TERMINAL_ACCESSORY_PAGE_COLUMNS')
     expect(routeSource).toContain('createTerminalLiveAccessoryInput(key)')
     expect(routeSource).toContain('onPressIn={() => {')
     expect(routeSource).toContain('startAccessoryRepeat(input)')

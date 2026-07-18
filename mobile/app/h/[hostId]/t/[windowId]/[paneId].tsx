@@ -12,6 +12,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
   type KeyboardEvent,
   type LayoutChangeEvent,
 } from 'react-native'
@@ -54,6 +55,10 @@ import {
   getDefaultTerminalAccessoryBuiltInIds,
   getVisibleTerminalAccessoryKeys
 } from '../../../../../src/terminal/terminal-accessory-layout'
+import {
+  buildTerminalAccessoryPages,
+  TERMINAL_ACCESSORY_PAGE_COLUMNS
+} from '../../../../../src/terminal/terminal-accessory-pages'
 import { createTerminalLiveAccessoryInput } from '../../../../../src/terminal/terminal-live-accessory-input'
 import {
   clearTerminalLiveInputFocusTimer,
@@ -585,6 +590,7 @@ export default function RemoteTerminalScreen() {
   const [historyNotice, setHistoryNotice] = useState<string | null>(null)
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false)
   const [diagnosticsRevision, setDiagnosticsRevision] = useState(0)
+  const { width: accessoryPageWidth } = useWindowDimensions()
   const logsRef = useRef<ConnectionLogEntry[]>([])
   const liveInputTerminalHandles = useMemo(() => new Set([terminalHandle]), [terminalHandle])
   const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set([terminalHandle]))
@@ -592,6 +598,7 @@ export default function RemoteTerminalScreen() {
     () => getVisibleTerminalAccessoryKeys(getDefaultTerminalAccessoryBuiltInIds()),
     []
   )
+  const accessoryPages = useMemo(() => buildTerminalAccessoryPages(accessoryKeys), [accessoryKeys])
 
   useEffect(() => {
     if (!historyNotice) {
@@ -2986,60 +2993,109 @@ export default function RemoteTerminalScreen() {
         <View style={styles.accessoryBar}>
           <ScrollView
             horizontal
+            pagingEnabled
+            bounces={false}
+            decelerationRate="fast"
+            disableIntervalMomentum
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.accessoryContent}
+            contentContainerStyle={styles.accessoryPages}
             keyboardShouldPersistTaps="always"
+            onScrollBeginDrag={stopAccessoryRepeat}
           >
-            <Pressable
-              style={({ pressed }) => [
-                styles.accessoryKey,
-                pressed && styles.accessoryKeyPressed,
-                !canSend && styles.accessoryKeyDisabled
-              ]}
-              disabled={!canSend}
-              onPress={() => void handlePaste()}
-              accessibilityLabel={t('terminal.pasteAccessibility')}
-            >
-              <Text style={[styles.accessoryKeyText, !canSend && styles.accessoryKeyTextDisabled]}>
-                {t('terminal.paste')}
-              </Text>
-            </Pressable>
-            {accessoryKeys.map((key) => (
-              <Pressable
-                key={key.id}
-                style={({ pressed }) => [
-                  styles.accessoryKey,
-                  pressed && styles.accessoryKeyPressed,
-                  !canSend && styles.accessoryKeyDisabled
-                ]}
-                disabled={!canSend}
-                onPressIn={() => {
-                  if (!key.repeatable) {
-                    return
-                  }
-                  const input = createTerminalLiveAccessoryInput(key)
-                  void handleAccessoryKey(input)
-                  startAccessoryRepeat(input)
-                }}
-                onPressOut={() => {
-                  if (key.repeatable) {
-                    stopAccessoryRepeat()
-                  }
-                }}
-                onPress={() => {
-                  if (key.repeatable) {
-                    return
-                  }
-                  void handleAccessoryKey(createTerminalLiveAccessoryInput(key))
-                }}
-                accessibilityLabel={key.accessibilityLabel ?? t('terminal.sendKey', { key: key.label })}
+            {accessoryPages.map((page, pageIndex) => (
+              <View
+                key={`accessory-page-${pageIndex}`}
+                style={[styles.accessoryPage, { width: accessoryPageWidth }]}
               >
-                <Text
-                  style={[styles.accessoryKeyText, !canSend && styles.accessoryKeyTextDisabled]}
-                >
-                  {key.label}
-                </Text>
-              </Pressable>
+                {Array.from({ length: 2 }, (_, rowIndex) => (
+                  <View key={`accessory-row-${rowIndex}`} style={styles.accessoryRow}>
+                    {page
+                      .slice(
+                        rowIndex * TERMINAL_ACCESSORY_PAGE_COLUMNS,
+                        (rowIndex + 1) * TERMINAL_ACCESSORY_PAGE_COLUMNS
+                      )
+                      .map((slot, columnIndex) => {
+                        const slotKey = `${rowIndex}-${columnIndex}`
+                        if (!slot) {
+                          return <View key={slotKey} style={styles.accessoryKeyPlaceholder} />
+                        }
+                        if (slot.type === 'paste') {
+                          return (
+                            <Pressable
+                              key={slot.id}
+                              style={({ pressed }) => [
+                                styles.accessoryKey,
+                                pressed && styles.accessoryKeyPressed,
+                                !canSend && styles.accessoryKeyDisabled
+                              ]}
+                              disabled={!canSend}
+                              onPress={() => void handlePaste()}
+                              accessibilityLabel={t('terminal.pasteAccessibility')}
+                            >
+                              <Text
+                                numberOfLines={1}
+                                adjustsFontSizeToFit
+                                minimumFontScale={0.75}
+                                style={[
+                                  styles.accessoryKeyText,
+                                  !canSend && styles.accessoryKeyTextDisabled
+                                ]}
+                              >
+                                {t('terminal.paste')}
+                              </Text>
+                            </Pressable>
+                          )
+                        }
+                        const key = slot.key
+                        return (
+                          <Pressable
+                            key={slot.id}
+                            style={({ pressed }) => [
+                              styles.accessoryKey,
+                              pressed && styles.accessoryKeyPressed,
+                              !canSend && styles.accessoryKeyDisabled
+                            ]}
+                            disabled={!canSend}
+                            onPressIn={() => {
+                              if (!key.repeatable) {
+                                return
+                              }
+                              const input = createTerminalLiveAccessoryInput(key)
+                              void handleAccessoryKey(input)
+                              startAccessoryRepeat(input)
+                            }}
+                            onPressOut={() => {
+                              if (key.repeatable) {
+                                stopAccessoryRepeat()
+                              }
+                            }}
+                            onPress={() => {
+                              if (key.repeatable) {
+                                return
+                              }
+                              void handleAccessoryKey(createTerminalLiveAccessoryInput(key))
+                            }}
+                            accessibilityLabel={
+                              key.accessibilityLabel ?? t('terminal.sendKey', { key: key.label })
+                            }
+                          >
+                            <Text
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.75}
+                              style={[
+                                styles.accessoryKeyText,
+                                !canSend && styles.accessoryKeyTextDisabled
+                              ]}
+                            >
+                              {key.label}
+                            </Text>
+                          </Pressable>
+                        )
+                      })}
+                  </View>
+                ))}
+              </View>
             ))}
           </ScrollView>
         </View>
@@ -3276,18 +3332,32 @@ const styles = StyleSheet.create({
     borderTopColor: colors.borderSubtle,
     backgroundColor: colors.bgPanel
   },
-  accessoryContent: {
+  accessoryPages: {
+    flexDirection: 'row'
+  },
+  accessoryPage: {
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
     gap: spacing.xs
   },
+  accessoryRow: {
+    flexDirection: 'row',
+    gap: spacing.xs
+  },
   accessoryKey: {
+    flex: 1,
+    minWidth: 0,
+    height: 30,
     backgroundColor: colors.bgRaised,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs,
+    paddingHorizontal: 2,
     borderRadius: radii.button,
-    minWidth: 36,
-    alignItems: 'center'
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  accessoryKeyPlaceholder: {
+    flex: 1,
+    minWidth: 0,
+    height: 30
   },
   accessoryKeyPressed: {
     backgroundColor: colors.borderSubtle
@@ -3298,7 +3368,8 @@ const styles = StyleSheet.create({
   accessoryKeyText: {
     color: colors.textSecondary,
     fontFamily: typography.monoFamily,
-    fontSize: 12
+    fontSize: 11,
+    textAlign: 'center'
   },
   accessoryKeyTextDisabled: {
     color: colors.textMuted
