@@ -45,8 +45,8 @@ export const colors = {
   syntaxVariable: '#9cdcfe',
   syntaxMeta: '#c586c0',
 
-  // Terminal WebView background (Tokyonight) — separate from app chrome
-  terminalBg: '#1a1b26'
+  // Terminal WebView and mobile terminal controls share a seamless black surface.
+  terminalBg: '#000000'
 } as const
 
 export const spacing = {

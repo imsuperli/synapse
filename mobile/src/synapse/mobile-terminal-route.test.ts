@@ -5,6 +5,7 @@ const routeSource = readFileSync(
   new URL('../../app/h/[hostId]/t/[windowId]/[paneId].tsx', import.meta.url),
   'utf8'
 )
+const mobileThemeSource = readFileSync(new URL('../theme/mobile-theme.ts', import.meta.url), 'utf8')
 
 describe('Synapse Mobile terminal route wiring', () => {
   it('subscribes to a binary terminal stream before rendering live output', () => {
@@ -158,7 +159,7 @@ describe('Synapse Mobile terminal route wiring', () => {
 
   it('uses terminal live input wiring for the command dock', () => {
     expect(routeSource).toContain('useTerminalLiveInputCommit({')
-    expect(routeSource).toContain('MobileTerminalLiveInputStatus')
+    expect(routeSource).not.toContain('MobileTerminalLiveInputStatus')
     expect(routeSource).toContain('buildTerminalAccessoryPages(accessoryKeys)')
     expect(routeSource).toContain('pagingEnabled')
     expect(routeSource).toContain('disableIntervalMomentum')
@@ -169,6 +170,26 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('stopAccessoryRepeat()')
     expect(routeSource).toContain('flushPendingLiveInputBeforeExternalSend(terminalHandle)')
     expect(routeSource).toContain('transform: [{ translateY: -keyboardLift }]')
+    expect(routeSource).toContain('style={styles.liveInputCapture}')
+    expect(routeSource).not.toContain('<View style={styles.liveInputBar}>')
+  })
+
+  it('opens the software keyboard from terminal taps with a header fallback', () => {
+    expect(routeSource).toContain('onTerminalTap={(targetHandle) => {')
+    expect(routeSource).toContain('if (targetHandle === activeHandleRef.current) {')
+    expect(routeSource).toContain('onPress={focusLiveInput}')
+    expect(routeSource).toContain('<KeyboardIcon size={18} color={colors.textPrimary} />')
+    expect(routeSource).toContain("accessibilityLabel={t('terminal.showKeyboard')}")
+  })
+
+  it('uses a seamless black terminal with text-only accessory keys', () => {
+    expect(mobileThemeSource).toContain("terminalBg: '#000000'")
+    expect(routeSource).toContain('black: colors.terminalBg')
+    expect(routeSource).toContain('backgroundColor: colors.terminalBg')
+    expect(routeSource).toContain("accessoryKeyPressed: {\n    opacity: 0.65")
+    expect(routeSource).not.toContain(
+      "accessoryKeyPressed: {\n    backgroundColor: colors.borderSubtle"
+    )
   })
 
   it('places terminal actions in the native header without a second toolbar row', () => {

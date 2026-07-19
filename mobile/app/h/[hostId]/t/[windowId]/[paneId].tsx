@@ -50,7 +50,6 @@ import {
   type RemoteWindowGroupSummary,
   type RemotePaneSummary
 } from '../../../../../src/synapse/remote'
-import { MobileTerminalLiveInputStatus } from '../../../../../src/session/MobileTerminalLiveInputStatus'
 import {
   getDefaultTerminalAccessoryBuiltInIds,
   getVisibleTerminalAccessoryKeys
@@ -429,7 +428,7 @@ const terminalTheme: MobileTerminalTheme = {
     cursor: colors.textPrimary,
     cursorAccent: colors.terminalBg,
     selectionBackground: 'rgba(59,130,246,0.35)',
-    black: '#1f2335',
+    black: colors.terminalBg,
     red: '#f7768e',
     green: '#9ece6a',
     yellow: '#e0af68',
@@ -2650,7 +2649,6 @@ export default function RemoteTerminalScreen() {
     terminalFrameHeight,
     metrics: terminalKeyboardMetrics
   })
-  const passiveDictationState = { isStarting: false, isRecording: false, isProcessing: false }
   const showGroupWindowTabs = groupWindowTabs.length > 1
   const openDiagnostics = useCallback(() => {
     diagnosticsVisibleRef.current = true
@@ -2715,6 +2713,16 @@ export default function RemoteTerminalScreen() {
           headerTitle: '',
           headerRight: () => (
             <View style={styles.navActions}>
+              <Pressable
+                style={[styles.navIconButton, !canSend && styles.iconButtonDisabled]}
+                disabled={!canSend}
+                onPress={focusLiveInput}
+                accessibilityRole="button"
+                accessibilityLabel={t('terminal.showKeyboard')}
+                accessibilityHint={t('terminal.showKeyboardHint')}
+              >
+                <KeyboardIcon size={18} color={colors.textPrimary} />
+              </Pressable>
               <Pressable
                 style={styles.navIconButton}
                 onPress={openDiagnostics}
@@ -2943,7 +2951,11 @@ export default function RemoteTerminalScreen() {
                   handleTerminalInput(bytes)
                 }
               }}
-              onTerminalTap={() => {}}
+              onTerminalTap={(targetHandle) => {
+                if (targetHandle === activeHandleRef.current) {
+                  focusLiveInput()
+                }
+              }}
               onFileTap={() => {}}
               onOpenUrl={() => {}}
               onTextScaleChange={handleTextScaleChange}
@@ -3100,43 +3112,26 @@ export default function RemoteTerminalScreen() {
           </ScrollView>
         </View>
 
-        <View style={styles.liveInputBar}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.liveInputFocusTarget,
-              pressed && styles.liveInputFocusTargetPressed,
-              !canSend && styles.liveInputFocusTargetDisabled
-            ]}
-            disabled={!canSend}
-            onPress={focusLiveInput}
-            accessibilityRole="button"
-            accessibilityLabel={t('terminal.showKeyboard')}
-            accessibilityHint={t('terminal.showKeyboardHint')}
-          >
-            <KeyboardIcon size={16} color={colors.textSecondary} strokeWidth={2} />
-            <MobileTerminalLiveInputStatus dictation={passiveDictationState} isAttaching={false} />
-          </Pressable>
-          <TextInput
-            ref={liveInputRef}
-            style={styles.liveInputCapture}
-            value={liveInputCapture}
-            onChangeText={handleLiveInputChange}
-            onKeyPress={handleLiveInputKeyPress}
-            onSubmitEditing={handleLiveInputSubmit}
-            placeholder=""
-            showSoftInputOnFocus
-            autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
-            smartInsertDelete={false}
-            autoComplete="off"
-            keyboardType={getTerminalLiveInputKeyboardType(Platform.OS)}
-            returnKeyType="default"
-            blurOnSubmit={false}
-            editable={canSend}
-            importantForAutofill="no"
-          />
-        </View>
+        <TextInput
+          ref={liveInputRef}
+          style={styles.liveInputCapture}
+          value={liveInputCapture}
+          onChangeText={handleLiveInputChange}
+          onKeyPress={handleLiveInputKeyPress}
+          onSubmitEditing={handleLiveInputSubmit}
+          placeholder=""
+          showSoftInputOnFocus
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          smartInsertDelete={false}
+          autoComplete="off"
+          keyboardType={getTerminalLiveInputKeyboardType(Platform.OS)}
+          returnKeyType="default"
+          blurOnSubmit={false}
+          editable={canSend}
+          importantForAutofill="no"
+        />
       </View>
       </View>
     </>
@@ -3325,12 +3320,11 @@ const styles = StyleSheet.create({
     fontSize: typography.metaSize
   },
   commandDock: {
-    zIndex: 20
+    zIndex: 20,
+    backgroundColor: colors.terminalBg
   },
   accessoryBar: {
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-    backgroundColor: colors.bgPanel
+    backgroundColor: colors.terminalBg
   },
   accessoryPages: {
     flexDirection: 'row'
@@ -3348,9 +3342,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     height: 30,
-    backgroundColor: colors.bgRaised,
     paddingHorizontal: 2,
-    borderRadius: radii.button,
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -3360,7 +3352,7 @@ const styles = StyleSheet.create({
     height: 30
   },
   accessoryKeyPressed: {
-    backgroundColor: colors.borderSubtle
+    opacity: 0.65
   },
   accessoryKeyDisabled: {
     opacity: 0.35
@@ -3373,35 +3365,6 @@ const styles = StyleSheet.create({
   },
   accessoryKeyTextDisabled: {
     color: colors.textMuted
-  },
-  liveInputBar: {
-    minHeight: 46,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-    backgroundColor: colors.bgPanel
-  },
-  liveInputFocusTarget: {
-    flex: 1,
-    minHeight: 34,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.bgRaised,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    borderRadius: radii.input,
-    paddingHorizontal: spacing.sm + 2
-  },
-  liveInputFocusTargetPressed: {
-    backgroundColor: colors.borderSubtle
-  },
-  liveInputFocusTargetDisabled: {
-    opacity: 0.45
   },
   liveInputCapture: {
     position: 'absolute',
