@@ -105,9 +105,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       fontWeightBold: '500',
       scrollback: scrollback,
       disableStdin: true,
-      cursorBlink: false,
-      cursorStyle: 'block',
-      cursorInactiveStyle: 'block',
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      cursorInactiveStyle: 'bar',
+      cursorWidth: 3,
       convertEol: false,
       allowProposedApi: true
     });

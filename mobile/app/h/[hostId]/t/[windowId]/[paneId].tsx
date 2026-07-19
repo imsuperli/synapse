@@ -425,7 +425,7 @@ const terminalTheme: MobileTerminalTheme = {
   theme: {
     background: colors.terminalBg,
     foreground: colors.textPrimary,
-    cursor: colors.textPrimary,
+    cursor: '#ffffff',
     cursorAccent: colors.terminalBg,
     selectionBackground: 'rgba(59,130,246,0.35)',
     black: colors.terminalBg,
@@ -3358,9 +3358,10 @@ const styles = StyleSheet.create({
     opacity: 0.35
   },
   accessoryKeyText: {
-    color: colors.textSecondary,
+    color: '#ffffff',
     fontFamily: typography.monoFamily,
     fontSize: 11,
+    fontWeight: '700',
     textAlign: 'center'
   },
   accessoryKeyTextDisabled: {

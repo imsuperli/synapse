@@ -14,7 +14,7 @@ import { URL_TAP_WEBVIEW_JS } from './terminal-webview-url-tap'
 const DEFAULT_TERMINAL_THEME: MobileTerminalTheme['theme'] = {
   background: colors.terminalBg,
   foreground: '#c0caf5',
-  cursor: '#c0caf5',
+  cursor: '#ffffff',
   cursorAccent: colors.terminalBg,
   selectionBackground: '#33467c',
   selectionForeground: '#c0caf5',
@@ -963,12 +963,13 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       fontWeightBold: '500',
       scrollback: 30000,
       disableStdin: true,
-      cursorBlink: false,
+      cursorBlink: true,
       // RN owns keyboard focus through its hidden TextInput, so this xterm is
-      // intentionally unfocused while the user types. Keep the inactive cursor
-      // visible and use a block that survives phone-width viewport scaling.
-      cursorStyle: 'block',
-      cursorInactiveStyle: 'block',
+      // intentionally unfocused while the user types. Use the same high-contrast
+      // bar in both focus states so the insertion point stays precise and visible.
+      cursorStyle: 'bar',
+      cursorInactiveStyle: 'bar',
+      cursorWidth: 3,
       convertEol: false,
       allowProposedApi: true
     });

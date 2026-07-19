@@ -131,8 +131,10 @@ describe('terminal WebView bundled engine', () => {
     expect(terminalEnd).toBeGreaterThan(terminalStart)
     const terminalOptions = terminalHtmlSource.slice(terminalStart, terminalEnd)
 
-    expect(terminalOptions).toContain("cursorStyle: 'block'")
-    expect(terminalOptions).toContain("cursorInactiveStyle: 'block'")
+    expect(terminalOptions).toContain('cursorBlink: true')
+    expect(terminalOptions).toContain("cursorStyle: 'bar'")
+    expect(terminalOptions).toContain("cursorInactiveStyle: 'bar'")
+    expect(terminalOptions).toContain('cursorWidth: 3')
     expect(terminalOptions).not.toContain("cursorInactiveStyle: 'none'")
   })
 

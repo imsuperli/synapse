@@ -285,6 +285,13 @@ const settle = (milliseconds = 80): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 describe("terminal WebView mobile reflow", () => {
+  it("keeps a high-contrast cursor visible in the adaptive projection", () => {
+    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorBlink: true");
+    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorStyle: 'bar'");
+    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorInactiveStyle: 'bar'");
+    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorWidth: 3");
+  });
+
   beforeEach(() => {
     Object.defineProperty(window, "innerWidth", { value: 360, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: 630, configurable: true });

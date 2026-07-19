@@ -185,7 +185,10 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('uses a seamless black terminal with text-only accessory keys', () => {
     expect(mobileThemeSource).toContain("terminalBg: '#000000'")
     expect(routeSource).toContain('black: colors.terminalBg')
+    expect(routeSource).toContain("cursor: '#ffffff'")
     expect(routeSource).toContain('backgroundColor: colors.terminalBg')
+    expect(routeSource).toContain("color: '#ffffff'")
+    expect(routeSource).toContain("fontWeight: '700'")
     expect(routeSource).toContain("accessoryKeyPressed: {\n    opacity: 0.65")
     expect(routeSource).not.toContain(
       "accessoryKeyPressed: {\n    backgroundColor: colors.borderSubtle"
