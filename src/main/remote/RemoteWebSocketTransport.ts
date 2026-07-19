@@ -78,6 +78,14 @@ export class RemoteWebSocketTransport {
     return sockets.length;
   }
 
+  terminateAllClientConnections(): number {
+    const sockets = this.wss ? Array.from(this.wss.clients) : [];
+    for (const ws of sockets) {
+      ws.terminate();
+    }
+    return sockets.length;
+  }
+
   get endpoint(): string | null {
     if (!this.httpServer) {
       return null;

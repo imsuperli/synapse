@@ -3360,7 +3360,7 @@ const styles = StyleSheet.create({
   accessoryKeyText: {
     color: '#ffffff',
     fontFamily: typography.monoFamily,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
     textAlign: 'center'
   },

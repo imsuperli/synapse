@@ -188,6 +188,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain("cursor: '#ffffff'")
     expect(routeSource).toContain('backgroundColor: colors.terminalBg')
     expect(routeSource).toContain("color: '#ffffff'")
+    expect(routeSource).toContain('fontSize: 12')
     expect(routeSource).toContain("fontWeight: '700'")
     expect(routeSource).toContain("accessoryKeyPressed: {\n    opacity: 0.65")
     expect(routeSource).not.toContain(

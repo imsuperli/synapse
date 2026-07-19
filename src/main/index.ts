@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, protocol, net } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, protocol, net, powerMonitor } from 'electron';
 import fs from 'fs-extra';
 import { hostname } from 'os';
 import path from 'path';
@@ -670,6 +670,11 @@ if (hasSingleInstanceLock) {
     });
     await remoteGateway.startFromSavedSettings().catch((error) => {
       console.error('[Main] Failed to restore remote gateway:', error);
+    });
+    powerMonitor.on('resume', () => {
+      void remoteGateway?.recoverFromSystemResume().catch((error) => {
+        console.error('[Main] Failed to recover remote gateway after system resume:', error);
+      });
     });
 
     // 初始化 TmuxCompatService（内部会创建 TmuxRpcServer）

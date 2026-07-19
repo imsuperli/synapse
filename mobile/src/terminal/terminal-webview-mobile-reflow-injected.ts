@@ -486,6 +486,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   function makeMobileSerializedProjectionReflowSafe(serialized) {
     if (typeof serialized !== 'string' || serialized.length === 0) return '';
     return serialized
+      .replace(/\x1b\[\?25l/g, '\x1b[?25h')
+      .replace(/\x9b\?25l/g, '\x1b[?25h')
       .replace(/\x1b\[(\d*)C/g, function(_match, countText) {
         var count = countText ? parseInt(countText, 10) : 1;
         if (!isFinite(count) || count <= 0) count = 1;
@@ -680,7 +682,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var replayData = preserveFullInitialData
       ? initialData
       : normalizeInitialData(initialData);
-    replayData = normalizeStatusDotPresentation(replayData || '');
+    replayData = normalizeStatusDotPresentation(replayData || '')
+      .replace(/\x1b\[\?25l/g, '\x1b[?25h')
+      .replace(/\x9b\?25l/g, '\x1b[?25h');
     mobileControlSequenceState = scanMobileControlSequenceState(replayData, 'ground');
     mobileCarriageReturnPending = replayData.charAt(replayData.length - 1) === '\r';
     updateMouseModeFromData(replayData);
@@ -871,6 +875,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     mobileWritesDraining = true;
     source.write(data, function() {
       if (generation !== terminalGeneration || source !== mobileSourceTerm) return;
+      ensureTerminalCursorVisible(source);
       mobileWritesDraining = false;
       handleMobileSourceBatch(data, safe);
       pumpMobileWrites();
@@ -878,7 +883,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   }
 
   function writeMobileReflow(data) {
-    var normalized = normalizeStatusDotPresentation(data);
+    var normalized = normalizeStatusDotPresentation(data)
+      .replace(/\x1b\[\?25l/g, '\x1b[?25h')
+      .replace(/\x9b\?25l/g, '\x1b[?25h');
     var previousControlSequenceState = mobileControlSequenceState;
     var previousCarriageReturnPending = mobileCarriageReturnPending;
     mobileControlSequenceState = scanMobileControlSequenceState(

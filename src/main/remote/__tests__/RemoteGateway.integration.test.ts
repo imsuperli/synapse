@@ -111,6 +111,52 @@ describe('RemoteGateway integration', () => {
     expect(gateway.listDevices()).toHaveLength(1);
   });
 
+  it('drops stale LAN clients on system resume and accepts the saved device token again', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    gateway = new RemoteGateway({
+      processManager: createProcessManager() as any,
+      userDataPath: tempDir,
+      hostName: 'Synapse Test',
+      appVersion: '9.9.9',
+      transportOptions: {
+        host: '127.0.0.1',
+        port: 0,
+      },
+    });
+    await gateway.start();
+
+    const pairing = gateway.createPairingOffer({ address: '127.0.0.1' });
+    expect(pairing.available).toBe(true);
+    if (!pairing.available) {
+      throw new Error('pairing unavailable');
+    }
+    const offer = parsePairingCode(pairing.pairingUrl);
+    expect(offer).not.toBeNull();
+
+    socket = await openWebSocket(offer!.endpoint);
+    await authenticateEncryptedClient(socket, offer!);
+    const closePromise = waitForClose(socket);
+
+    await gateway.recoverFromSystemResume();
+    await closePromise;
+    socket = await openWebSocket(offer!.endpoint);
+    const sharedKey = await authenticateEncryptedClient(socket, offer!);
+    socket.send(encrypt(JSON.stringify({
+      id: 'req-lan-after-system-resume',
+      method: REMOTE_METHODS.STATUS_GET,
+    }), sharedKey));
+
+    const statusMessage = decrypt(rawToString(await waitForMessage(socket)), sharedKey);
+    expect(JSON.parse(statusMessage ?? '')).toMatchObject({
+      id: 'req-lan-after-system-resume',
+      ok: true,
+      result: {
+        ok: true,
+        protocolVersion: 1,
+      },
+    });
+  }, 10_000);
+
   it('does not create pending pairing devices when endpoint validation fails', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
     gateway = new RemoteGateway({
@@ -370,6 +416,74 @@ describe('RemoteGateway integration', () => {
     const statusMessage = decrypt(rawToString(await waitForMessage(socket)), sharedKey);
     expect(JSON.parse(statusMessage ?? '')).toMatchObject({
       id: 'req-after-heartbeat-recovery',
+      ok: true,
+      result: {
+        ok: true,
+        protocolVersion: 1,
+      },
+    });
+  });
+
+  it('reconnects the saved relay session after system resume without re-pairing', async () => {
+    relay = new SynapseRelayServer({
+      host: '127.0.0.1',
+      port: 0,
+      heartbeatIntervalMs: 60_000,
+      cleanupIntervalMs: 60_000,
+    });
+    await relay.start();
+
+    tempDir = mkdtempSync(join(tmpdir(), 'synapse-remote-gateway-'));
+    gateway = new RemoteGateway({
+      processManager: createProcessManager() as any,
+      userDataPath: tempDir,
+      hostName: 'Synapse Test',
+      appVersion: '9.9.9',
+      transportOptions: {
+        host: '127.0.0.1',
+        port: 0,
+      },
+    });
+    await gateway.updateSettings({
+      enabled: true,
+      relayEnabled: true,
+      relayEndpoint: `${relay.endpoint}${relay.relayPath}`,
+    });
+
+    const pairing = gateway.createPairingOffer({});
+    expect(pairing.available).toBe(true);
+    if (!pairing.available) {
+      throw new Error('pairing unavailable');
+    }
+    const offer = parsePairingCode(pairing.pairingUrl);
+    expect(offer).not.toBeNull();
+
+    const relayHarness = gateway as unknown as RelayHealthHarness;
+    await waitFor(() => relayHarness.relaySockets.get(pairing.deviceId)?.readyState === WebSocket.OPEN);
+    const sleepingSocket = relayHarness.relaySockets.get(pairing.deviceId)!;
+
+    await gateway.recoverFromSystemResume();
+
+    await waitFor(() => {
+      const current = relayHarness.relaySockets.get(pairing.deviceId);
+      return Boolean(current && current !== sleepingSocket && current.readyState === WebSocket.OPEN);
+    });
+    expect(gateway.getDeviceRegistry().getDevice(pairing.deviceId)?.relaySessionId)
+      .toBe(offer!.relaySessionId);
+
+    socket = await openWebSocket(buildRelayClientUrl(offer!.relayEndpoint!, {
+      sessionId: offer!.relaySessionId!,
+      clientToken: offer!.relayClientToken!,
+    }));
+    const sharedKey = await authenticateEncryptedClient(socket, offer!);
+    socket.send(encrypt(JSON.stringify({
+      id: 'req-after-system-resume',
+      method: REMOTE_METHODS.STATUS_GET,
+    }), sharedKey));
+
+    const statusMessage = decrypt(rawToString(await waitForMessage(socket)), sharedKey);
+    expect(JSON.parse(statusMessage ?? '')).toMatchObject({
+      id: 'req-after-system-resume',
       ok: true,
       result: {
         ok: true,
@@ -676,6 +790,24 @@ function waitForMessage(ws: WebSocket): Promise<RawData> {
 
     ws.once('message', onMessage);
     ws.once('error', onError);
+  });
+}
+
+function waitForClose(ws: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for WebSocket close'));
+    }, 5_000);
+    const onClose = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off('close', onClose);
+    };
+    ws.once('close', onClose);
   });
 }
 

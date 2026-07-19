@@ -291,6 +291,24 @@ export class RemoteGateway {
     }
   }
 
+  async recoverFromSystemResume(): Promise<void> {
+    const settings = this.settingsStore.getSettings();
+    if (!this.transport) {
+      if (settings.enabled) {
+        await this.start();
+      }
+      return;
+    }
+
+    // Sleep can leave both accepted LAN clients and the outbound relay host
+    // socket looking open even though their underlying network path is gone.
+    // Drop only live connections; persisted pairing tokens and relay sessions
+    // remain intact and are used by the normal reconnect handshake.
+    this.transport.terminateAllClientConnections();
+    this.stopRelayHostConnections();
+    this.syncRelayHostConnections();
+  }
+
   async stop(): Promise<void> {
     this.stopRelayHostConnections();
     for (const channel of this.e2eeChannels.values()) {

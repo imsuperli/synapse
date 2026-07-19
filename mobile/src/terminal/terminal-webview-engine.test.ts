@@ -136,6 +136,9 @@ describe('terminal WebView bundled engine', () => {
     expect(terminalOptions).toContain("cursorInactiveStyle: 'bar'")
     expect(terminalOptions).toContain('cursorWidth: 3')
     expect(terminalOptions).not.toContain("cursorInactiveStyle: 'none'")
+    expect(terminalHtmlSource).toContain('function ensureTerminalCursorVisible(targetTerm)')
+    expect(terminalHtmlSource).toContain("targetTerm.write('\\x1b[?25h')")
+    expect(terminalHtmlSource).toContain('ensureTerminalCursorVisible(term);')
   })
 
   it('reports scaled cursor coordinates and can return live input to the latest line', () => {

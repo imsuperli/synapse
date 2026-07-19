@@ -1521,6 +1521,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     try {
       if (term.onWriteParsed) {
         termObserverDisposables.push(term.onWriteParsed(function() {
+          ensureTerminalCursorVisible(term);
           emitModesIfChanged();
           emitKeyboardAvoidanceMetrics();
         }));
@@ -1528,9 +1529,15 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     } catch (e) {}
     // Initial emit once buffer settles.
     afterWritesDrained(function() {
+      ensureTerminalCursorVisible(term);
       emitModesIfChanged();
       emitKeyboardAvoidanceMetrics();
     });
+  }
+
+  function ensureTerminalCursorVisible(targetTerm) {
+    if (!targetTerm || !targetTerm.modes || targetTerm.modes.showCursor !== false) return;
+    try { targetTerm.write('\x1b[?25h'); } catch (e) {}
   }
 
   function viewportToCell(clientX, clientY) {

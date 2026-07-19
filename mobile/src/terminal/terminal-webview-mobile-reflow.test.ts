@@ -290,6 +290,8 @@ describe("terminal WebView mobile reflow", () => {
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorStyle: 'bar'");
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorInactiveStyle: 'bar'");
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorWidth: 3");
+    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("replace(/\\x1b\\[\\?25l/g, '\\x1b[?25h')");
+    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("ensureTerminalCursorVisible(source);");
   });
 
   beforeEach(() => {
