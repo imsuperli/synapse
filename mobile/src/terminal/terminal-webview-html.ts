@@ -76,6 +76,8 @@ window.onerror = function(msg) {
   #terminal-surface {
     transform-origin: top left;
     display: inline-block;
+    min-width: 100%;
+    min-height: 100%;
   }
   .mobile-cursor-overlay {
     position: absolute;
@@ -322,6 +324,9 @@ window.onerror = function(msg) {
         clampPan();
         updateTransform();
         emitKeyboardAvoidanceMetrics();
+      } else if (isMobileReflowSnapshotLayout()) {
+        markMobileProjectionDirty('text-scale');
+        scheduleMobileSnapshotProjection('text-scale');
       } else {
         markMobileProjectionDirty('text-scale');
         requestMobileProjectionRefresh('text-scale');
@@ -540,6 +545,17 @@ window.onerror = function(msg) {
   function getTotalScale() { return currentScale * persistentTextScaleMultiplier() * userScale; }
 
   function updateTransform() {
+    var totalScale = Math.max(0.01, getTotalScale());
+    // Keep the transformed hit target at least as large as the WebView. The
+    // xterm canvas may be shorter than the phone when the desktop PTY has only
+    // a few rows, but gestures must still work across the whole terminal area.
+    // Include negative pan so moving a zoomed grid cannot uncover dead space.
+    surface.style.minWidth = (
+      (window.innerWidth + Math.max(0, -panX)) / totalScale
+    ) + 'px';
+    surface.style.minHeight = (
+      (window.innerHeight + Math.max(0, -panY)) / totalScale
+    ) + 'px';
     surface.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + getTotalScale() + ')';
     updateScrollIndicator(false);
     if (selMode === 'select') repositionOverlay();
@@ -1333,15 +1349,15 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       var nextFontScale = snapToTextScalePreset(msg.fontScale);
       if (nextFontScale !== currentTextScale) {
         var previousFontScale = currentTextScale;
-        userScale = isMobileReflowAdaptiveLayout()
+        userScale = isMobileReflowProjectionLayout()
           ? nextFontScale / previousFontScale
           : 1;
-        if (!usesCssTextScale() && !isMobileReflowAdaptiveLayout()) {
+        if (!usesCssTextScale() && !isMobileReflowProjectionLayout()) {
           panX = 0;
           panY = 0;
         }
         applyTextScale(nextFontScale);
-        if (isMobileReflowAdaptiveLayout()) updateTransform();
+        if (isMobileReflowProjectionLayout()) updateTransform();
       }
     } else if (msg.type === 'resize') {
       resize(msg.cols, msg.rows);
@@ -1382,7 +1398,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     } else if (msg.type === 'measure') {
       measureFitDimensions(msg.containerHeight);
     } else if (msg.type === 'reset-zoom') {
-      if (isMobileReflowAdaptiveLayout()) {
+      if (isMobileReflowProjectionLayout()) {
         scheduleMobileProjectionRecovery('reset-zoom-msg');
       } else {
         applyFitScale('reset-zoom-msg');
@@ -2382,7 +2398,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
         var target = snapToTextScalePreset(currentTextScale * userScale);
         var changed = target !== currentTextScale;
         var keepViewportPan = usesCssTextScale();
-        var keepAdaptivePreview = isMobileReflowAdaptiveLayout();
+        var keepAdaptivePreview = isMobileReflowProjectionLayout();
         var previewScale = userScale;
         userScale = keepAdaptivePreview ? previewScale : 1;
         if (!keepViewportPan && !keepAdaptivePreview) {
@@ -2476,7 +2492,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     // size update). Re-fit so the scale matches the new vpWidth — without
     // this, opening the keyboard leaves the terminal at the old scale even
     // though there's now less vertical room and the fit ratio may differ.
-    if (isMobileReflowAdaptiveLayout()) {
+    if (isMobileReflowProjectionLayout()) {
       requestAnimationFrame(function() {
         if (!resizeMobileProjectionForViewport('window-resize')) {
           scheduleMobileProjectionRecovery('window-resize');

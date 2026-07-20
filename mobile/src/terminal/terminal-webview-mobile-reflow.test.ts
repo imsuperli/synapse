@@ -29,6 +29,17 @@ type FakeLine = {
 
 class FakeTerminal {
   static instances: FakeTerminal[] = [];
+  static deferNextOpenedWrite = false;
+  static throwNextOpenedWrite = false;
+  static deferredOpenedWrites: Array<() => void> = [];
+  static nextOpenedWriteBaseY: number | null = null;
+  static afterNextOpenedWriteCallback: (() => void) | null = null;
+
+  static releaseDeferredOpenedWrites(): void {
+    const pending = FakeTerminal.deferredOpenedWrites;
+    FakeTerminal.deferredOpenedWrites = [];
+    for (const finish of pending) finish();
+  }
 
   cols: number;
   rows: number;
@@ -37,9 +48,11 @@ class FakeTerminal {
   element: { scrollWidth: number; scrollHeight: number } | null = null;
   allData = "";
   opened = false;
+  openedSurface: HTMLElement | null = null;
   disposed = false;
   unstable = false;
   cursorGap = false;
+  scrollToLineCalls: number[] = [];
   private writeParsedListeners: Array<() => void> = [];
 
   private readonly stableLine: FakeLine = {
@@ -99,8 +112,9 @@ class FakeTerminal {
     addon.activate?.(this);
   }
 
-  open(): void {
+  open(surface?: HTMLElement): void {
     this.opened = true;
+    this.openedSurface = surface ?? null;
     const fontScale = Number(this.options.fontSize ?? 10) / 10;
     const cellWidth = 8 * fontScale;
     const cellHeight = 15 * fontScale;
@@ -113,6 +127,10 @@ class FakeTerminal {
   }
 
   write(data: string, callback?: () => void): void {
+    if (this.opened && FakeTerminal.throwNextOpenedWrite) {
+      FakeTerminal.throwNextOpenedWrite = false;
+      throw new Error("projection write failed");
+    }
     this.allData += data;
     if (data.includes("\u001b[?1049h")) {
       this.buffer.active = this.alternateBuffer;
@@ -138,9 +156,22 @@ class FakeTerminal {
     }
     const finish = () => {
       callback?.();
+      if (this.opened && FakeTerminal.afterNextOpenedWriteCallback) {
+        const afterCallback = FakeTerminal.afterNextOpenedWriteCallback;
+        FakeTerminal.afterNextOpenedWriteCallback = null;
+        afterCallback();
+      }
       for (const listener of this.writeParsedListeners) listener();
     };
-    if (!this.opened && data.includes("slow-live")) {
+    if (this.opened && FakeTerminal.nextOpenedWriteBaseY !== null) {
+      this.normalBuffer.baseY = FakeTerminal.nextOpenedWriteBaseY;
+      this.normalBuffer.viewportY = FakeTerminal.nextOpenedWriteBaseY;
+      FakeTerminal.nextOpenedWriteBaseY = null;
+    }
+    if (this.opened && FakeTerminal.deferNextOpenedWrite) {
+      FakeTerminal.deferNextOpenedWrite = false;
+      FakeTerminal.deferredOpenedWrites.push(finish);
+    } else if (!this.opened && data.includes("slow-live")) {
       setTimeout(finish, 80);
     } else {
       finish();
@@ -158,20 +189,41 @@ class FakeTerminal {
     }
   }
 
-  clear(): void {}
-  reset(): void {}
+  clear(): void {
+    this.allData = "";
+  }
+  reset(): void {
+    this.unstable = false;
+    this.cursorGap = false;
+    this.modes = { mouseTrackingMode: "none" };
+    this.buffer.active = this.normalBuffer;
+    this.normalBuffer.baseY = 0;
+    this.normalBuffer.viewportY = 0;
+    this.normalBuffer.cursorX = 0;
+    this.normalBuffer.cursorY = 0;
+  }
   refresh(): void {}
   clearSelection(): void {}
   selectAll(): void {}
   select(): void {}
   scrollLines(): void {}
   scrollToBottom(): void {}
-  scrollToLine(): void {}
+  scrollToLine(line: number): void {
+    this.scrollToLineCalls.push(line);
+    this.buffer.active.viewportY = line;
+  }
   getSelection(): string {
     return "";
   }
   dispose(): void {
     this.disposed = true;
+  }
+
+  serializeActiveBuffer(): string {
+    return this.allData
+      .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/\u009b[0-?]*[ -/]*[@-~]/g, "");
   }
   onLineFeed(): { dispose(): void } {
     return { dispose() {} };
@@ -192,6 +244,7 @@ class FakeTerminal {
 }
 
 class FakeSerializeAddon {
+  static throwNextRange = false;
   private terminal: FakeTerminal | null = null;
 
   activate(terminal: FakeTerminal): void {
@@ -200,6 +253,14 @@ class FakeSerializeAddon {
 
   serialize(): string {
     return this.terminal?.allData ?? "";
+  }
+
+  _serializeBufferByRange(): string {
+    if (FakeSerializeAddon.throwNextRange) {
+      FakeSerializeAddon.throwNextRange = false;
+      throw new Error("snapshot serialization failed");
+    }
+    return this.terminal?.serializeActiveBuffer() ?? "";
   }
 }
 
@@ -234,6 +295,7 @@ function collectProjectedOscLinks(
     "source",
     "targetCols",
     `${TERMINAL_MOBILE_REFLOW_JS}\n` +
+      "textScaleMode = 'mobile-reflow'; mobileReflowLayout = 'adaptive'; " +
       "mobileSourceTerm = source; return collectMobileProjectedOscLinks(targetCols);",
   ) as (
     source: Record<string, unknown>,
@@ -319,6 +381,12 @@ describe("terminal WebView mobile reflow", () => {
   beforeEach(() => {
     Object.defineProperty(window, "innerWidth", { value: 360, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: 630, configurable: true });
+    FakeTerminal.deferNextOpenedWrite = false;
+    FakeTerminal.throwNextOpenedWrite = false;
+    FakeTerminal.deferredOpenedWrites = [];
+    FakeTerminal.nextOpenedWriteBaseY = null;
+    FakeTerminal.afterNextOpenedWriteCallback = null;
+    FakeSerializeAddon.throwNextRange = false;
   });
 
   it("keeps a desktop-grid source model and exposes a phone-width normal-buffer projection", async () => {
@@ -361,8 +429,101 @@ describe("terminal WebView mobile reflow", () => {
     expect(projection?.disposed).toBe(false);
   });
 
-  it("opens the exact desktop grid for alternate-screen snapshots", async () => {
+  it("projects alternate-screen snapshots at phone width", async () => {
     const posted = boot("\u001b[?1049h\u001b[2J\u001b[Hfull screen");
+    await settle();
+
+    expect(FakeTerminal.instances).toHaveLength(2);
+    const [source, projection] = FakeTerminal.instances;
+    expect(source).toMatchObject({ cols: 228, rows: 70, opened: false, disposed: false });
+    expect(source?.options.scrollback).toBe(30000);
+    expect(projection).toMatchObject({
+      cols: 45,
+      rows: 42,
+      opened: true,
+      disposed: false,
+    });
+    expect(projection?.allData).toContain("full screen");
+    expect(posted).toContainEqual({ type: "ready", cols: 45, rows: 42 });
+    expect(posted).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic",
+        event: "terminal-ready",
+        metrics: expect.objectContaining({ mobileLayout: "snapshot" }),
+      }),
+    );
+    expect(posted).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic",
+        event: "fit-scale",
+        metrics: expect.objectContaining({
+          fitScale: 1,
+          expectedHeight: 630,
+        }),
+      }),
+    );
+  });
+
+  it.each([24, 70, 120])(
+    "uses the same phone viewport for a %s-row Codex snapshot",
+    async (rows) => {
+      const posted = boot("\u001b[?1049h\u001b[2J\u001b[Hfull screen", { cols: 228, rows });
+      await settle();
+
+      const projection = FakeTerminal.instances[1];
+      expect(projection).toMatchObject({ cols: 45, rows: 42, opened: true });
+      expect(projection?.options.fontSize).toBe(10);
+      expect(posted).toContainEqual(
+        expect.objectContaining({
+          type: "diagnostic",
+          event: "terminal-ready",
+          metrics: expect.objectContaining({
+            mobileLayout: "snapshot",
+            sourceRows: rows,
+            cols: 45,
+            rows: 42,
+          }),
+        }),
+      );
+    },
+  );
+
+  it("wraps a long desktop row inside the phone-width snapshot", async () => {
+    const desktopLine = "x".repeat(120);
+    boot(`\u001b[?1049h\u001b[2J\u001b[H${desktopLine}`);
+    await settle();
+
+    const projection = FakeTerminal.instances[1];
+    expect(projection).toMatchObject({ cols: 45, rows: 42 });
+    expect(projection?.allData).toContain(desktopLine);
+    expect(Math.ceil(desktopLine.length / (projection?.cols ?? 1))).toBe(3);
+  });
+
+  it("keeps mouse-aware TUIs on the exact source grid with a full-height touch surface", async () => {
+    const posted = boot("\u001b[?1000hmouse screen", { cols: 228, rows: 24 });
+    await settle();
+
+    expect(FakeTerminal.instances).toHaveLength(1);
+    expect(FakeTerminal.instances[0]).toMatchObject({
+      cols: 228,
+      rows: 24,
+      opened: true,
+      disposed: false,
+    });
+    expect(FakeTerminal.instances[0]?.element?.scrollHeight).toBe(360);
+    expect(document.getElementById("terminal-surface")?.style.minHeight).toBe("630px");
+    expect(posted).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic",
+        event: "terminal-ready",
+        metrics: expect.objectContaining({ mobileLayout: "source" }),
+      }),
+    );
+  });
+
+  it("falls back to a visible source terminal when snapshot serialization fails", async () => {
+    FakeSerializeAddon.throwNextRange = true;
+    const posted = boot("\u001b[?1049hfull screen");
     await settle();
 
     expect(FakeTerminal.instances).toHaveLength(1);
@@ -372,7 +533,8 @@ describe("terminal WebView mobile reflow", () => {
       opened: true,
       disposed: false,
     });
-    expect(posted).toContainEqual({ type: "ready", cols: 228, rows: 70 });
+    expect(document.getElementById("terminal-surface")?.style.visibility).toBe("visible");
+    expect(posted).toContainEqual(expect.objectContaining({ type: "error", fatal: false }));
     expect(posted).toContainEqual(
       expect.objectContaining({
         type: "diagnostic",
@@ -380,85 +542,173 @@ describe("terminal WebView mobile reflow", () => {
         metrics: expect.objectContaining({ mobileLayout: "source" }),
       }),
     );
-    expect(posted).toContainEqual(
-      expect.objectContaining({
-        type: "diagnostic",
-        event: "fit-scale",
-        metrics: expect.objectContaining({
-          fitScale: 1,
-          expectedHeight: 1050,
-        }),
-      }),
-    );
   });
 
-  it.each([24, 70, 120])(
-    "keeps fixed-grid terminal text at the shared size for a %s-row desktop viewport",
-    async (rows) => {
-      const posted = boot("\u001b[?1049h\u001b[2J\u001b[Hfull screen", { cols: 228, rows });
-      await settle();
-
-      const fit = posted.find(
-        (message) => message.type === "diagnostic" && message.event === "fit-scale",
-      );
-      expect(fit).toEqual(
-        expect.objectContaining({
-          metrics: expect.objectContaining({ fitScale: 1, rows }),
-        }),
-      );
-      expect(FakeTerminal.instances[0]?.options.fontSize).toBe(10);
-    },
-  );
-
-  it("falls back to the source grid when a live program leaves content after the cursor", async () => {
+  it("rebuilds a phone-width snapshot when content remains after the cursor", async () => {
     const posted = boot("initial\r\n");
     await settle();
     const [source, projection] = FakeTerminal.instances;
 
     sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
-    await settle();
+    await settle(220);
 
-    expect(source?.opened).toBe(true);
+    const snapshot = FakeTerminal.instances[2];
+    expect(source?.opened).toBe(false);
     expect(projection?.disposed).toBe(true);
+    expect(snapshot).toMatchObject({ cols: 45, rows: 42, opened: true, disposed: false });
+    expect(snapshot?.allData).toContain("updated");
+    expect(posted.some((message) => message.type === "mobile-reflow-refresh")).toBe(false);
     expect(posted).toContainEqual(
       expect.objectContaining({
         type: "diagnostic",
         event: "mobile-reflow-layout",
-        metrics: expect.objectContaining({ layout: "source" }),
+        metrics: expect.objectContaining({ layout: "snapshot" }),
       }),
     );
   });
 
-  it("keeps the source grid when the application disables automatic wrapping", async () => {
+  it("projects a snapshot when the source application disables automatic wrapping", async () => {
     const posted = boot("initial\r\n");
     await settle();
 
     sendWebViewMessage({ type: "write", data: "\u001b[?7lno-wrap-output" });
-    await settle();
+    await settle(220);
 
-    expect(FakeTerminal.instances[0]?.opened).toBe(true);
+    expect(FakeTerminal.instances[0]?.opened).toBe(false);
+    expect(FakeTerminal.instances[2]).toMatchObject({ cols: 45, rows: 42, opened: true });
+    expect(FakeTerminal.instances[2]?.allData).toContain("no-wrap-output");
     expect(posted).toContainEqual(
       expect.objectContaining({
         type: "diagnostic",
         event: "mobile-reflow-layout",
-        metrics: expect.objectContaining({ layout: "source" }),
+        metrics: expect.objectContaining({ layout: "snapshot" }),
       }),
     );
   });
 
-  it("keeps the source grid when the cursor sits in unwritten horizontal space", async () => {
+  it("projects cursor-gap snapshots without restoring desktop cursor columns", async () => {
     const posted = boot("abc\u001b[10C");
     await settle();
 
-    expect(FakeTerminal.instances).toHaveLength(1);
-    expect(FakeTerminal.instances[0]).toMatchObject({ opened: true, cols: 228, rows: 70 });
+    expect(FakeTerminal.instances).toHaveLength(2);
+    expect(FakeTerminal.instances[0]).toMatchObject({ opened: false, cols: 228, rows: 70 });
+    expect(FakeTerminal.instances[1]).toMatchObject({ opened: true, cols: 45, rows: 42 });
+    expect(FakeTerminal.instances[1]?.allData).toBe("abc");
     expect(posted).toContainEqual(
       expect.objectContaining({
         type: "diagnostic",
         event: "terminal-ready",
-        metrics: expect.objectContaining({ mobileLayout: "source" }),
+        metrics: expect.objectContaining({ mobileLayout: "snapshot" }),
       }),
     );
+  });
+
+  it("keeps the old projection visible until a complex live snapshot is complete", async () => {
+    boot("initial\r\n");
+    await settle();
+    const oldProjection = FakeTerminal.instances[1];
+    const oldSurface = oldProjection?.openedSurface;
+    oldProjection.normalBuffer.baseY = 100;
+    oldProjection.normalBuffer.viewportY = 60;
+    FakeTerminal.nextOpenedWriteBaseY = 200;
+    FakeTerminal.deferNextOpenedWrite = true;
+
+    sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
+    await settle(150);
+
+    const pendingProjection = FakeTerminal.instances[2];
+    expect(pendingProjection).toMatchObject({ cols: 45, rows: 42, opened: true });
+    expect(oldSurface?.style.visibility).toBe("visible");
+    expect(pendingProjection?.openedSurface?.style.visibility).toBe("hidden");
+    expect(oldProjection.disposed).toBe(false);
+    expect(document.getElementById("terminal-container")?.children).toHaveLength(2);
+
+    FakeTerminal.releaseDeferredOpenedWrites();
+    await settle();
+
+    expect(pendingProjection?.openedSurface?.style.visibility).toBe("visible");
+    expect(pendingProjection?.scrollToLineCalls).toContain(160);
+    expect(oldProjection.disposed).toBe(true);
+    expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
+    expect(document.querySelectorAll("#terminal-surface")).toHaveLength(1);
+  });
+
+  it("falls back to the source grid when a hidden snapshot write fails", async () => {
+    const posted = boot("initial\r\n");
+    await settle();
+    const oldProjection = FakeTerminal.instances[1];
+    const oldSurface = oldProjection?.openedSurface;
+    FakeTerminal.throwNextOpenedWrite = true;
+
+    sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
+    await settle(180);
+
+    const failedProjection = FakeTerminal.instances[2];
+    expect(failedProjection?.disposed).toBe(true);
+    expect(oldProjection.disposed).toBe(true);
+    expect(oldSurface?.style.visibility).toBe("visible");
+    expect(FakeTerminal.instances[0]).toMatchObject({ opened: true, cols: 228, rows: 70 });
+    expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
+    expect(document.querySelectorAll("#terminal-surface")).toHaveLength(1);
+    expect(posted).toContainEqual(expect.objectContaining({ type: "error", fatal: false }));
+  });
+
+  it("keeps the visible terminal usable when clear interrupts a snapshot fit", async () => {
+    boot("initial\r\n");
+    await settle();
+    const oldProjection = FakeTerminal.instances[1];
+    const oldSurface = oldProjection?.openedSurface;
+    FakeTerminal.afterNextOpenedWriteCallback = () => {
+      sendWebViewMessage({ type: "clear" });
+    };
+
+    sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
+    await settle(180);
+
+    expect(FakeTerminal.instances[2]?.disposed).toBe(true);
+    expect(oldProjection.disposed).toBe(false);
+    expect(oldSurface?.id).toBe("terminal-surface");
+    expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
+
+    sendWebViewMessage({ type: "write", data: "after-clear\r\n" });
+    await settle();
+    expect(oldProjection.allData).toContain("after-clear\r\n");
+  });
+
+  it("keeps history re-init atomic and restores distance from the bottom", async () => {
+    boot("current history\r\n");
+    await settle();
+    const oldProjection = FakeTerminal.instances[1];
+    const oldSurface = oldProjection?.openedSurface;
+    oldProjection.normalBuffer.baseY = 120;
+    oldProjection.normalBuffer.viewportY = 80;
+    FakeTerminal.nextOpenedWriteBaseY = 240;
+    FakeTerminal.deferNextOpenedWrite = true;
+
+    sendWebViewMessage({
+      type: "init",
+      cols: 228,
+      rows: 70,
+      initialData: "older history\r\ncurrent history\r\n",
+      fontScale: 1,
+      textScaleMode: "mobile-reflow",
+      preserveScroll: true,
+      preserveFullInitialData: true,
+    });
+    await settle(40);
+
+    const replacement = FakeTerminal.instances.at(-1);
+    expect(oldSurface?.style.visibility).toBe("visible");
+    expect(replacement?.openedSurface?.style.visibility).toBe("hidden");
+    expect(oldProjection.disposed).toBe(false);
+
+    FakeTerminal.releaseDeferredOpenedWrites();
+    await settle();
+
+    expect(replacement?.openedSurface?.style.visibility).toBe("visible");
+    expect(replacement?.scrollToLineCalls).toContain(200);
+    expect(oldProjection.disposed).toBe(true);
+    expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
   });
 
   it("coalesces complex but stable normal output into one RN projection refresh", async () => {
@@ -649,7 +899,7 @@ describe("terminal WebView mobile reflow", () => {
     }
     await settle(180);
 
-    expect(FakeTerminal.instances[0]?.opened).toBe(true);
+    expect(FakeTerminal.instances[0]?.opened).toBe(false);
     expect(posted.filter((message) => message.type === "mobile-reflow-refresh")).toHaveLength(1);
   });
 

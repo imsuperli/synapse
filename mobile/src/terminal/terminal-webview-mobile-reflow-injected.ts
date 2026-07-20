@@ -1,10 +1,9 @@
 // Remote-only mobile projection support injected into XTERM_HTML. The source
 // terminal always parses PTY bytes at the desktop grid. A second, visible term
-// is used only while normal-buffer output can be safely rewrapped for the phone.
+// projects normal output or a serialized complex-screen snapshot at phone width.
 export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   var MOBILE_REFLOW_SOURCE_SCROLLBACK = 256;
   var MOBILE_REFLOW_REFRESH_DELAY_MS = 120;
-  var MOBILE_REFLOW_SOURCE_FALLBACK_MS = 500;
   var mobileSourceTerm = null;
   var mobileSourceSerializeAddon = null;
   var mobileSourceCols = 80;
@@ -13,7 +12,6 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   var mobileWriteQueue = [];
   var mobileWritesDraining = false;
   var mobileProjectionDirty = false;
-  var mobileProjectionDirtyAt = 0;
   var mobileRefreshTimer = null;
   var mobileRefreshRequested = false;
   var mobileRefreshForceReplay = false;
@@ -23,6 +21,12 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   var mobileControlSequenceState = 'ground';
   var mobileProjectedContentRows = 0;
   var mobileCarriageReturnPending = false;
+  var mobileSnapshotRefreshTimer = null;
+  var mobileSnapshotBuildInFlight = false;
+  var mobileSnapshotBuildToken = 0;
+  var mobileSnapshotPendingReason = '';
+  var mobileSnapshotBuildOldLayout = '';
+  var mobileSourceRevision = 0;
 
   function isMobileReflowTextScale() {
     return textScaleMode === 'mobile-reflow';
@@ -30,6 +34,14 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
 
   function isMobileReflowAdaptiveLayout() {
     return isMobileReflowTextScale() && mobileReflowLayout === 'adaptive';
+  }
+
+  function isMobileReflowSnapshotLayout() {
+    return isMobileReflowTextScale() && mobileReflowLayout === 'snapshot';
+  }
+
+  function isMobileReflowProjectionLayout() {
+    return isMobileReflowAdaptiveLayout() || isMobileReflowSnapshotLayout();
   }
 
   function isMobileReflowSourceLayout() {
@@ -48,18 +60,30 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     }
   }
 
+  function clearMobileSnapshotRefreshTimer() {
+    if (mobileSnapshotRefreshTimer !== null) {
+      clearTimeout(mobileSnapshotRefreshTimer);
+      mobileSnapshotRefreshTimer = null;
+    }
+  }
+
   function resetMobileWriteState() {
     mobileWriteQueue = [];
     mobileWritesDraining = false;
     mobileProjectionDirty = false;
-    mobileProjectionDirtyAt = 0;
     mobileRefreshRequested = false;
     mobileRefreshForceReplay = false;
     mobileSourceSwitching = false;
     mobileControlSequenceState = 'ground';
     mobileProjectedContentRows = 0;
     mobileCarriageReturnPending = false;
+    mobileSnapshotBuildToken++;
+    mobileSnapshotBuildInFlight = false;
+    mobileSnapshotPendingReason = '';
+    mobileSnapshotBuildOldLayout = '';
+    mobileSourceRevision = 0;
     clearMobileRefreshTimer();
+    clearMobileSnapshotRefreshTimer();
   }
 
   function disposeMobileSourceTerm(exceptTerm) {
@@ -129,9 +153,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return source;
   }
 
-  function createMobileProjectionTerminal(cols, rows) {
+  function createMobileProjectionTerminal(cols, rows, targetSurface) {
     var projection = createMobileTerminal(cols, rows, currentTextScale, 30000);
-    projection.open(surface);
+    projection.open(targetSurface || surface);
     installMobileTerminalScrollbackPreservation(projection);
     loadMobileWebglAddon(projection);
     loadMobileUnicodeAddon(projection);
@@ -145,6 +169,15 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     if (oldTerm && mobileRetiredTerms.indexOf(oldTerm) === -1) {
       mobileRetiredTerms.push(oldTerm);
     }
+  }
+
+  function untrackRetiredTerminalReplacement(oldTerm, oldSurface) {
+    mobileRetiredSurfaces = mobileRetiredSurfaces.filter(function(candidate) {
+      return candidate !== oldSurface;
+    });
+    mobileRetiredTerms = mobileRetiredTerms.filter(function(candidate) {
+      return candidate !== oldTerm;
+    });
   }
 
   function prepareMobileReplacementSurface(oldTerm, oldSurface) {
@@ -265,6 +298,36 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       !mobileSourceHasCustomScreenState() &&
       mobileSourceCursorIsAtContentEnd()
     );
+  }
+
+  function mobileSourceRequiresExactGrid() {
+    return mobileSourceMouseTrackingMode() !== 'none';
+  }
+
+  function canBuildMobileSnapshotProjection() {
+    return !!(
+      mobileSourceTerm &&
+      mobileSourceSerializeAddon &&
+      typeof mobileSourceSerializeAddon._serializeBufferByRange === 'function' &&
+      !mobileSourceRequiresExactGrid()
+    );
+  }
+
+  function serializeMobileSnapshotProjection() {
+    if (!canBuildMobileSnapshotProjection()) return null;
+    var source = mobileSourceTerm;
+    var buffer = source.buffer && source.buffer.active;
+    if (!buffer || buffer.length <= 0) return '';
+    // The pinned SerializeAddon has no public active-buffer-only API. Its range
+    // serializer is bundled with this WebView and avoids replaying desktop modes
+    // or the final desktop cursor move into the phone-width projection.
+    var serialized = mobileSourceSerializeAddon._serializeBufferByRange(
+      source,
+      buffer,
+      { start: 0, end: buffer.length - 1 },
+      true
+    );
+    return makeMobileSerializedProjectionReflowSafe(serialized);
   }
 
   function scanMobileControlSequenceState(data, initialState) {
@@ -416,7 +479,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var service = mobileSourceOscLinkService();
     mobileProjectedContentRows = 0;
     if (!source || targetCols <= 0) return [];
-    var buffer = source.buffer.normal;
+    var buffer = isMobileReflowSnapshotLayout()
+      ? source.buffer.active
+      : source.buffer.normal;
     var links = [];
     var targetRow = 0;
     var targetCol = 0;
@@ -427,12 +492,13 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       active = null;
     }
 
-    var lastSourceRow = buffer.length - 1;
-    if (buffer.length <= source.rows) {
-      lastSourceRow = Math.min(
-        lastSourceRow,
-        (buffer.baseY || 0) + (buffer.cursorY || 0)
-      );
+    var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
+    var lastSourceRow = Math.min(buffer.length - 1, cursorRow);
+    for (var candidateRow = buffer.length - 1; candidateRow > lastSourceRow; candidateRow--) {
+      if (mobileSourceLineContentEnd(buffer.getLine(candidateRow)) > 0) {
+        lastSourceRow = candidateRow;
+        break;
+      }
     }
     for (var row = 0; row <= lastSourceRow; row++) {
       var line = buffer.getLine(row);
@@ -539,6 +605,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     preserveScroll,
     preserveFullInitialData
   ) {
+    var projectionLayout = mobileReflowLayout;
     var attempts = 0;
     function waitForDimensions() {
       if (gen !== terminalGeneration || !term) return;
@@ -557,7 +624,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       term.resize(dimensions.cols, dimensions.rows);
       initRows = dimensions.rows;
       initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols);
-      mobileSourceTerm.options.scrollback = MOBILE_REFLOW_SOURCE_SCROLLBACK;
+      mobileSourceTerm.options.scrollback = projectionLayout === 'adaptive'
+        ? MOBILE_REFLOW_SOURCE_SCROLLBACK
+        : 30000;
       term.write(serialized, function() {
         if (gen !== terminalGeneration) return;
         if (scrollAnchorRows > 0 && term.buffer && term.buffer.active) {
@@ -575,13 +644,217 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
           initialDataChars: replayLength,
           preserveScroll: preserveScroll === true,
           preserveFullInitialData: preserveFullInitialData === true,
-          mobileLayout: 'adaptive',
+          mobileLayout: projectionLayout,
           sourceCols: mobileSourceCols,
           sourceRows: mobileSourceRows
         });
       });
     }
     requestAnimationFrame(waitForDimensions);
+  }
+
+  function mobileProjectionScrollAnchor(targetTerm) {
+    var buffer = targetTerm && targetTerm.buffer && targetTerm.buffer.active;
+    if (!buffer) return -1;
+    return Math.max(0, (buffer.baseY || 0) - (buffer.viewportY || 0));
+  }
+
+  function restoreMobileProjectionScroll(targetTerm, anchorRows) {
+    if (anchorRows <= 0 || !targetTerm || !targetTerm.buffer || !targetTerm.buffer.active) return;
+    var buffer = targetTerm.buffer.active;
+    try {
+      targetTerm.scrollToLine(Math.max(0, (buffer.baseY || 0) - anchorRows));
+    } catch (e) {}
+  }
+
+  function discardMobileSnapshotReplacement(
+    token,
+    gen,
+    nextTerm,
+    nextSurface,
+    oldTerm,
+    oldSurface,
+    oldLayout,
+    error
+  ) {
+    var replacementWasCurrent = term === nextTerm;
+    try { if (nextTerm) nextTerm.dispose(); } catch (e) {}
+    if (nextSurface && nextSurface !== oldSurface) nextSurface.remove();
+
+    if (token !== mobileSnapshotBuildToken) {
+      // A clear/re-init invalidates the build generation. Only restore the old
+      // projection when this callback is still in the same terminal generation;
+      // a newer init owns the shared term/surface variables.
+      if (gen === terminalGeneration && replacementWasCurrent) {
+        term = oldTerm;
+        surface = oldSurface;
+        mobileReflowLayout = oldLayout;
+        if (oldSurface && !document.getElementById('terminal-surface')) {
+          oldSurface.id = 'terminal-surface';
+        }
+        ready = true;
+        attachTermObservers();
+      }
+      return;
+    }
+    untrackRetiredTerminalReplacement(oldTerm, oldSurface);
+    term = oldTerm;
+    surface = oldSurface;
+    mobileReflowLayout = oldLayout;
+    mobileSnapshotBuildOldLayout = '';
+    if (oldSurface && !document.getElementById('terminal-surface')) {
+      oldSurface.id = 'terminal-surface';
+    }
+    mobileSnapshotBuildInFlight = false;
+    ready = true;
+    if (replacementWasCurrent) attachTermObservers();
+    if (error) {
+      reportEngineError('mobile snapshot projection failed', error, false);
+      if (oldLayout !== 'source') {
+        switchMobileToSourceLayout('snapshot-build-failed');
+      }
+      return;
+    }
+    if (mobileSnapshotPendingReason) {
+      scheduleMobileSnapshotProjection(mobileSnapshotPendingReason);
+    }
+  }
+
+  function scheduleMobileSnapshotProjection(reason) {
+    if (!isMobileReflowTextScale() || !canBuildMobileSnapshotProjection()) return false;
+    mobileSnapshotPendingReason = reason || mobileSnapshotPendingReason || 'source-update';
+    if (mobileSnapshotBuildInFlight || mobileSnapshotRefreshTimer !== null) return true;
+    mobileSnapshotRefreshTimer = setTimeout(function() {
+      mobileSnapshotRefreshTimer = null;
+      rebuildMobileSnapshotProjection(mobileSnapshotPendingReason || 'source-update');
+    }, MOBILE_REFLOW_REFRESH_DELAY_MS);
+    return true;
+  }
+
+  function rebuildMobileSnapshotProjection(reason) {
+    if (
+      !isMobileReflowTextScale() ||
+      mobileSnapshotBuildInFlight ||
+      !canBuildMobileSnapshotProjection() ||
+      !term ||
+      !surface
+    ) {
+      return;
+    }
+    var serialized;
+    try {
+      serialized = serializeMobileSnapshotProjection();
+    } catch (e) {
+      reportEngineError('mobile snapshot serialization failed', e, false);
+      switchMobileToSourceLayout('snapshot-serialization-failed');
+      return;
+    }
+    if (serialized === null) return;
+    mobileSnapshotBuildInFlight = true;
+    mobileSnapshotPendingReason = '';
+    var token = ++mobileSnapshotBuildToken;
+    var gen = terminalGeneration;
+    var sourceRevision = mobileSourceRevision;
+    var oldTerm = term;
+    var oldSurface = surface;
+    var oldLayout = mobileReflowLayout;
+    mobileSnapshotBuildOldLayout = oldLayout;
+    var scrollAnchorRows = mobileProjectionScrollAnchor(oldTerm);
+    var dimensions = mobileProjectionDimensions();
+    if (!dimensions) {
+      dimensions = {
+        cols: Math.max(MIN_FIT_COLS, oldTerm.cols || 80),
+        rows: Math.max(8, oldTerm.rows || 24)
+      };
+    }
+    var nextSurface = null;
+    var nextTerm = null;
+    try {
+      nextSurface = prepareMobileReplacementSurface(oldTerm, oldSurface);
+      nextTerm = createMobileProjectionTerminal(
+        dimensions.cols,
+        dimensions.rows,
+        nextSurface
+      );
+      nextTerm.write(serialized, function() {
+        if (token !== mobileSnapshotBuildToken || gen !== terminalGeneration) {
+          discardMobileSnapshotReplacement(
+            token,
+            gen,
+            nextTerm,
+            nextSurface,
+            oldTerm,
+            oldSurface,
+            oldLayout,
+            null
+          );
+          return;
+        }
+        try {
+          disposeTermObservers();
+          term = nextTerm;
+          surface = nextSurface;
+          mobileReflowLayout = 'snapshot';
+          initRows = dimensions.rows;
+          initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols);
+          mobileSourceTerm.options.scrollback = 30000;
+          restoreMobileProjectionScroll(nextTerm, scrollAnchorRows);
+          initialOscLinkRowOffset = Math.max(
+            0,
+            mobileProjectedContentRows - (nextTerm.buffer.normal.length || 0)
+          );
+          captureInitialOscLinkTexts();
+          initialOscLinkEvictionReady = true;
+          applyFitScale('mobile-snapshot-' + reason, function() {
+            if (token !== mobileSnapshotBuildToken || gen !== terminalGeneration) return;
+            nextSurface.style.visibility = 'visible';
+            nextSurface.style.position = '';
+            nextSurface.style.left = '';
+            nextSurface.style.top = '';
+            disposeMobileRetiredReplacements(nextTerm, nextSurface);
+            mobileSnapshotBuildInFlight = false;
+            mobileSnapshotBuildOldLayout = '';
+            mobileProjectionDirty = false;
+            ready = true;
+            attachTermObservers();
+            emitKeyboardAvoidanceMetrics();
+            emitDiagnostic('mobile-reflow-layout', {
+              layout: 'snapshot',
+              reason: reason,
+              sourceRevision: sourceRevision
+            });
+            pumpMobileWrites();
+            if (mobileSourceRevision !== sourceRevision || mobileSnapshotPendingReason) {
+              scheduleMobileSnapshotProjection(
+                mobileSnapshotPendingReason || 'source-updated-during-build'
+              );
+            }
+          });
+        } catch (e) {
+          discardMobileSnapshotReplacement(
+            token,
+            gen,
+            nextTerm,
+            nextSurface,
+            oldTerm,
+            oldSurface,
+            oldLayout,
+            e
+          );
+        }
+      });
+    } catch (e) {
+      discardMobileSnapshotReplacement(
+        token,
+        gen,
+        nextTerm,
+        nextSurface,
+        oldTerm,
+        oldSurface,
+        oldLayout,
+        e
+      );
+    }
   }
 
   function openMobileSourceAsVisible(
@@ -693,7 +966,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     mobileSourceTerm.write(replayData, function() {
       if (gen !== terminalGeneration || !mobileSourceTerm) return;
       try {
-        if (!mobileSourceSerializeAddon || !mobileSourceCanUseAdaptiveLayout()) {
+        if (!mobileSourceSerializeAddon || mobileSourceRequiresExactGrid()) {
           openMobileSourceAsVisible(
             gen,
             oldTerm,
@@ -705,12 +978,44 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
           );
           return;
         }
-        var serialized = mobileSourceSerializeAddon.serialize({
-          excludeAltBuffer: true,
-          excludeModes: false
-        });
-        serialized = makeMobileSerializedProjectionReflowSafe(serialized);
-        mobileReflowLayout = 'adaptive';
+        var serialized;
+        if (mobileSourceCanUseAdaptiveLayout()) {
+          serialized = mobileSourceSerializeAddon.serialize({
+            excludeAltBuffer: true,
+            excludeModes: false
+          });
+          serialized = makeMobileSerializedProjectionReflowSafe(serialized);
+          mobileReflowLayout = 'adaptive';
+        } else {
+          try {
+            serialized = serializeMobileSnapshotProjection();
+          } catch (e) {
+            reportEngineError('mobile snapshot serialization failed', e, false);
+            openMobileSourceAsVisible(
+              gen,
+              oldTerm,
+              oldSurface,
+              replayData.length,
+              preserveScroll,
+              preserveFullInitialData,
+              'snapshot-error'
+            );
+            return;
+          }
+          if (serialized === null) {
+            openMobileSourceAsVisible(
+              gen,
+              oldTerm,
+              oldSurface,
+              replayData.length,
+              preserveScroll,
+              preserveFullInitialData,
+              'snapshot-unavailable'
+            );
+            return;
+          }
+          mobileReflowLayout = 'snapshot';
+        }
         surface = prepareMobileReplacementSurface(oldTerm, oldSurface);
         term = createMobileProjectionTerminal(
           Math.min(mobileSourceCols, 80),
@@ -735,7 +1040,6 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   function markMobileProjectionDirty(reason) {
     if (!mobileProjectionDirty) {
       mobileProjectionDirty = true;
-      mobileProjectionDirtyAt = Date.now();
       emitDiagnostic('mobile-reflow-dirty', { reason: reason });
     }
   }
@@ -750,7 +1054,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       var shouldForceReplay = mobileRefreshForceReplay;
       mobileRefreshForceReplay = false;
       if (!shouldForceReplay && !mobileSourceCanUseAdaptiveLayout()) {
-        switchMobileToSourceLayout(reason + '-unstable');
+        if (!scheduleMobileSnapshotProjection(reason + '-snapshot')) {
+          switchMobileToSourceLayout(reason + '-unstable');
+        }
         return;
       }
       mobileRefreshRequested = true;
@@ -814,8 +1120,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
 
   function scheduleMobileProjectionRecovery(reason) {
     markMobileProjectionDirty(reason);
-    if (Date.now() - mobileProjectionDirtyAt >= MOBILE_REFLOW_SOURCE_FALLBACK_MS) {
-      switchMobileToSourceLayout(reason + '-timeout');
+    if (!mobileSourceCanUseAdaptiveLayout()) {
+      if (!scheduleMobileSnapshotProjection(reason + '-snapshot')) {
+        switchMobileToSourceLayout(reason + '-fallback');
+      }
       return;
     }
     requestMobileProjectionRefresh(reason);
@@ -827,13 +1135,25 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       if (mobileSourceCanUseAdaptiveLayout()) requestMobileProjectionRefresh('source-stable');
       return;
     }
+    if (mobileReflowLayout === 'snapshot') {
+      if (mobileSourceRequiresExactGrid()) {
+        switchMobileToSourceLayout('snapshot-exact-grid-required');
+      } else if (mobileSourceCanUseAdaptiveLayout()) {
+        requestMobileProjectionRefresh('snapshot-source-stable');
+      } else {
+        scheduleMobileSnapshotProjection('snapshot-source-update');
+      }
+      return;
+    }
     if (mobileReflowLayout !== 'adaptive') return;
     if (mobileControlSequenceState !== 'ground' || mobileCarriageReturnPending) {
       markMobileProjectionDirty('partial-control-sequence');
       return;
     }
     if (!mobileSourceCanUseAdaptiveLayout()) {
-      switchMobileToSourceLayout('source-grid-required');
+      if (!scheduleMobileSnapshotProjection('source-grid-required')) {
+        switchMobileToSourceLayout('source-grid-required');
+      }
       return;
     }
     if (safe && !mobileProjectionDirty && !mobileRefreshRequested && term) {
@@ -876,6 +1196,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     source.write(data, function() {
       if (generation !== terminalGeneration || source !== mobileSourceTerm) return;
       ensureTerminalCursorVisible(source);
+      mobileSourceRevision++;
       mobileWritesDraining = false;
       handleMobileSourceBatch(data, safe);
       pumpMobileWrites();
@@ -917,12 +1238,16 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       emitKeyboardAvoidanceMetrics();
       return;
     }
+    if (mobileReflowLayout === 'snapshot') {
+      scheduleMobileSnapshotProjection(reason);
+      return;
+    }
     markMobileProjectionDirty(reason);
     requestMobileProjectionRefresh(reason, true);
   }
 
   function resizeMobileProjectionForViewport(reason) {
-    if (!isMobileReflowAdaptiveLayout() || !term) return false;
+    if (!isMobileReflowProjectionLayout() || !term) return false;
     var dimensions = mobileProjectionDimensions();
     if (!dimensions || dimensions.cols !== term.cols) return false;
     if (dimensions.rows !== term.rows) {
@@ -935,6 +1260,28 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   }
 
   function clearMobileReflowTerminals() {
+    if (mobileSnapshotBuildInFlight && term && surface) {
+      var replacementTerm = term;
+      var replacementSurface = surface;
+      var previousTerm = mobileRetiredTerms[mobileRetiredTerms.length - 1];
+      var previousSurface = mobileRetiredSurfaces[mobileRetiredSurfaces.length - 1];
+      if (
+        previousTerm &&
+        previousSurface &&
+        previousTerm !== mobileSourceTerm &&
+        replacementTerm !== previousTerm
+      ) {
+        try { replacementTerm.dispose(); } catch (e) {}
+        replacementSurface.remove();
+        term = previousTerm;
+        surface = previousSurface;
+        mobileReflowLayout = mobileSnapshotBuildOldLayout || mobileReflowLayout;
+        untrackRetiredTerminalReplacement(previousTerm, previousSurface);
+        if (!document.getElementById('terminal-surface')) {
+          previousSurface.id = 'terminal-surface';
+        }
+      }
+    }
     resetMobileWriteState();
     if (mobileSourceTerm) {
       try { mobileSourceTerm.clear(); mobileSourceTerm.reset(); } catch (e) {}
