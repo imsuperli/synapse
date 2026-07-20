@@ -197,9 +197,11 @@ describe('TerminalWebView scroll routing', () => {
     expect(measureBlock).not.toContain('fixedGridFitScale')
   })
 
-  it('uses one uniform cover scale for fixed remote grids', () => {
+  it('keeps mobile source-grid glyph size stable while viewport zoom still uses a cover scale', () => {
     const fitBlock = sliceBetween('function computeFitScale()', 'function getTotalScale()')
     expect(fitBlock).toContain('var widthScale = window.innerWidth / termWidth;')
+    expect(fitBlock).toContain('if (isMobileReflowSourceLayout())')
+    expect(fitBlock).toContain('return 1;')
     expect(fitBlock).toContain('var heightScale = window.innerHeight / termHeight;')
     expect(fitBlock).toContain('return Math.max(widthScale, heightScale);')
     expect(fitBlock).not.toContain('scaleX')

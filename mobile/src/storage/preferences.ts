@@ -26,13 +26,13 @@ export async function savePushNotificationsEnabled(enabled: boolean): Promise<vo
 
 const TEXT_SCALE_KEY = 'synapse:terminalTextScale'
 
-// Why: the mobile terminal fits the desktop's full column count to the phone
-// width with a CSS scale, so xterm's raw fontSize is cancelled out and can't
-// drive apparent size. Instead we persist a baseline zoom multiplier ("text
-// size") that the WebView applies on top of the fit. Keep the minimum at 1 so a
-// saved or pinched text size can never make the fitted terminal narrower than
-// the phone viewport.
-export const TERMINAL_TEXT_SCALES = [1, 1.25, 1.5, 2] as const
+// Adaptive output and fixed desktop-grid fallbacks derive from the same size so
+// switching terminal types never changes the apparent glyph size.
+export const TERMINAL_BASE_FONT_SIZE = 10
+
+// Pinch zoom snaps to these persisted, device-wide presets. Sub-1 steps are
+// intentional: the default size must not also be the minimum size.
+export const TERMINAL_TEXT_SCALES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
 const DEFAULT_TEXT_SCALE = 1
 
 export async function loadTerminalTextScale(): Promise<number> {

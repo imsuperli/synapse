@@ -1,7 +1,7 @@
 // xterm.js WebView document + default Tokyonight theme. Extracted from
 // TerminalWebView.tsx to keep that file within the max-lines budget.
 import { colors } from '../theme/mobile-theme'
-import { TERMINAL_TEXT_SCALES } from '../storage/preferences'
+import { TERMINAL_BASE_FONT_SIZE, TERMINAL_TEXT_SCALES } from '../storage/preferences'
 import type { MobileTerminalTheme } from './mobile-terminal-theme'
 import { TERMINAL_PATH_TAP_JS } from './terminal-path-tap-injected'
 import { XTERM_ENGINE_CSS, XTERM_ENGINE_JS } from './terminal-webview-engine.generated'
@@ -251,8 +251,8 @@ window.onerror = function(msg) {
   // (remote desktop snapshots), the persistent text size is an extra CSS scale
   // so the phone can magnify without changing the replay grid or desktop PTY.
   var userScale = 1;
-  var BASE_FONT_PX = 13;
-  var MIN_FONT_PX = 6;
+  var BASE_FONT_PX = ${TERMINAL_BASE_FONT_SIZE};
+  var MIN_FONT_PX = ${Math.round(TERMINAL_BASE_FONT_SIZE * TERMINAL_TEXT_SCALES[0])};
   var MIN_FIT_COLS = 20;
   var currentTextScale = 1;
   var TEXT_SCALE_PRESETS = ${JSON.stringify([...TERMINAL_TEXT_SCALES])};
@@ -525,7 +525,9 @@ window.onerror = function(msg) {
     if (termWidth <= 0 || termHeight <= 0) return 1;
     var widthScale = window.innerWidth / termWidth;
     if (isMobileReflowSourceLayout()) {
-      return Math.max(widthScale, window.innerHeight / termHeight);
+      // The fixed desktop grid cannot be reflowed safely. Keep its glyphs at
+      // the same physical size as the adaptive projection and pan the overflow.
+      return 1;
     }
     if (!isViewportZoomTextScale()) return Math.min(1, widthScale);
     var heightScale = window.innerHeight / termHeight;
@@ -685,7 +687,7 @@ window.onerror = function(msg) {
   function shouldPanViewportZoomGesture() {
     return (
       usesCssTextScale() &&
-      currentTextScale * userScale > 1.001 &&
+      (isMobileReflowSourceLayout() || currentTextScale * userScale > 1.001) &&
       (canPanScaledTerminalX() || canPanScaledTerminalY())
     );
   }

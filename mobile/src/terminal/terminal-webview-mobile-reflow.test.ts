@@ -101,7 +101,7 @@ class FakeTerminal {
 
   open(): void {
     this.opened = true;
-    const fontScale = Number(this.options.fontSize ?? 13) / 13;
+    const fontScale = Number(this.options.fontSize ?? 10) / 10;
     const cellWidth = 8 * fontScale;
     const cellHeight = 15 * fontScale;
     this._core._renderService.dimensions.css.cell.width = cellWidth;
@@ -247,6 +247,7 @@ let activePostedMessages: PostedMessage[] = [];
 
 function boot(
   initialData = "a desktop logical line that should wrap on the phone",
+  viewport: { cols: number; rows: number } = { cols: 228, rows: 70 },
 ): PostedMessage[] {
   FakeTerminal.instances = [];
   const posted: PostedMessage[] = [];
@@ -271,8 +272,8 @@ function boot(
   }
   sendWebViewMessage({
     type: "init",
-    cols: 228,
-    rows: 70,
+    cols: viewport.cols,
+    rows: viewport.rows,
     initialData,
     fontScale: 1,
     textScaleMode: "mobile-reflow",
@@ -327,8 +328,10 @@ describe("terminal WebView mobile reflow", () => {
     expect(FakeTerminal.instances).toHaveLength(2);
     const [source, projection] = FakeTerminal.instances;
     expect(source).toMatchObject({ cols: 228, rows: 70, opened: false });
+    expect(source?.options.fontSize).toBe(10);
     expect(source?.options.scrollback).toBe(256);
     expect(projection).toMatchObject({ cols: 45, rows: 42, opened: true });
+    expect(projection?.options.fontSize).toBe(10);
     expect(posted).toContainEqual({ type: "ready", cols: 45, rows: 42 });
     expect(posted).toContainEqual(
       expect.objectContaining({
@@ -382,12 +385,30 @@ describe("terminal WebView mobile reflow", () => {
         type: "diagnostic",
         event: "fit-scale",
         metrics: expect.objectContaining({
-          fitScale: 0.6,
+          fitScale: 1,
           expectedHeight: 1050,
         }),
       }),
     );
   });
+
+  it.each([24, 70, 120])(
+    "keeps fixed-grid terminal text at the shared size for a %s-row desktop viewport",
+    async (rows) => {
+      const posted = boot("\u001b[?1049h\u001b[2J\u001b[Hfull screen", { cols: 228, rows });
+      await settle();
+
+      const fit = posted.find(
+        (message) => message.type === "diagnostic" && message.event === "fit-scale",
+      );
+      expect(fit).toEqual(
+        expect.objectContaining({
+          metrics: expect.objectContaining({ fitScale: 1, rows }),
+        }),
+      );
+      expect(FakeTerminal.instances[0]?.options.fontSize).toBe(10);
+    },
+  );
 
   it("falls back to the source grid when a live program leaves content after the cursor", async () => {
     const posted = boot("initial\r\n");
@@ -524,6 +545,26 @@ describe("terminal WebView mobile reflow", () => {
     const projection = FakeTerminal.instances.at(-1);
     expect(projection).toMatchObject({ cols: 22, rows: 21, opened: true });
     expect(document.getElementById("terminal-surface")?.style.visibility).toBe("visible");
+  });
+
+  it("uses the exact half-size font metrics at the smallest text preset", async () => {
+    boot("a long logical line that should remain readable at the smallest preset");
+    await settle();
+
+    sendWebViewMessage({
+      type: "init",
+      cols: 228,
+      rows: 70,
+      initialData: "a long logical line that should remain readable at the smallest preset",
+      fontScale: 0.5,
+      textScaleMode: "mobile-reflow",
+      preserveScroll: true,
+      preserveFullInitialData: true,
+    });
+    await settle();
+
+    const projection = FakeTerminal.instances.at(-1);
+    expect(projection?.options.fontSize).toBe(5);
   });
 
   it("resizes rows in place when the keyboard changes only viewport height", async () => {

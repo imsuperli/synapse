@@ -154,8 +154,28 @@ describe('terminal WebView pinch zoom', () => {
     expect(fontScaleEvents).not.toContainEqual({ type: 'font-scale-changed', fontScale: 0.5 })
   })
 
-  it('keeps persistent text presets at fit-to-width or larger', () => {
-    expect([...TERMINAL_TEXT_SCALES]).toEqual([1, 1.25, 1.5, 2])
+  it('offers smaller text presets below the default size', () => {
+    expect([...TERMINAL_TEXT_SCALES]).toEqual([0.5, 0.75, 1, 1.25, 1.5, 2])
+  })
+
+  it('persists a smaller preset after pinching below the default size', async () => {
+    const posted = boot()
+    await settle()
+
+    fireSurfaceTouch('touchstart', [
+      { x: 100, y: 120 },
+      { x: 220, y: 120 }
+    ])
+    fireSurfaceTouch('touchmove', [
+      { x: 130, y: 120 },
+      { x: 190, y: 120 }
+    ])
+    fireSurfaceTouch('touchend', [])
+
+    expect(posted.filter((message) => message.type === 'font-scale-changed').at(-1)).toEqual({
+      type: 'font-scale-changed',
+      fontScale: 0.5
+    })
   })
 
   it.each([1.25, 1.5, 2])(
