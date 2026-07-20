@@ -48,6 +48,28 @@ describe('CustomTitleBar', () => {
     expect(window.electronAPI.windowMaximize).not.toHaveBeenCalled();
   });
 
+  it('renders standard glyphs inside the macOS traffic light controls', () => {
+    window.electronAPI.platform = 'darwin';
+
+    render(<CustomTitleBar title="Workspace" />);
+
+    const controls = screen.getByTestId('mac-window-controls');
+    const closeButton = screen.getByLabelText('Close');
+    const minimizeButton = screen.getByLabelText('Minimize');
+    const maximizeButton = screen.getByLabelText('Maximize');
+
+    expect(controls).toHaveClass('group');
+    expect(closeButton).toHaveClass('bg-[#ff5f57]', 'border-[#e0443e]');
+    expect(minimizeButton).toHaveClass('bg-[#febc2e]', 'border-[#dea123]');
+    expect(maximizeButton).toHaveClass('bg-[#28c840]', 'border-[#1aab29]');
+
+    for (const button of [closeButton, minimizeButton, maximizeButton]) {
+      const icon = button.querySelector('svg');
+      expect(icon).toBeInTheDocument();
+      expect(icon).toHaveClass('opacity-0', 'group-hover:opacity-100');
+    }
+  });
+
   it('renders the title bar actions slot before window controls', () => {
     const { container } = render(<CustomTitleBar title="Workspace" />);
 

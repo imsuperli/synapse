@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Minus, Square, X, Maximize2, Home } from 'lucide-react';
+import { Minus, Square, X, Maximize2, Minimize2, Home } from 'lucide-react';
 import { resolveRendererAssetUrl } from '../utils/assetUrl';
 import { preventMouseButtonFocus } from '../utils/buttonFocus';
 import { appearanceTitlebarSurfaceStyle } from '../utils/appearance';
@@ -83,10 +83,20 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
       >
         {/* 左侧：窗口控制 + logo + 应用名 */}
         <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <div className="flex items-center gap-2">
-            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleClose} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors" aria-label="Close" />
-            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleMinimize} className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" aria-label="Minimize" />
-            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleMaximize} className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" aria-label="Maximize" />
+          <div className="group flex items-center gap-2" data-testid="mac-window-controls">
+            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleClose} className="flex h-3 w-3 items-center justify-center rounded-full border border-[#e0443e] bg-[#ff5f57]" aria-label="Close">
+              <X size={8} strokeWidth={2.5} className="pointer-events-none text-[#4d0000] opacity-0 transition-opacity duration-100 group-hover:opacity-100" />
+            </button>
+            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleMinimize} className="flex h-3 w-3 items-center justify-center rounded-full border border-[#dea123] bg-[#febc2e]" aria-label="Minimize">
+              <Minus size={8} strokeWidth={3} className="pointer-events-none text-[#704800] opacity-0 transition-opacity duration-100 group-hover:opacity-100" />
+            </button>
+            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleMaximize} className="flex h-3 w-3 items-center justify-center rounded-full border border-[#1aab29] bg-[#28c840]" aria-label="Maximize">
+              {isMaximized ? (
+                <Minimize2 size={7} strokeWidth={2.5} className="pointer-events-none text-[#006500] opacity-0 transition-opacity duration-100 group-hover:opacity-100" />
+              ) : (
+                <Maximize2 size={7} strokeWidth={2.5} className="pointer-events-none text-[#006500] opacity-0 transition-opacity duration-100 group-hover:opacity-100" />
+              )}
+            </button>
           </div>
           <div className="flex items-center gap-2 ml-1">
             <img src={appLogoSrc} alt="Logo" className="w-5 h-5" />
