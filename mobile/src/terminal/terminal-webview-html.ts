@@ -77,6 +77,18 @@ window.onerror = function(msg) {
     transform-origin: top left;
     display: inline-block;
   }
+  .mobile-cursor-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 3px;
+    min-width: 3px;
+    background: #ffffff;
+    pointer-events: none;
+    z-index: 20;
+    opacity: 1;
+    will-change: transform, height;
+  }
   .xterm { -webkit-user-select: none; user-select: none; font-variant-emoji: text; }
   .xterm .xterm-viewport {
     overflow-y: hidden !important;
@@ -224,6 +236,8 @@ window.onerror = function(msg) {
   var writesDraining = false;
   var afterDrainCallbacks = [];
   var termObserverDisposables = [];
+  var cursorOverlay = null;
+  var cursorOverlayFrame = null;
   var ready = false;
   // Why: init() flips ready false on every re-init (live width reflow included)
   // while the old surface stays visible; a document-scoped latch drives the
@@ -424,7 +438,11 @@ window.onerror = function(msg) {
       bufferType: buffer && typeof buffer.type === 'string' ? buffer.type : 'unknown',
       bufferLength: buffer ? buffer.length || 0 : 0,
       baseY: buffer ? buffer.baseY || 0 : 0,
-      viewportY: buffer ? buffer.viewportY || 0 : 0
+      viewportY: buffer ? buffer.viewportY || 0 : 0,
+      cursorX: buffer ? buffer.cursorX || 0 : 0,
+      cursorY: buffer ? buffer.cursorY || 0 : 0,
+      cursorOverlayAttached: Boolean(cursorOverlay && cursorOverlay.parentNode),
+      cursorOverlayVisible: Boolean(cursorOverlay && cursorOverlay.style.display !== 'none')
     };
     if (isMobileReflowTextScale()) {
       metrics.mobileLayout = mobileReflowLayout;
@@ -523,6 +541,56 @@ window.onerror = function(msg) {
     surface.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + getTotalScale() + ')';
     updateScrollIndicator(false);
     if (selMode === 'select') repositionOverlay();
+    scheduleCursorOverlayUpdate();
+  }
+
+  function scheduleCursorOverlayUpdate() {
+    if (cursorOverlayFrame !== null) return;
+    cursorOverlayFrame = requestAnimationFrame(function() {
+      cursorOverlayFrame = null;
+      updateCursorOverlay();
+    });
+  }
+
+  function resolveCursorOverlayPosition(buffer, cols, rows, cellW, cellH) {
+    if (!buffer || cols <= 0 || rows <= 0 || cellW <= 0 || cellH <= 0) return null;
+    var row = (buffer.baseY || 0) + (buffer.cursorY || 0) - (buffer.viewportY || 0);
+    if (row < 0 || row >= rows) return null;
+    var col = Math.max(0, Math.min(cols - 1, buffer.cursorX || 0));
+    return { x: col * cellW, y: row * cellH, height: cellH };
+  }
+
+  function updateCursorOverlay() {
+    if (!term || !surface || !term.buffer || !term.buffer.active) return;
+    var screen = term.screenElement;
+    if (!screen) return;
+    if (!cursorOverlay || cursorOverlay.parentNode !== screen) {
+      if (cursorOverlay) cursorOverlay.remove();
+      cursorOverlay = document.createElement('div');
+      cursorOverlay.className = 'mobile-cursor-overlay';
+      screen.appendChild(cursorOverlay);
+    }
+    var buffer = term.buffer.active;
+    var cellW = getCellWidth();
+    var cellH = getCellHeight();
+    var position = resolveCursorOverlayPosition(
+      buffer,
+      term.cols || 0,
+      term.rows || 0,
+      cellW,
+      cellH
+    );
+    if (!position) {
+      cursorOverlay.style.display = 'none';
+      return;
+    }
+    cursorOverlay.style.display = 'block';
+    var totalScale = Math.max(0.01, getTotalScale());
+    cursorOverlay.style.width = (3 / totalScale) + 'px';
+    cursorOverlay.style.minWidth = (3 / totalScale) + 'px';
+    cursorOverlay.style.height = position.height + 'px';
+    cursorOverlay.style.transform =
+      'translate(' + position.x + 'px,' + position.y + 'px)';
   }
 
   function updateScrollIndicator(reveal) {
@@ -1514,7 +1582,15 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     disposeTermObservers();
     try { termObserverDisposables.push(term.onLineFeed(logFeedAndEvict)); } catch (e) {}
     try {
-      termObserverDisposables.push(term.onScroll(function() { updateScrollIndicator(false); }));
+      termObserverDisposables.push(term.onScroll(function() {
+        updateScrollIndicator(false);
+        scheduleCursorOverlayUpdate();
+      }));
+    } catch (e) {}
+    try {
+      if (term.onCursorMove) {
+        termObserverDisposables.push(term.onCursorMove(scheduleCursorOverlayUpdate));
+      }
     } catch (e) {}
     // Why: emit modes on every parsed write so RN's mirror stays current
     // without round-trip; covers \\x1b[?2004h/l and alt-screen toggles.
@@ -1522,6 +1598,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       if (term.onWriteParsed) {
         termObserverDisposables.push(term.onWriteParsed(function() {
           ensureTerminalCursorVisible(term);
+          scheduleCursorOverlayUpdate();
           emitModesIfChanged();
           emitKeyboardAvoidanceMetrics();
         }));
@@ -1530,6 +1607,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     // Initial emit once buffer settles.
     afterWritesDrained(function() {
       ensureTerminalCursorVisible(term);
+      scheduleCursorOverlayUpdate();
       emitModesIfChanged();
       emitKeyboardAvoidanceMetrics();
     });

@@ -139,6 +139,13 @@ describe('terminal WebView bundled engine', () => {
     expect(terminalHtmlSource).toContain('function ensureTerminalCursorVisible(targetTerm)')
     expect(terminalHtmlSource).toContain("targetTerm.write('\\x1b[?25h')")
     expect(terminalHtmlSource).toContain('ensureTerminalCursorVisible(term);')
+    expect(terminalHtmlSource).toContain('function updateCursorOverlay()')
+    expect(terminalHtmlSource).toContain('function resolveCursorOverlayPosition(')
+    expect(terminalHtmlSource).toContain("cursorOverlay.className = 'mobile-cursor-overlay'")
+    expect(terminalHtmlSource).toContain("cursorOverlay.style.width = (3 / totalScale) + 'px'")
+    expect(terminalHtmlSource).toContain('term.onCursorMove(scheduleCursorOverlayUpdate)')
+    expect(terminalHtmlSource).toContain('cursorOverlayAttached: Boolean(cursorOverlay')
+    expect(terminalHtmlSource).toContain('cursorOverlayVisible: Boolean(cursorOverlay')
   })
 
   it('reports scaled cursor coordinates and can return live input to the latest line', () => {

@@ -294,6 +294,27 @@ describe("terminal WebView mobile reflow", () => {
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("ensureTerminalCursorVisible(source);");
   });
 
+  it("resolves the independent cursor overlay from the visible buffer position", () => {
+    const start = XTERM_HTML.indexOf("function resolveCursorOverlayPosition(");
+    const end = XTERM_HTML.indexOf("function updateCursorOverlay()", start);
+    const functionSource = XTERM_HTML.slice(start, end);
+    // eslint-disable-next-line no-new-func
+    const resolvePosition = new Function(`${functionSource}; return resolveCursorOverlayPosition;`)() as (
+      buffer: { baseY: number; cursorY: number; viewportY: number; cursorX: number },
+      cols: number,
+      rows: number,
+      cellW: number,
+      cellH: number,
+    ) => { x: number; y: number; height: number } | null;
+
+    expect(resolvePosition({ baseY: 0, cursorY: 2, viewportY: 0, cursorX: 4 }, 45, 42, 8, 15))
+      .toEqual({ x: 32, y: 30, height: 15 });
+    expect(resolvePosition({ baseY: 20, cursorY: 2, viewportY: 30, cursorX: 4 }, 45, 42, 8, 15))
+      .toBeNull();
+    expect(resolvePosition({ baseY: 20, cursorY: 0, viewportY: 20, cursorX: 0 }, 45, 42, 8, 15))
+      .toEqual({ x: 0, y: 0, height: 15 });
+  });
+
   beforeEach(() => {
     Object.defineProperty(window, "innerWidth", { value: 360, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: 630, configurable: true });
