@@ -5,6 +5,7 @@ import { TERMINAL_BASE_FONT_SIZE, TERMINAL_TEXT_SCALES } from '../storage/prefer
 import type { MobileTerminalTheme } from './mobile-terminal-theme'
 import { TERMINAL_PATH_TAP_JS } from './terminal-path-tap-injected'
 import { XTERM_ENGINE_CSS, XTERM_ENGINE_JS } from './terminal-webview-engine.generated'
+import { TERMINAL_FOREGROUND_RECOVERY_JS } from './terminal-webview-foreground-recovery-injected'
 import { TERMINAL_MOBILE_REFLOW_JS } from './terminal-webview-mobile-reflow-injected'
 import { TERMINAL_REFLOW_JS } from './terminal-webview-reflow-injected'
 import { TERMINAL_SCROLLBACK_PRESERVATION_JS } from './terminal-webview-scrollback-preservation-injected'
@@ -1421,6 +1422,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       } else {
         applyFitScale('reset-zoom-msg');
       }
+    } else if (msg.type === 'restore-foreground') {
+      restoreTerminalAfterForeground();
     } else if (msg.type === 'reveal-live-input') {
       revealLiveInput();
     } else if (msg.type === 'restore-keyboard-viewport') {
@@ -2220,6 +2223,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     accumDelta: 0, momentumId: null, isPinching: false,
     pinchDist: 0, pinchScale: 0, pinchSurfX: 0, pinchSurfY: 0
   };
+
+  ${TERMINAL_FOREGROUND_RECOVERY_JS}
 
   function updateTouchVelocity(deltaY, dt) {
     if (dt <= 0) return;

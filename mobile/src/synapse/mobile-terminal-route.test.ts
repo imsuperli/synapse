@@ -267,6 +267,20 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain("decision === 'compact-snapshot'")
     expect(routeSource).toContain("decision === 'coalesced-write'")
     expect(routeSource).toContain('limitBytes: TERMINAL_FOREGROUND_SMALL_DELTA_BYTES')
+    const restoreIndex = routeSource.indexOf('runtime?.terminalRef.current?.restoreForeground()')
+    const recoverIndex = routeSource.indexOf(
+      'void runtime?.recoverTerminalAfterForegroundRef.current?.()',
+      restoreIndex
+    )
+    expect(restoreIndex).toBeGreaterThanOrEqual(0)
+    expect(recoverIndex).toBeGreaterThan(restoreIndex)
+  })
+
+  it('copies a non-empty selection only from the active terminal', () => {
+    expect(routeSource).toContain('const handleSelectionCopy = useCallback(')
+    expect(routeSource).toContain('targetHandle !== activeHandleRef.current || text.length === 0')
+    expect(routeSource).toContain('void Clipboard.setStringAsync(text)')
+    expect(routeSource).toContain('onSelectionCopy={handleSelectionCopy}')
   })
 
   it('renders window tabs for grouped windows before falling back to same-window pane tabs', () => {

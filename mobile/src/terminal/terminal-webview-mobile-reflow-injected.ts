@@ -644,21 +644,111 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return links;
   }
 
+  function readMobileSimpleCsi(data, index) {
+    var cursor;
+    if (data.charCodeAt(index) === 0x1b && data.charAt(index + 1) === '[') {
+      cursor = index + 2;
+    } else if (data.charCodeAt(index) === 0x9b) {
+      cursor = index + 1;
+    } else {
+      return null;
+    }
+    var paramsStart = cursor;
+    while (cursor < data.length) {
+      var code = data.charCodeAt(cursor);
+      if (code < 0x30 || code > 0x39) break;
+      cursor++;
+    }
+    if (cursor >= data.length) return null;
+    var finalCode = data.charCodeAt(cursor);
+    if (finalCode < 0x40 || finalCode > 0x7e) return null;
+    return {
+      end: cursor + 1,
+      final: data.charAt(cursor),
+      params: data.slice(paramsStart, cursor)
+    };
+  }
+
+  function mobileSimpleCsiCount(token) {
+    if (!token || token.params === '') return 1;
+    return parseInt(token.params, 10);
+  }
+
+  function mobileSimpleCsiMatches(token, final, count) {
+    return !!token && token.final === final && mobileSimpleCsiCount(token) === count;
+  }
+
+  function matchMobileSerializerSoftWrapRepair(data, index) {
+    var cursor = index;
+    while (data.charAt(cursor) === '-') cursor++;
+    var blankCount = cursor - index - 1;
+    if (blankCount < 0) return null;
+    var cursorLeft = readMobileSimpleCsi(data, cursor);
+    if (!mobileSimpleCsiMatches(cursorLeft, 'D', 1)) return null;
+    cursor = cursorLeft.end;
+    var eraseDash = readMobileSimpleCsi(data, cursor);
+    if (!mobileSimpleCsiMatches(eraseDash, 'X', 1)) return null;
+    cursor = eraseDash.end;
+    if (blankCount === 0) return { end: cursor, blankCount: 0 };
+    var cursorUp = readMobileSimpleCsi(data, cursor);
+    if (!mobileSimpleCsiMatches(cursorUp, 'A', 1)) return null;
+    cursor = cursorUp.end;
+    var sourceAdvance = mobileSourceCols - blankCount;
+    var cursorForward = readMobileSimpleCsi(data, cursor);
+    if (!mobileSimpleCsiMatches(cursorForward, 'C', sourceAdvance)) return null;
+    cursor = cursorForward.end;
+    var eraseBlanks = readMobileSimpleCsi(data, cursor);
+    if (!mobileSimpleCsiMatches(eraseBlanks, 'X', blankCount)) return null;
+    cursor = eraseBlanks.end;
+    var cursorBack = readMobileSimpleCsi(data, cursor);
+    if (!mobileSimpleCsiMatches(cursorBack, 'D', sourceAdvance)) return null;
+    cursor = cursorBack.end;
+    var cursorDown = readMobileSimpleCsi(data, cursor);
+    if (!mobileSimpleCsiMatches(cursorDown, 'B', 1)) return null;
+    return { end: cursorDown.end, blankCount: blankCount };
+  }
+
+  function removeTrailingMobileErase(data, count) {
+    var escErase = '\x1b[' + count + 'X';
+    if (data.slice(-escErase.length) === escErase) {
+      return data.slice(0, -escErase.length);
+    }
+    var c1Erase = '\x9b' + count + 'X';
+    return data.slice(-c1Erase.length) === c1Erase
+      ? data.slice(0, -c1Erase.length)
+      : data;
+  }
+
   function makeMobileSerializedProjectionReflowSafe(serialized) {
     if (typeof serialized !== 'string' || serialized.length === 0) return '';
-    return serialized
+    serialized = serialized
       .replace(/\x1b\[\?25l/g, '\x1b[?25h')
-      .replace(/\x9b\?25l/g, '\x1b[?25h')
-      .replace(/\x1b\[(\d*)C/g, function(_match, countText) {
-        var count = countText ? parseInt(countText, 10) : 1;
+      .replace(/\x9b\?25l/g, '\x1b[?25h');
+    var result = '';
+    var index = 0;
+    while (index < serialized.length) {
+      if (serialized.charAt(index) === '-') {
+        var repair = matchMobileSerializerSoftWrapRepair(serialized, index);
+        if (repair) {
+          if (repair.blankCount > 0) {
+            result = removeTrailingMobileErase(result, repair.blankCount);
+          }
+          index = repair.end;
+          continue;
+        }
+      }
+      var token = readMobileSimpleCsi(serialized, index);
+      if (token && token.final === 'C') {
+        var count = mobileSimpleCsiCount(token);
         if (!isFinite(count) || count <= 0) count = 1;
-        return ' '.repeat(Math.min(mobileSourceCols, count));
-      })
-      .replace(/\x9b(\d*)C/g, function(_match, countText) {
-        var count = countText ? parseInt(countText, 10) : 1;
-        if (!isFinite(count) || count <= 0) count = 1;
-        return ' '.repeat(Math.min(mobileSourceCols, count));
-      });
+        result += ' '.repeat(Math.min(mobileSourceCols, count));
+        index = token.end;
+        continue;
+      }
+      result += serialized.charAt(index);
+      index++;
+    }
+    return result;
   }
 
   function mobileProjectionDimensions() {

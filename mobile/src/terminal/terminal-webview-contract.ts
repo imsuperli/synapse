@@ -69,6 +69,7 @@ export type TerminalWebViewHandle = {
   clear: () => void
   measureFitDimensions: (containerHeight?: number) => Promise<{ cols: number; rows: number } | null>
   resetZoom: () => void
+  restoreForeground: () => void
   revealLiveInput: () => void
   restoreKeyboardViewport: () => void
   cancelSelect: () => void

@@ -27,6 +27,17 @@ export const TERMINAL_TAP_DISPATCH_JS = `
     longPressOrigin = null;
   }
 
+  function resetTouchDispatcherState() {
+    clearLongPress();
+    tapCandidate = null;
+    stopEdgeScroll();
+    if (sel) sel.activeHandle = null;
+    dispatch.mode = 'idle';
+    dispatch.touchId = null;
+    dispatch.touchIds = null;
+    dispatch.longPressFingerInsideOverlay = false;
+  }
+
   function armLongPress(touch) {
     longPressOrigin = { x: touch.clientX, y: touch.clientY, identifier: touch.identifier };
     longPressTimer = setTimeout(function() {
@@ -175,14 +186,6 @@ export const TERMINAL_TAP_DISPATCH_JS = `
   }, { capture: true, passive: true });
 
   document.addEventListener('touchcancel', function() {
-    clearLongPress();
-    tapCandidate = null;
-    stopEdgeScroll();
-    if (dispatch.mode === 'select-drag') {
-      if (sel) sel.activeHandle = null;
-    }
-    dispatch.mode = 'idle';
-    dispatch.touchId = null;
-    dispatch.touchIds = null;
+    resetTouchDispatcherState();
   }, { capture: true, passive: true });
 `

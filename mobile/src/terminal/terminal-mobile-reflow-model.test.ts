@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import { TERMINAL_MOBILE_REFLOW_JS } from "./terminal-webview-mobile-reflow-injected";
 
 const require = createRequire(import.meta.url);
 const { Terminal } = require("@xterm/xterm") as typeof import("@xterm/xterm");
@@ -10,10 +11,16 @@ function writeTerminal(terminal: InstanceType<typeof Terminal>, data: string): P
   return new Promise((resolve) => terminal.write(data, resolve));
 }
 
-function makeProjectionReflowSafe(serialized: string): string {
-  return serialized.replace(/\u001b\[(\d*)C/g, (_match, countText: string) =>
-    " ".repeat(countText ? Number.parseInt(countText, 10) : 1),
-  );
+function makeProjectionReflowSafe(serialized: string, sourceCols: number): string {
+  // Execute the exact production transformer embedded in the WebView.
+  // eslint-disable-next-line no-new-func
+  const transform = new Function(
+    "serialized",
+    "sourceCols",
+    `${TERMINAL_MOBILE_REFLOW_JS}\n` +
+      "mobileSourceCols = sourceCols; return makeMobileSerializedProjectionReflowSafe(serialized);",
+  ) as (serialized: string, sourceCols: number) => string;
+  return transform(serialized, sourceCols);
 }
 
 function logicalLines(terminal: InstanceType<typeof Terminal>): string[] {
@@ -105,10 +112,38 @@ describe("mobile terminal canonical model projection", () => {
       excludeModes: false,
     });
     expect(serialized).toContain("\u001b[10C");
-    await writeTerminal(projection, makeProjectionReflowSafe(serialized));
+    await writeTerminal(projection, makeProjectionReflowSafe(serialized, source.cols));
 
     expect(logicalLines(projection).slice(0, 2)).toEqual(["abc          def", "prompt$ "]);
     await writeTerminal(projection, "next\r\n");
     expect(logicalLines(projection)).toContain("prompt$ next");
+  });
+
+  it("removes serializer-only soft-wrap repairs at a styled CJK width boundary", async () => {
+    const source = new Terminal({ cols: 20, rows: 6, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    await writeTerminal(
+      source,
+      "Search xxxxxxxxxxxx\u001b[44m设计\u001b[0m.md",
+    );
+
+    const serialized = serializeAddon.serialize({
+      excludeAltBuffer: true,
+      excludeModes: false,
+    });
+    expect(serialized).toContain("\u001b[A\u001b[19C\u001b[1X\u001b[19D\u001b[B");
+
+    const projection = new Terminal({
+      cols: 8,
+      rows: 12,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    const transformed = makeProjectionReflowSafe(serialized, source.cols);
+    await writeTerminal(projection, transformed);
+
+    expect(transformed).not.toContain("\u001b[19C");
+    expect(logicalLines(projection)).toEqual(logicalLines(source));
   });
 });

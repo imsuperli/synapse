@@ -33,6 +33,7 @@ export type TerminalWebViewCommand =
   | { type: 'clear'; id?: number }
   | { type: 'measure'; id?: number; containerHeight?: number }
   | { type: 'reset-zoom'; id?: number }
+  | { type: 'restore-foreground'; id?: number }
   | { type: 'reveal-live-input'; id?: number }
   | { type: 'restore-keyboard-viewport'; id?: number }
   | { type: 'cancel-select'; id?: number }

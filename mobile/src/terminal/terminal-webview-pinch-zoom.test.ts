@@ -54,7 +54,9 @@ function makeTerminal({ cols, rows, cellWidth, cellHeight }: TerminalGeometry) {
     resize() {},
     clear() {},
     reset() {},
-    refresh() {},
+    refresh() {
+      refreshCalls += 1
+    },
     selectAll() {},
     clearSelection() {},
     select() {},
@@ -69,6 +71,8 @@ function makeTerminal({ cols, rows, cellWidth, cellHeight }: TerminalGeometry) {
 }
 
 type PostedMessage = Record<string, unknown>
+
+let refreshCalls = 0
 
 function boot(overrides: Partial<TerminalGeometry> = {}): PostedMessage[] {
   const geometry: TerminalGeometry = {
@@ -137,6 +141,7 @@ describe('terminal WebView pinch zoom', () => {
   beforeEach(() => {
     Object.defineProperty(window, 'innerWidth', { value: 360, configurable: true })
     Object.defineProperty(window, 'innerHeight', { value: 640, configurable: true })
+    refreshCalls = 0
   })
 
   it('does not persist a smaller text scale when a two-finger move arrives before pinch start is initialized', async () => {
@@ -176,6 +181,33 @@ describe('terminal WebView pinch zoom', () => {
       type: 'font-scale-changed',
       fontScale: 0.5
     })
+  })
+
+  it('clears an interrupted pinch and redraws without changing the text scale', async () => {
+    const posted = boot()
+    await settle()
+    const refreshCallsBeforeRestore = refreshCalls
+
+    fireSurfaceTouch('touchstart', [
+      { x: 100, y: 120 },
+      { x: 220, y: 120 }
+    ])
+    fireSurfaceTouch('touchmove', [
+      { x: 130, y: 120 },
+      { x: 190, y: 120 }
+    ])
+    sendWebViewMessage({ type: 'restore-foreground' })
+    fireSurfaceTouch('touchend', [])
+
+    expect(refreshCalls).toBeGreaterThan(refreshCallsBeforeRestore)
+    expect(posted.some((message) => message.type === 'font-scale-changed')).toBe(false)
+
+    fireSurfaceTouch('touchstart', [{ x: 180, y: 280 }])
+    fireSurfaceTouch('touchmove', [{ x: 180, y: 380 }])
+    fireSurfaceTouch('touchend', [])
+
+    expect(posted.filter((message) => message.type === 'font-scale-changed')).toHaveLength(0)
+    expect(posted.filter((message) => message.type === 'history-top')).toHaveLength(1)
   })
 
   it.each([1.25, 1.5, 2])(

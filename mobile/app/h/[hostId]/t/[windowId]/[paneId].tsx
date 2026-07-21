@@ -1867,6 +1867,7 @@ export default function RemoteTerminalScreen() {
           const runtime = activeHandleRef.current
             ? sessionRuntimesRef.current.get(activeHandleRef.current)
             : null
+          runtime?.terminalRef.current?.restoreForeground()
           void runtime?.recoverTerminalAfterForegroundRef.current?.()
         }, 150)
       })
@@ -2482,6 +2483,13 @@ export default function RemoteTerminalScreen() {
     [stopAccessoryRepeat]
   )
 
+  const handleSelectionCopy = useCallback((targetHandle: string, text: string) => {
+    if (targetHandle !== activeHandleRef.current || text.length === 0) {
+      return
+    }
+    void Clipboard.setStringAsync(text)
+  }, [])
+
   const handlePaste = useCallback(async () => {
     if (!canSend) {
       return
@@ -2937,7 +2945,7 @@ export default function RemoteTerminalScreen() {
               onRef={setTerminalWebViewRef}
               onWebReady={handleResidentTerminalWebReady}
               onSelectionMode={() => {}}
-              onSelectionCopy={() => {}}
+              onSelectionCopy={handleSelectionCopy}
               onSelectionEvicted={() => {}}
               onModesChanged={() => {}}
               onKeyboardAvoidanceMetrics={(targetHandle, metrics) => {

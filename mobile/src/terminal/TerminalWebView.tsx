@@ -374,6 +374,9 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       resetZoom() {
         postMessage({ type: 'reset-zoom' })
       },
+      restoreForeground() {
+        postMessage({ type: 'restore-foreground' })
+      },
       revealLiveInput() {
         postMessage({ type: 'reveal-live-input' })
       },
