@@ -23,6 +23,9 @@ type FakeLine = {
   getCell(col?: number): {
     getWidth(): number;
     getChars(): string;
+    getBgColorMode?(): number;
+    getBgColor?(): number;
+    isAttributeDefault?(): boolean;
     extended: { urlId: number };
   };
 };
@@ -309,6 +312,16 @@ function projectSourceCursor(
   source: Record<string, unknown>,
   targetCols: number,
 ): { contentRow: number; col: number } | null {
+  return projectSourceSnapshotGeometry(source, targetCols).cursor;
+}
+
+function projectSourceSnapshotGeometry(
+  source: Record<string, unknown>,
+  targetCols: number,
+): {
+  cursor: { contentRow: number; col: number } | null;
+  contentRows: number;
+} {
   // eslint-disable-next-line no-new-func
   const project = new Function(
     "source",
@@ -317,16 +330,20 @@ function projectSourceCursor(
       "textScaleMode = 'mobile-reflow'; mobileReflowLayout = 'snapshot'; " +
       "mobileSourceTerm = source; var target = { options: {} }; " +
       "collectMobileProjectedOscLinks(targetCols, target); " +
-      "return target.__mobileSnapshotCursor || null;",
+      "return { cursor: target.__mobileSnapshotCursor || null, " +
+      "contentRows: mobileProjectedContentRows };",
   ) as (
     source: Record<string, unknown>,
     targetCols: number,
-  ) => { contentRow: number; col: number } | null;
+  ) => {
+    cursor: { contentRow: number; col: number } | null;
+    contentRows: number;
+  };
   return project(source, targetCols);
 }
 
 function projectionLine(
-  cells: Array<{ chars: string; width?: number }>,
+  cells: Array<{ chars: string; width?: number; background?: number }>,
   isWrapped = false,
 ): FakeLine {
   return {
@@ -340,6 +357,9 @@ function projectionLine(
     getCell: (col = 0) => ({
       getWidth: () => cells[col]?.width ?? 1,
       getChars: () => cells[col]?.chars ?? "",
+      getBgColorMode: () => (cells[col]?.background === undefined ? 0 : 16_777_216),
+      getBgColor: () => cells[col]?.background ?? -1,
+      isAttributeDefault: () => cells[col]?.background === undefined,
       extended: { urlId: 0 },
     }),
   };
@@ -496,6 +516,49 @@ describe("terminal WebView mobile reflow", () => {
     });
   });
 
+  it("does not count styled trailing blanks as projected cursor rows", () => {
+    const history = Array.from({ length: 50 }, (_, index) =>
+      projectionLine(Array.from(`H${index}`).map((chars) => ({ chars }))),
+    );
+    const prompt = projectionLine(Array.from("PROMPT").map((chars) => ({ chars })));
+    const status = projectionLine([
+      ...Array.from("STATUS").map((chars) => ({ chars, background: 236 })),
+      ...Array.from({ length: 14 }, () => ({ chars: "", background: 236 })),
+    ]);
+
+    expect(
+      projectSourceSnapshotGeometry(
+        sourceWithCursor([...history, prompt, status], 50, 6, 20),
+        8,
+      ),
+    ).toEqual({
+      cursor: { contentRow: 50, col: 6 },
+      contentRows: 52,
+    });
+  });
+
+  it("counts styled blanks that serialization advances before a background reset", () => {
+    const history = Array.from({ length: 50 }, (_, index) =>
+      projectionLine(Array.from(`H${index}`).map((chars) => ({ chars }))),
+    );
+    const prompt = projectionLine(Array.from("PROMPT").map((chars) => ({ chars })));
+    const status = projectionLine([
+      ...Array.from("STATUS").map((chars) => ({ chars, background: 236 })),
+      ...Array.from({ length: 4 }, () => ({ chars: "", background: 236 })),
+      ...Array.from({ length: 10 }, () => ({ chars: "" })),
+    ]);
+
+    expect(
+      projectSourceSnapshotGeometry(
+        sourceWithCursor([...history, prompt, status], 50, 6, 20),
+        8,
+      ),
+    ).toEqual({
+      cursor: { contentRow: 50, col: 6 },
+      contentRows: 53,
+    });
+  });
+
   beforeEach(() => {
     Object.defineProperty(window, "innerWidth", { value: 360, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: 630, configurable: true });
@@ -515,7 +578,7 @@ describe("terminal WebView mobile reflow", () => {
     const [source, projection] = FakeTerminal.instances;
     expect(source).toMatchObject({ cols: 228, rows: 70, opened: false });
     expect(source?.options.fontSize).toBe(10);
-    expect(source?.options.scrollback).toBe(256);
+    expect(source?.options.scrollback).toBe(30000);
     expect(projection).toMatchObject({ cols: 45, rows: 42, opened: true });
     expect(projection?.options.fontSize).toBe(10);
     expect(projection?.options.cursorInactiveStyle).toBe("bar");

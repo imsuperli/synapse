@@ -2,7 +2,9 @@
 // terminal always parses PTY bytes at the desktop grid. A second, visible term
 // projects normal output or a serialized complex-screen snapshot at phone width.
 export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
-  var MOBILE_REFLOW_SOURCE_SCROLLBACK = 256;
+  // Local snapshot rebuilds depend on this source buffer. Lowering its limit
+  // irreversibly discards history before the replacement projection is built.
+  var MOBILE_REFLOW_SOURCE_SCROLLBACK = 30000;
   var MOBILE_REFLOW_REFRESH_DELAY_MS = 120;
   var mobileSourceTerm = null;
   var mobileSourceSerializeAddon = null;
@@ -519,10 +521,44 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var targetCol = 0;
     var active = null;
     var projectedCursor = null;
+    var projectedBgMode = 0;
+    var projectedBgColor = -1;
 
     function closeActive() {
       if (active && active.endCol > active.startCol) links.push(active);
       active = null;
+    }
+
+    function prepareProjectedCell(width) {
+      if (targetCol + width > targetCols) {
+        closeActive();
+        targetRow++;
+        targetCol = 0;
+      }
+    }
+
+    function advanceProjectedCell(width) {
+      prepareProjectedCell(width);
+      targetCol += width;
+    }
+
+    function advanceProjectedBlanks(width) {
+      for (var index = 0; index < width; index++) {
+        advanceProjectedCell(1);
+      }
+    }
+
+    function updateProjectedBackground(cell) {
+      var mode = 0;
+      var color = -1;
+      try {
+        mode = cell && cell.getBgColorMode ? cell.getBgColorMode() : 0;
+        color = cell && cell.getBgColor ? cell.getBgColor() : -1;
+      } catch (e) {}
+      var changed = mode !== projectedBgMode || color !== projectedBgColor;
+      projectedBgMode = mode;
+      projectedBgColor = color;
+      return changed;
     }
 
     var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
@@ -551,15 +587,29 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
         );
       }
       var lineLength = mobileSourceLineContentEnd(line);
-      for (var col = 0; col < lineLength; col++) {
+      var scanEnd = Math.min(mobileSourceTerm.cols, lineLength + 1);
+      // SerializeAddon advances blank runs only when later content or a
+      // background transition flushes them. Its trailing CSI X erases cells
+      // without moving the projection cursor.
+      var pendingBlankWidth = 0;
+      for (var col = 0; col < scanEnd; col++) {
         var cell = line.getCell(col);
         if (!cell || cell.getWidth() === 0) continue;
         var width = Math.max(1, cell.getWidth());
-        if (targetCol + width > targetCols) {
+        var backgroundChanged = updateProjectedBackground(cell);
+        var chars = cell.getChars();
+        if (!chars) {
+          if (backgroundChanged) {
+            advanceProjectedBlanks(pendingBlankWidth);
+            pendingBlankWidth = 0;
+          }
           closeActive();
-          targetRow++;
-          targetCol = 0;
+          pendingBlankWidth += width;
+          continue;
         }
+        advanceProjectedBlanks(pendingBlankWidth);
+        pendingBlankWidth = 0;
+        prepareProjectedCell(width);
         var linkId = mobileCellOscLinkId(cell);
         var linkData = linkId && service && service.getLinkData
           ? service.getLinkData(linkId)
