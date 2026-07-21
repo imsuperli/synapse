@@ -9,6 +9,7 @@ import { runMobileExpoCli } from './mobile-expo-cli.mjs'
 const mobileDir = path.resolve(import.meta.dirname, '..')
 const androidDir = path.join(mobileDir, 'android')
 const artifactsDir = path.join(mobileDir, 'dist', 'android')
+const androidGradleJvmArgs = '-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8'
 
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -45,7 +46,11 @@ async function main() {
 
   const gradleCommand =
     process.platform === 'win32' ? path.join(androidDir, 'gradlew.bat') : './gradlew'
-  await runCommand(gradleCommand, ['--no-daemon', 'assembleRelease'], { cwd: androidDir })
+  await runCommand(
+    gradleCommand,
+    ['--no-daemon', `-Dorg.gradle.jvmargs=${androidGradleJvmArgs}`, 'assembleRelease'],
+    { cwd: androidDir }
+  )
 
   const apkPath = await copyApk()
   console.log(`[mobile] Android APK written to ${path.relative(mobileDir, apkPath)}`)
