@@ -570,11 +570,22 @@ window.onerror = function(msg) {
     });
   }
 
-  function resolveCursorOverlayPosition(buffer, cols, rows, cellW, cellH) {
+  function resolveCursorOverlayPosition(
+    buffer,
+    cols,
+    rows,
+    cellW,
+    cellH,
+    projectedCursor,
+    projectedRowOffset
+  ) {
     if (!buffer || cols <= 0 || rows <= 0 || cellW <= 0 || cellH <= 0) return null;
-    var row = (buffer.baseY || 0) + (buffer.cursorY || 0) - (buffer.viewportY || 0);
+    var row = projectedCursor
+      ? (projectedCursor.contentRow || 0) - (projectedRowOffset || 0) - (buffer.viewportY || 0)
+      : (buffer.baseY || 0) + (buffer.cursorY || 0) - (buffer.viewportY || 0);
     if (row < 0 || row >= rows) return null;
-    var col = Math.max(0, Math.min(cols - 1, buffer.cursorX || 0));
+    var cursorCol = projectedCursor ? projectedCursor.col : buffer.cursorX;
+    var col = Math.max(0, Math.min(cols - 1, cursorCol || 0));
     return { x: col * cellW, y: row * cellH, height: cellH };
   }
 
@@ -591,13 +602,20 @@ window.onerror = function(msg) {
     var buffer = term.buffer.active;
     var cellW = getCellWidth();
     var cellH = getCellHeight();
-    var position = resolveCursorOverlayPosition(
-      buffer,
-      term.cols || 0,
-      term.rows || 0,
-      cellW,
-      cellH
-    );
+    var projectedCursor = isMobileReflowSnapshotLayout()
+      ? term.__mobileSnapshotCursor
+      : null;
+    var position = isMobileReflowSnapshotLayout() && !projectedCursor
+      ? null
+      : resolveCursorOverlayPosition(
+        buffer,
+        term.cols || 0,
+        term.rows || 0,
+        cellW,
+        cellH,
+        projectedCursor,
+        projectedCursor ? initialOscLinkRowOffset : 0
+      );
     if (!position) {
       cursorOverlay.style.display = 'none';
       return;

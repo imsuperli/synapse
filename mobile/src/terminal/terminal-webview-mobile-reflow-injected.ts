@@ -291,6 +291,38 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return 0;
   }
 
+  function mobileProjectedCursorWithinLine(
+    line,
+    sourceCursorCol,
+    targetRow,
+    targetCol,
+    targetCols
+  ) {
+    var sourceLimit = Math.min(mobileSourceTerm.cols, Math.max(0, sourceCursorCol));
+    for (var col = 0; col < sourceLimit; col++) {
+      var cell = line.getCell(col);
+      if (!cell || cell.getWidth() === 0) continue;
+      var width = Math.max(1, cell.getWidth());
+      if (targetCol + width > targetCols) {
+        targetRow++;
+        targetCol = 0;
+      }
+      targetCol += width;
+    }
+    return {
+      contentRow: targetRow,
+      col: Math.max(0, Math.min(targetCols - 1, targetCol))
+    };
+  }
+
+  function configureMobileSnapshotCursor(targetTerm, projectedCursor) {
+    if (!targetTerm) return;
+    // The projection's parser ends at the final serialized status row. Hide
+    // that synthetic xterm cursor and render the mapped source cursor instead.
+    targetTerm.options.cursorInactiveStyle = 'none';
+    targetTerm.__mobileSnapshotCursor = projectedCursor;
+  }
+
   function mobileSourceCanUseAdaptiveLayout() {
     return (
       mobileControlSequenceState === 'ground' &&
@@ -474,7 +506,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     }
   }
 
-  function collectMobileProjectedOscLinks(targetCols) {
+  function collectMobileProjectedOscLinks(targetCols, cursorTargetTerm) {
     var source = mobileSourceTerm;
     var service = mobileSourceOscLinkService();
     mobileProjectedContentRows = 0;
@@ -486,6 +518,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var targetRow = 0;
     var targetCol = 0;
     var active = null;
+    var projectedCursor = null;
 
     function closeActive() {
       if (active && active.endCol > active.startCol) links.push(active);
@@ -507,6 +540,15 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
         closeActive();
         targetRow++;
         targetCol = 0;
+      }
+      if (cursorTargetTerm && row === cursorRow) {
+        projectedCursor = mobileProjectedCursorWithinLine(
+          line,
+          buffer.cursorX || 0,
+          targetRow,
+          targetCol,
+          targetCols
+        );
       }
       var lineLength = mobileSourceLineContentEnd(line);
       for (var col = 0; col < lineLength; col++) {
@@ -546,6 +588,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     }
     closeActive();
     mobileProjectedContentRows = targetRow + 1;
+    if (cursorTargetTerm) {
+      configureMobileSnapshotCursor(cursorTargetTerm, projectedCursor);
+    }
     return links;
   }
 
@@ -623,7 +668,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       }
       term.resize(dimensions.cols, dimensions.rows);
       initRows = dimensions.rows;
-      initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols);
+      initialOscLinks = collectMobileProjectedOscLinks(
+        dimensions.cols,
+        projectionLayout === 'snapshot' ? term : null
+      );
       mobileSourceTerm.options.scrollback = projectionLayout === 'adaptive'
         ? MOBILE_REFLOW_SOURCE_SCROLLBACK
         : 30000;
@@ -796,7 +844,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
           surface = nextSurface;
           mobileReflowLayout = 'snapshot';
           initRows = dimensions.rows;
-          initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols);
+          initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols, nextTerm);
           mobileSourceTerm.options.scrollback = 30000;
           restoreMobileProjectionScroll(nextTerm, scrollAnchorRows);
           initialOscLinkRowOffset = Math.max(
@@ -1287,7 +1335,13 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       try { mobileSourceTerm.clear(); mobileSourceTerm.reset(); } catch (e) {}
     }
     if (term && term !== mobileSourceTerm) {
-      try { term.clear(); term.reset(); } catch (e) {}
+      try {
+        term.clear();
+        term.reset();
+        term.__mobileSnapshotCursor = isMobileReflowSnapshotLayout()
+          ? { contentRow: 0, col: 0 }
+          : null;
+      } catch (e) {}
     }
   }
 `;

@@ -53,6 +53,7 @@ class FakeTerminal {
   unstable = false;
   cursorGap = false;
   scrollToLineCalls: number[] = [];
+  __mobileSnapshotCursor: { contentRow: number; col: number } | null = null;
   private writeParsedListeners: Array<() => void> = [];
 
   private readonly stableLine: FakeLine = {
@@ -304,6 +305,68 @@ function collectProjectedOscLinks(
   return collect(source, targetCols);
 }
 
+function projectSourceCursor(
+  source: Record<string, unknown>,
+  targetCols: number,
+): { contentRow: number; col: number } | null {
+  // eslint-disable-next-line no-new-func
+  const project = new Function(
+    "source",
+    "targetCols",
+    `${TERMINAL_MOBILE_REFLOW_JS}\n` +
+      "textScaleMode = 'mobile-reflow'; mobileReflowLayout = 'snapshot'; " +
+      "mobileSourceTerm = source; var target = { options: {} }; " +
+      "collectMobileProjectedOscLinks(targetCols, target); " +
+      "return target.__mobileSnapshotCursor || null;",
+  ) as (
+    source: Record<string, unknown>,
+    targetCols: number,
+  ) => { contentRow: number; col: number } | null;
+  return project(source, targetCols);
+}
+
+function projectionLine(
+  cells: Array<{ chars: string; width?: number }>,
+  isWrapped = false,
+): FakeLine {
+  return {
+    isWrapped,
+    translateToString: (_trimRight, start = 0) =>
+      cells
+        .slice(start)
+        .map((cell) => cell.chars)
+        .join("")
+        .trimEnd(),
+    getCell: (col = 0) => ({
+      getWidth: () => cells[col]?.width ?? 1,
+      getChars: () => cells[col]?.chars ?? "",
+      extended: { urlId: 0 },
+    }),
+  };
+}
+
+function sourceWithCursor(
+  lines: FakeLine[],
+  cursorRow: number,
+  cursorCol: number,
+  cols = 20,
+): Record<string, unknown> {
+  const active = {
+    type: "alternate",
+    length: lines.length,
+    baseY: 0,
+    viewportY: 0,
+    cursorX: cursorCol,
+    cursorY: cursorRow,
+    getLine: (row: number) => lines[row],
+  };
+  return {
+    cols,
+    rows: lines.length,
+    buffer: { active, normal: active },
+  };
+}
+
 let runtimeBooted = false;
 let activePostedMessages: PostedMessage[] = [];
 
@@ -368,6 +431,8 @@ describe("terminal WebView mobile reflow", () => {
       rows: number,
       cellW: number,
       cellH: number,
+      projectedCursor?: { contentRow: number; col: number },
+      projectedRowOffset?: number,
     ) => { x: number; y: number; height: number } | null;
 
     expect(resolvePosition({ baseY: 0, cursorY: 2, viewportY: 0, cursorX: 4 }, 45, 42, 8, 15))
@@ -376,6 +441,59 @@ describe("terminal WebView mobile reflow", () => {
       .toBeNull();
     expect(resolvePosition({ baseY: 20, cursorY: 0, viewportY: 20, cursorX: 0 }, 45, 42, 8, 15))
       .toEqual({ x: 0, y: 0, height: 15 });
+    expect(
+      resolvePosition(
+        { baseY: 80, cursorY: 20, viewportY: 30, cursorX: 44 },
+        45,
+        42,
+        8,
+        15,
+        { contentRow: 42, col: 7 },
+        10,
+      ),
+    ).toEqual({ x: 56, y: 30, height: 15 });
+  });
+
+  it("maps the source cursor independently from content on later status rows", () => {
+    const input = projectionLine(
+      Array.from("prompt text").map((chars) => ({ chars })),
+    );
+    const status = projectionLine(
+      Array.from("gpt-5.6-sol xhigh").map((chars) => ({ chars })),
+    );
+
+    expect(projectSourceCursor(sourceWithCursor([input, status], 0, 6), 8)).toEqual({
+      contentRow: 0,
+      col: 6,
+    });
+    expect(projectSourceCursor(sourceWithCursor([input, status], 0, 10), 8)).toEqual({
+      contentRow: 1,
+      col: 2,
+    });
+  });
+
+  it("maps source soft wraps and double-width cells to phone cursor coordinates", () => {
+    const first = projectionLine(Array.from("abcdefghij").map((chars) => ({ chars })));
+    const continuation = projectionLine(
+      Array.from("klm").map((chars) => ({ chars })),
+      true,
+    );
+    expect(projectSourceCursor(sourceWithCursor([first, continuation], 1, 3, 10), 6)).toEqual({
+      contentRow: 2,
+      col: 1,
+    });
+
+    const wide = projectionLine([
+      { chars: "a" },
+      { chars: "b" },
+      { chars: "c" },
+      { chars: "界", width: 2 },
+      { chars: "", width: 0 },
+    ]);
+    expect(projectSourceCursor(sourceWithCursor([wide], 0, 5, 8), 4)).toEqual({
+      contentRow: 1,
+      col: 2,
+    });
   });
 
   beforeEach(() => {
@@ -400,6 +518,7 @@ describe("terminal WebView mobile reflow", () => {
     expect(source?.options.scrollback).toBe(256);
     expect(projection).toMatchObject({ cols: 45, rows: 42, opened: true });
     expect(projection?.options.fontSize).toBe(10);
+    expect(projection?.options.cursorInactiveStyle).toBe("bar");
     expect(posted).toContainEqual({ type: "ready", cols: 45, rows: 42 });
     expect(posted).toContainEqual(
       expect.objectContaining({
@@ -443,6 +562,7 @@ describe("terminal WebView mobile reflow", () => {
       opened: true,
       disposed: false,
     });
+    expect(projection?.options.cursorInactiveStyle).toBe("none");
     expect(projection?.allData).toContain("full screen");
     expect(posted).toContainEqual({ type: "ready", cols: 45, rows: 42 });
     expect(posted).toContainEqual(
@@ -556,6 +676,7 @@ describe("terminal WebView mobile reflow", () => {
     expect(source?.opened).toBe(false);
     expect(projection?.disposed).toBe(true);
     expect(snapshot).toMatchObject({ cols: 45, rows: 42, opened: true, disposed: false });
+    expect(snapshot?.options.cursorInactiveStyle).toBe("none");
     expect(snapshot?.allData).toContain("updated");
     expect(posted.some((message) => message.type === "mobile-reflow-refresh")).toBe(false);
     expect(posted).toContainEqual(
@@ -594,6 +715,10 @@ describe("terminal WebView mobile reflow", () => {
     expect(FakeTerminal.instances[0]).toMatchObject({ opened: false, cols: 228, rows: 70 });
     expect(FakeTerminal.instances[1]).toMatchObject({ opened: true, cols: 45, rows: 42 });
     expect(FakeTerminal.instances[1]?.allData).toBe("abc");
+    expect(FakeTerminal.instances[1]?.__mobileSnapshotCursor).toEqual({
+      contentRow: 0,
+      col: 13,
+    });
     expect(posted).toContainEqual(
       expect.objectContaining({
         type: "diagnostic",
@@ -601,6 +726,17 @@ describe("terminal WebView mobile reflow", () => {
         metrics: expect.objectContaining({ mobileLayout: "snapshot" }),
       }),
     );
+  });
+
+  it("resets the mapped snapshot cursor when the terminal is cleared", async () => {
+    boot("abc\u001b[10C");
+    await settle();
+    const snapshot = FakeTerminal.instances[1];
+
+    sendWebViewMessage({ type: "clear" });
+
+    expect(snapshot?.__mobileSnapshotCursor).toEqual({ contentRow: 0, col: 0 });
+    expect(snapshot?.options.cursorInactiveStyle).toBe("none");
   });
 
   it("keeps the old projection visible until a complex live snapshot is complete", async () => {
