@@ -14,7 +14,7 @@ function readNormalBufferLines(terminal: Terminal): string[] {
 }
 
 function readVisibleNormalBufferLines(terminal: Terminal): string[] {
-  const start = terminal.buffer.normal.baseY;
+  const start = terminal.buffer.normal.viewportY;
   return readNormalBufferLines(terminal).slice(start, start + terminal.rows);
 }
 
@@ -80,6 +80,79 @@ describe('terminal scrollback preservation', () => {
       expect(terminal.buffer.normal.viewportY).toBe(viewportYBefore);
     } finally {
       dispose();
+      terminal.dispose();
+    }
+  });
+
+  it('keeps visible history stable when live output reaches the scrollback limit', async () => {
+    const terminal = new Terminal({ cols: 20, rows: 10, scrollback: 100 });
+    const dispose = installTerminalScrollbackPreservation(terminal);
+
+    try {
+      await writeTerminal(
+        terminal,
+        Array.from({ length: 110 }, (_, index) => `OLD-${index + 1}\r\n`).join(''),
+      );
+      terminal.scrollToLine(40);
+      const viewportYBefore = terminal.buffer.normal.viewportY;
+      const visibleBefore = readVisibleNormalBufferLines(terminal);
+
+      await writeTerminal(
+        terminal,
+        Array.from({ length: 60 }, (_, index) => `NEW-${index + 1}\r\n`).join(''),
+      );
+
+      expect(terminal.options.scrollback).toBe(1000);
+      expect(terminal.buffer.normal.viewportY).toBe(viewportYBefore);
+      expect(readVisibleNormalBufferLines(terminal)).toEqual(visibleBefore);
+    } finally {
+      dispose();
+      terminal.dispose();
+    }
+  });
+
+  it('releases temporary scrollback after the reader returns to live output', async () => {
+    const terminal = new Terminal({ cols: 20, rows: 10, scrollback: 100 });
+    const dispose = installTerminalScrollbackPreservation(terminal);
+
+    try {
+      await writeTerminal(
+        terminal,
+        Array.from({ length: 110 }, (_, index) => `OLD-${index + 1}\r\n`).join(''),
+      );
+      terminal.scrollToLine(40);
+      await writeTerminal(terminal, 'NEW\r\n');
+      expect(terminal.options.scrollback).toBe(1000);
+
+      terminal.scrollToBottom();
+      await writeTerminal(terminal, 'LIVE\r\n');
+
+      expect(terminal.options.scrollback).toBe(100);
+      expect(terminal.buffer.normal.viewportY).toBe(terminal.buffer.normal.baseY);
+    } finally {
+      dispose();
+      terminal.dispose();
+    }
+  });
+
+  it('restores xterm scrolling when the preservation handler is disposed', async () => {
+    const terminal = new Terminal({ cols: 20, rows: 10, scrollback: 100 });
+    const dispose = installTerminalScrollbackPreservation(terminal);
+
+    try {
+      await writeTerminal(
+        terminal,
+        Array.from({ length: 110 }, (_, index) => `OLD-${index + 1}\r\n`).join(''),
+      );
+      terminal.scrollToLine(40);
+      const viewportYBefore = terminal.buffer.normal.viewportY;
+      dispose();
+
+      await writeTerminal(terminal, 'NEW\r\n');
+
+      expect(terminal.options.scrollback).toBe(100);
+      expect(terminal.buffer.normal.viewportY).toBe(viewportYBefore - 1);
+    } finally {
       terminal.dispose();
     }
   });
