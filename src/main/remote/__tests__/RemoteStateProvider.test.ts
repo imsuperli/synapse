@@ -389,8 +389,81 @@ describe('RemoteStateProvider', () => {
     expect(workspace.windows).toHaveLength(originalWindowCount);
   });
 
-  it('rejects starting stopped SSH panes from the mobile remote path', async () => {
+  it('starts stopped SSH panes from their persisted profile binding', async () => {
     const workspace = createWorkspace();
+    const processes = [{
+      windowId: 'win-1',
+      paneId: 'pane-terminal',
+      pid: 111,
+      sessionId: 'stored-session',
+      status: ProcessStatus.Exited,
+    }];
+    const startSSHTerminalPane = vi.fn(async () => {
+      processes.push({
+        windowId: 'win-1',
+        paneId: 'pane-terminal',
+        pid: 777,
+        sessionId: 'ssh-session-777',
+        status: ProcessStatus.Alive,
+      });
+      return {
+        pid: 777,
+        sessionId: 'ssh-session-777',
+        status: WindowStatus.WaitingForInput,
+      };
+    });
+    const onWindowRuntimeUpdated = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => processes) } as any,
+      startSSHTerminalPane,
+      onWindowRuntimeUpdated,
+    });
+
+    const result = await provider.startWindow({
+      windowId: 'win-1',
+      paneId: 'pane-terminal',
+      initialCols: 132,
+      initialRows: 38,
+    });
+
+    expect(startSSHTerminalPane).toHaveBeenCalledWith({
+      windowId: 'win-1',
+      paneId: 'pane-terminal',
+      profileId: 'prod',
+      workingDirectory: '/repo',
+      command: 'bash',
+      initialCols: 132,
+      initialRows: 38,
+    });
+    expect(result).toMatchObject({
+      pane: {
+        paneId: 'pane-terminal',
+        backend: 'ssh',
+        running: true,
+        pid: 777,
+        sessionId: 'ssh-session-777',
+      },
+      startedPanes: [{ paneId: 'pane-terminal' }],
+    });
+    expect(onWindowRuntimeUpdated).toHaveBeenCalledWith({
+      window: workspace.windows[0],
+      workspace,
+    });
+  });
+
+  it('does not mutate a stopped SSH pane when the SSH starter is unavailable', async () => {
+    const workspace = createWorkspace();
+    const targetWindow = workspace.windows[0];
+    if (!targetWindow || targetWindow.layout.type !== 'split') {
+      throw new Error('expected mixed window fixture');
+    }
+    const targetNode = targetWindow.layout.children[0];
+    if (!targetNode || targetNode.type !== 'pane') {
+      throw new Error('expected SSH pane fixture');
+    }
+    const pane = targetNode.pane;
+    const originalRuntime = { status: pane.status, pid: pane.pid, sessionId: pane.sessionId };
     const provider = new RemoteStateProvider({
       getCurrentWorkspace: () => workspace,
       processManager: { listProcesses: vi.fn(() => []) } as any,
@@ -399,7 +472,33 @@ describe('RemoteStateProvider', () => {
 
     await expect(
       provider.startWindow({ windowId: 'win-1', paneId: 'pane-terminal' }),
-    ).rejects.toThrow('remote_start_ssh_not_supported');
+    ).rejects.toThrow('remote_ssh_window_start_unavailable');
+    expect(pane).toMatchObject(originalRuntime);
+  });
+
+  it('rejects an SSH restart with no persisted profile before spawning', async () => {
+    const workspace = createWorkspace();
+    const targetWindow = workspace.windows[0];
+    if (!targetWindow || targetWindow.layout.type !== 'split') {
+      throw new Error('expected mixed window fixture');
+    }
+    const targetNode = targetWindow.layout.children[0];
+    if (!targetNode || targetNode.type !== 'pane') {
+      throw new Error('expected SSH pane fixture');
+    }
+    targetNode.pane.ssh = undefined;
+    const startSSHTerminalPane = vi.fn();
+    const provider = new RemoteStateProvider({
+      getCurrentWorkspace: () => workspace,
+      processManager: { listProcesses: vi.fn(() => []) } as any,
+      startSSHTerminalPane,
+    });
+
+    await expect(
+      provider.startWindow({ windowId: 'win-1', paneId: 'pane-terminal' }),
+    ).rejects.toThrow('remote_ssh_pane_profile_missing');
+    expect(startSSHTerminalPane).not.toHaveBeenCalled();
+    expect(targetNode.pane.status).toBe(WindowStatus.WaitingForInput);
   });
 
   it('stops a single pane while keeping the window record restartable', async () => {

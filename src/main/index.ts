@@ -53,7 +53,7 @@ import { isTerminalPane } from '../shared/utils/terminalCapabilities';
 import { isAllowedBrowserUrl } from '../shared/utils/browserUrls';
 import { normalizeImagePath, toFileUrl } from '../shared/utils/appImage';
 import { disposeAgentTaskForPane, getAgentController } from './handlers/agentHandlers';
-import { createSSHWindowSession } from './handlers/sshSessionHandlers';
+import { createSSHWindowSession, startSSHPaneSession } from './handlers/sshSessionHandlers';
 import { RemoteGateway } from './remote/RemoteGateway';
 
 const APP_DISPLAY_NAME = 'Synapse';
@@ -640,6 +640,22 @@ if (hasSingleInstanceLock) {
       }, {
         profileId: params.profileId,
         name: params.name,
+        remoteCwd: params.workingDirectory,
+        command: params.command,
+        initialCols: params.initialCols,
+        initialRows: params.initialRows,
+      }),
+      startSSHTerminalPane: (params) => startSSHPaneSession({
+        mainWindow,
+        processManager,
+        statusPoller,
+        ptySubscriptionManager,
+        sshProfileStore,
+        sshVaultService,
+      }, {
+        windowId: params.windowId,
+        paneId: params.paneId,
+        profileId: params.profileId,
         remoteCwd: params.workingDirectory,
         command: params.command,
         initialCols: params.initialCols,

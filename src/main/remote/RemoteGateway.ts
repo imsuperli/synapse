@@ -46,6 +46,15 @@ type RemoteGatewayOptions = {
   onPanePtySubscription?: (paneId: string, unsubscribe: () => void) => void;
   onPanePtyUnsubscribe?: (paneId: string) => void;
   onLocalPaneStarted?: (payload: { windowId: string; workingDirectory: string }) => void | Promise<void>;
+  startSSHTerminalPane?: (params: {
+    windowId: string;
+    paneId: string;
+    profileId: string;
+    workingDirectory: string;
+    command?: string;
+    initialCols?: number;
+    initialRows?: number;
+  }) => Promise<{ pid: number; sessionId: string; status: WindowStatus; command?: string }>;
   listSSHProfiles?: () => Promise<SSHProfile[]>;
   createSSHWindow?: (params: Extract<WindowCreateParams, { backend: 'ssh' }>) => Promise<Window>;
   onRemoteWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
@@ -148,6 +157,7 @@ export class RemoteGateway {
           getCurrentWorkspace: options.getCurrentWorkspace,
           processManager: this.processManager,
           startLocalTerminalPane: (params) => this.startLocalTerminalPane(params),
+          startSSHTerminalPane: options.startSSHTerminalPane,
           listSSHProfiles: options.listSSHProfiles,
           createSSHWindow: options.createSSHWindow,
           stopWindowPanes: (params) => this.stopWindowPanes(params),

@@ -26,7 +26,7 @@ import { errorResponse, successResponse } from './HandlerResponse';
 import type { SSHSessionConfig, TerminalConfig } from '../types/process';
 import { createPtyDataForwarder } from '../utils/ptyDataForwarder';
 
-type SSHWindowSessionContext = Pick<
+export type SSHWindowSessionContext = Pick<
   HandlerContext,
   | 'mainWindow'
   | 'processManager'
@@ -35,6 +35,60 @@ type SSHWindowSessionContext = Pick<
   | 'sshProfileStore'
   | 'sshVaultService'
 >;
+
+export type SSHPaneSessionStartResult = {
+  pid: number;
+  sessionId: string;
+  status: WindowStatus;
+};
+
+export async function startSSHPaneSession(
+  ctx: SSHWindowSessionContext,
+  config: StartSSHPaneConfig,
+): Promise<SSHPaneSessionStartResult> {
+  const {
+    mainWindow,
+    processManager,
+    statusPoller,
+    ptySubscriptionManager,
+    sshProfileStore,
+    sshVaultService,
+  } = ctx;
+
+  if (!processManager || !sshProfileStore) {
+    throw new Error('SSH session services are not initialized');
+  }
+
+  const profile = await requireSSHProfile(sshProfileStore, config.profileId);
+  const vaultEntry = await sshVaultService?.get(profile.id) ?? null;
+  const handle = await processManager.spawnTerminal(await buildSSHSpawnConfig(profile, vaultEntry, {
+    windowId: config.windowId,
+    paneId: config.paneId,
+    remoteCwd: config.remoteCwd,
+    command: config.command,
+    initialCols: config.initialCols,
+    initialRows: config.initialRows,
+  }, {
+    sshProfileStore,
+    sshVaultService,
+  }));
+
+  subscribePaneOutput({
+    mainWindow,
+    processManager,
+    ptySubscriptionManager,
+    statusPoller,
+    windowId: config.windowId,
+    paneId: config.paneId,
+    pid: handle.pid,
+  });
+
+  return {
+    pid: handle.pid,
+    sessionId: handle.sessionId,
+    status: WindowStatus.WaitingForInput,
+  };
+}
 
 export async function createSSHWindowSession(
   ctx: SSHWindowSessionContext,
@@ -131,39 +185,7 @@ export function registerSSHSessionHandlers(ctx: HandlerContext) {
 
   ipcMain.handle('start-ssh-pane', async (_event, config: StartSSHPaneConfig) => {
     try {
-      if (!processManager || !sshProfileStore) {
-        throw new Error('SSH session services are not initialized');
-      }
-
-      const profile = await requireSSHProfile(sshProfileStore, config.profileId);
-      const vaultEntry = await sshVaultService?.get(profile.id) ?? null;
-      const handle = await processManager.spawnTerminal(await buildSSHSpawnConfig(profile, vaultEntry, {
-        windowId: config.windowId,
-        paneId: config.paneId,
-        remoteCwd: config.remoteCwd,
-        command: config.command,
-        initialCols: config.initialCols,
-        initialRows: config.initialRows,
-      }, {
-        sshProfileStore,
-        sshVaultService,
-      }));
-
-      subscribePaneOutput({
-        mainWindow,
-        processManager,
-        ptySubscriptionManager,
-        statusPoller,
-        windowId: config.windowId,
-        paneId: config.paneId,
-        pid: handle.pid,
-      });
-
-      return successResponse({
-        pid: handle.pid,
-        sessionId: handle.sessionId,
-        status: WindowStatus.WaitingForInput,
-      });
+      return successResponse(await startSSHPaneSession(ctx, config));
     } catch (error) {
       return errorResponse(error);
     }

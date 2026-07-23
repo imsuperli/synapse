@@ -237,8 +237,8 @@ function getActiveTerminalPane(window: RemoteWindowSummary): RemotePaneSummary |
   )
 }
 
-function isStartableLocalPane(pane: RemotePaneSummary): boolean {
-  return pane.kind === 'terminal' && !pane.running && (pane.backend ?? 'local') === 'local'
+function isStartableTerminalPane(pane: RemotePaneSummary): boolean {
+  return pane.kind === 'terminal' && !pane.running
 }
 
 function windowTopBorderColor(window: RemoteWindowSummary): string {
@@ -366,8 +366,18 @@ function withSwitchTimeout<T>(promise: Promise<T>): Promise<T> {
 
 function overviewErrorMessage(err: unknown, t: MobileTranslate): string {
   const message = err instanceof Error ? err.message : String(err)
-  if (/remote_start_ssh_not_supported/i.test(message)) {
-    return t('overview.onlyLocalStart')
+  if (
+    /remote_start_ssh_not_supported|remote_ssh_window_start_unavailable|SSH session services are not initialized/i.test(
+      message
+    )
+  ) {
+    return t('overview.sshRestartUnavailable')
+  }
+  if (/remote_ssh_pane_profile_missing|SSH profile not found/i.test(message)) {
+    return t('overview.sshProfileUnavailable')
+  }
+  if (/SSH authentication failed|SSH .*authentication requires/i.test(message)) {
+    return t('overview.sshCredentialsUnavailable')
   }
   if (/window_not_found/i.test(message)) {
     return t('overview.windowNotFound')
@@ -645,8 +655,8 @@ export default function HostOverviewScreen() {
       try {
         setError(null)
         if (!pane.running) {
-          if (!isStartableLocalPane(pane)) {
-            setError(t('overview.onlyLocalStart'))
+          if (!isStartableTerminalPane(pane)) {
+            setError(t('overview.restartUnavailable'))
             return
           }
           const client = clientRef.current
@@ -718,7 +728,7 @@ export default function HostOverviewScreen() {
   const openTerminal = useCallback(
     (terminal: RemoteTerminalSummary) => {
       if (terminal.status !== 'alive') {
-        setError(t('overview.onlyLocalStart'))
+        setError(t('overview.restartUnavailable'))
         return
       }
       router.push(
@@ -1603,7 +1613,7 @@ function PaneCardRow({
         >
           <Square size={13} color={colors.statusRed} fill={colors.statusRed} />
         </Pressable>
-      ) : !selectionMode && isStartableLocalPane(pane) ? (
+      ) : !selectionMode && isStartableTerminalPane(pane) ? (
         <View style={styles.startIcon}>
           <Play size={13} color={colors.accentBlue} fill={colors.accentBlue} />
         </View>
@@ -1725,7 +1735,7 @@ function renderWindowItem(
         const paneKey = `${pane.windowId}:${pane.paneId}`
         const starting = startingPaneKey === paneKey
         const stopping = stoppingPaneKey === paneKey
-        const canOpen = pane.running || isStartableLocalPane(pane)
+        const canOpen = pane.running || isStartableTerminalPane(pane)
         return (
           <PaneCardRow
             key={`${pane.windowId}:${pane.paneId}`}

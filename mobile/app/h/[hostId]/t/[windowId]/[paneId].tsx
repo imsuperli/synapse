@@ -295,8 +295,8 @@ function terminalPaneStatusColor(pane: RemotePaneSummary): string {
   return colors.borderSubtle
 }
 
-function isStartableLocalPane(pane: RemotePaneSummary): boolean {
-  return pane.kind === 'terminal' && !pane.running && (pane.backend ?? 'local') === 'local'
+function isStartableTerminalPane(pane: RemotePaneSummary): boolean {
+  return pane.kind === 'terminal' && !pane.running
 }
 
 function getActiveTerminalPane(panes: RemotePaneSummary[], activePaneId: string): RemotePaneSummary | null {
@@ -319,8 +319,18 @@ function terminalErrorMessage(err: unknown, t: MobileTranslate): string {
   if (/terminal not found|terminal_not_found|pane_not_found|window_not_found/i.test(message)) {
     return t('terminal.stoppedOnDesktop')
   }
-  if (/remote_start_ssh_not_supported/i.test(message)) {
-    return t('terminal.onlyLocalStart')
+  if (
+    /remote_start_ssh_not_supported|remote_ssh_window_start_unavailable|SSH session services are not initialized/i.test(
+      message
+    )
+  ) {
+    return t('terminal.sshRestartUnavailable')
+  }
+  if (/remote_ssh_pane_profile_missing|SSH profile not found/i.test(message)) {
+    return t('terminal.sshProfileUnavailable')
+  }
+  if (/SSH authentication failed|SSH .*authentication requires/i.test(message)) {
+    return t('terminal.sshCredentialsUnavailable')
   }
   if (/workspace_not_loaded/i.test(message)) {
     return t('terminal.workspaceNotLoaded')
@@ -2103,9 +2113,9 @@ export default function RemoteTerminalScreen() {
 
       let targetPane = replacementPane
       if (!targetPane.running) {
-        if (!isStartableLocalPane(targetPane)) {
+        if (!isStartableTerminalPane(targetPane)) {
           if (runIdRef.current === expectedRunId && clientRef.current === client) {
-            setError(t('terminal.onlyLocalStart'))
+            setError(t('terminal.restartUnavailable'))
             router.replace(`/h/${hostId}`)
           }
           return
@@ -2318,8 +2328,8 @@ export default function RemoteTerminalScreen() {
         activateTerminalTarget(pane.windowId, pane.paneId)
         return
       }
-      if (!isStartableLocalPane(pane)) {
-        setError(t('terminal.onlyLocalStart'))
+      if (!isStartableTerminalPane(pane)) {
+        setError(t('terminal.restartUnavailable'))
         return
       }
       const client = clientRef.current
@@ -2367,8 +2377,8 @@ export default function RemoteTerminalScreen() {
         activateTerminalTarget(pane.windowId, pane.paneId)
         return
       }
-      if (!isStartableLocalPane(pane)) {
-        setError(t('terminal.onlyLocalStart'))
+      if (!isStartableTerminalPane(pane)) {
+        setError(t('terminal.restartUnavailable'))
         return
       }
       const client = clientRef.current
@@ -2958,7 +2968,7 @@ export default function RemoteTerminalScreen() {
                 const paneKey = pane ? `${pane.windowId}:${pane.paneId}` : window.windowId
                 const deleteKey = `group:${window.windowId}`
                 const starting = startingTabPaneKey === paneKey
-                const disabled = !pane || (!active && !pane.running && !isStartableLocalPane(pane))
+                const disabled = !pane || (!active && !pane.running && !isStartableTerminalPane(pane))
                 return (
                   <ManagedTerminalTab
                     key={window.windowId}
@@ -3024,7 +3034,7 @@ export default function RemoteTerminalScreen() {
                 const paneKey = `${pane.windowId}:${pane.paneId}`
                 const deleteKey = `pane:${pane.windowId}:${pane.paneId}`
                 const starting = startingTabPaneKey === paneKey
-                const disabled = !active && !pane.running && !isStartableLocalPane(pane)
+                const disabled = !active && !pane.running && !isStartableTerminalPane(pane)
                 return (
                   <ManagedTerminalTab
                     key={paneKey}

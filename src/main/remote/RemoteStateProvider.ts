@@ -37,6 +37,15 @@ type RemoteStateProviderOptions = {
     initialCols?: number;
     initialRows?: number;
   }) => Promise<{ pid: number; sessionId: string; status: WindowStatus; command?: string }>;
+  startSSHTerminalPane?: (params: {
+    windowId: string;
+    paneId: string;
+    profileId: string;
+    workingDirectory: string;
+    command?: string;
+    initialCols?: number;
+    initialRows?: number;
+  }) => Promise<{ pid: number; sessionId: string; status: WindowStatus; command?: string }>;
   listSSHProfiles?: () => Promise<SSHProfile[]>;
   createSSHWindow?: (params: Extract<WindowCreateParams, { backend: 'ssh' }>) => Promise<Window>;
   onWindowCreated?: (payload: { window: Window; workspace: Workspace }) => void | Promise<void>;
@@ -204,14 +213,25 @@ export class RemoteStateProvider {
       };
     }
 
-    const nonLocalPane = panesToStart.find((pane) => getPaneBackend(pane, 'terminal') !== 'local');
-    if (nonLocalPane) {
-      throw new Error('remote_start_ssh_not_supported');
-    }
-
     const startLocalTerminalPane = this.options.startLocalTerminalPane;
-    if (!startLocalTerminalPane) {
+    const startSSHTerminalPane = this.options.startSSHTerminalPane;
+    if (
+      panesToStart.some((pane) => getPaneBackend(pane, 'terminal') === 'local')
+      && !startLocalTerminalPane
+    ) {
       throw new Error('remote_window_start_unavailable');
+    }
+    if (
+      panesToStart.some((pane) => getPaneBackend(pane, 'terminal') === 'ssh')
+      && !startSSHTerminalPane
+    ) {
+      throw new Error('remote_ssh_window_start_unavailable');
+    }
+    const sshPaneWithoutProfile = panesToStart.find(
+      (pane) => getPaneBackend(pane, 'terminal') === 'ssh' && !pane.ssh?.profileId,
+    );
+    if (sshPaneWithoutProfile) {
+      throw new Error('remote_ssh_pane_profile_missing');
     }
 
     for (const pane of panesToStart) {
@@ -225,15 +245,25 @@ export class RemoteStateProvider {
     const startedPaneIds: string[] = [];
     for (const pane of panesToStart) {
       try {
-        const result = await startLocalTerminalPane({
-          windowId: targetWindow.id,
-          paneId: pane.id,
-          name: targetWindow.name,
-          workingDirectory: pane.cwd,
-          command: pane.command,
-          initialCols: options.initialCols,
-          initialRows: options.initialRows,
-        });
+        const result = getPaneBackend(pane, 'terminal') === 'ssh'
+          ? await startSSHTerminalPane!({
+              windowId: targetWindow.id,
+              paneId: pane.id,
+              profileId: pane.ssh!.profileId,
+              workingDirectory: pane.cwd,
+              command: pane.command,
+              initialCols: options.initialCols,
+              initialRows: options.initialRows,
+            })
+          : await startLocalTerminalPane!({
+              windowId: targetWindow.id,
+              paneId: pane.id,
+              name: targetWindow.name,
+              workingDirectory: pane.cwd,
+              command: pane.command,
+              initialCols: options.initialCols,
+              initialRows: options.initialRows,
+            });
         pane.pid = result.pid;
         pane.sessionId = result.sessionId;
         pane.status = result.status;

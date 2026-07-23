@@ -143,7 +143,10 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('selectionMode={groupSelectionMode}')
     expect(routeSource).toContain('if (selectionMode) {')
     expect(routeSource).toContain('!selectionMode && pane.running ?')
-    expect(routeSource).toContain('!selectionMode && isStartableLocalPane(pane) ?')
+    expect(routeSource).toContain('!selectionMode && isStartableTerminalPane(pane) ?')
+    expect(routeSource).toContain("return pane.kind === 'terminal' && !pane.running")
+    expect(routeSource).not.toContain("(pane.backend ?? 'local') === 'local'")
+    expect(routeSource).toContain("t('overview.sshCredentialsUnavailable')")
   })
 
   it('opens the host switcher from the toolbar and verifies connection before routing', () => {
