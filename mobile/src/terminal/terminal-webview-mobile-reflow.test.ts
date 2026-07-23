@@ -311,13 +311,15 @@ function collectProjectedOscLinks(
 function projectSourceCursor(
   source: Record<string, unknown>,
   targetCols: number,
+  liveInputText = "",
 ): { contentRow: number; col: number } | null {
-  return projectSourceSnapshotGeometry(source, targetCols).cursor;
+  return projectSourceSnapshotGeometry(source, targetCols, liveInputText).cursor;
 }
 
 function projectSourceSnapshotGeometry(
   source: Record<string, unknown>,
   targetCols: number,
+  liveInputText = "",
 ): {
   cursor: { contentRow: number; col: number } | null;
   contentRows: number;
@@ -326,20 +328,24 @@ function projectSourceSnapshotGeometry(
   const project = new Function(
     "source",
     "targetCols",
+    "liveInputText",
     `${TERMINAL_MOBILE_REFLOW_JS}\n` +
       "textScaleMode = 'mobile-reflow'; mobileReflowLayout = 'snapshot'; " +
-      "mobileSourceTerm = source; var target = { options: {} }; " +
+      "mobileSourceTerm = source; mobileLiveInputText = liveInputText; " +
+      "mobileSnapshotProjectionPlan = findMobileCodexComposerProjectionPlan(source.buffer.active); " +
+      "var target = { options: {} }; " +
       "collectMobileProjectedOscLinks(targetCols, target); " +
       "return { cursor: target.__mobileSnapshotCursor || null, " +
       "contentRows: mobileProjectedContentRows };",
   ) as (
     source: Record<string, unknown>,
     targetCols: number,
+    liveInputText: string,
   ) => {
     cursor: { contentRow: number; col: number } | null;
     contentRows: number;
   };
-  return project(source, targetCols);
+  return project(source, targetCols, liveInputText);
 }
 
 function projectionLine(
@@ -379,6 +385,14 @@ function sourceWithCursor(
     cursorX: cursorCol,
     cursorY: cursorRow,
     getLine: (row: number) => lines[row],
+    getNullCell: () => ({
+      getWidth: () => 1,
+      getChars: () => "",
+      getBgColorMode: () => 0,
+      getBgColor: () => -1,
+      isAttributeDefault: () => true,
+      extended: { urlId: 0 },
+    }),
   };
   return {
     cols,
@@ -514,6 +528,34 @@ describe("terminal WebView mobile reflow", () => {
       contentRow: 1,
       col: 2,
     });
+  });
+
+  it("maps the cursor through joined Codex composer visual rows", () => {
+    const input = "abcdefghijklmnopqrstuvwxyza123";
+    const firstVisualRow = input.slice(0, 17);
+    const secondVisualRow = input.slice(17);
+    const promptCells = Array.from({ length: 20 }, () => ({ chars: "", background: 236 }));
+    const continuationCells = Array.from({ length: 20 }, () => ({
+      chars: "",
+      background: 236,
+    }));
+    Array.from(`› ${firstVisualRow}`).forEach((chars, index) => {
+      promptCells[index] = { chars, background: 236 };
+    });
+    Array.from(secondVisualRow).forEach((chars, index) => {
+      continuationCells[index + 2] = { chars, background: 236 };
+    });
+    const prompt = projectionLine(promptCells);
+    const continuation = projectionLine(continuationCells);
+    const status = projectionLine(Array.from("  status").map((chars) => ({ chars })));
+
+    expect(
+      projectSourceCursor(
+        sourceWithCursor([prompt, continuation, status], 1, secondVisualRow.length + 2),
+        9,
+        input,
+      ),
+    ).toEqual({ contentRow: 3, col: 5 });
   });
 
   it("does not count styled trailing blanks as projected cursor rows", () => {
@@ -994,6 +1036,47 @@ describe("terminal WebView mobile reflow", () => {
     const projection = FakeTerminal.instances.at(-1);
     expect(projection).toMatchObject({ cols: 22, rows: 21, opened: true });
     expect(document.getElementById("terminal-surface")?.style.visibility).toBe("visible");
+  });
+
+  it("measures each snapshot replacement at its target font across repeated pinch zoom", async () => {
+    const posted = boot("\u001b[?1049h\u001b[2J\u001b[Hfull screen");
+    await settle();
+
+    fireSurfaceTouch("touchstart", [
+      { x: 130, y: 240 },
+      { x: 230, y: 240 },
+    ]);
+    fireSurfaceTouch("touchmove", [
+      { x: 80, y: 240 },
+      { x: 280, y: 240 },
+    ]);
+    fireSurfaceTouch("touchend", []);
+    await settle(220);
+
+    const enlarged = FakeTerminal.instances.at(-1);
+    expect(enlarged).toMatchObject({ cols: 22, rows: 21, opened: true });
+    expect(enlarged?.options.fontSize).toBe(20);
+    expect(enlarged?.openedSurface?.style.transform).toContain("scale(1)");
+
+    fireSurfaceTouch("touchstart", [
+      { x: 80, y: 240 },
+      { x: 280, y: 240 },
+    ]);
+    fireSurfaceTouch("touchmove", [
+      { x: 155, y: 240 },
+      { x: 205, y: 240 },
+    ]);
+    fireSurfaceTouch("touchend", []);
+    await settle(220);
+
+    const reduced = FakeTerminal.instances.at(-1);
+    expect(reduced).toMatchObject({ cols: 90, rows: 84, opened: true });
+    expect(reduced?.options.fontSize).toBe(5);
+    expect(reduced?.openedSurface?.style.transform).toContain("scale(1)");
+    expect(enlarged?.disposed).toBe(true);
+    expect(document.querySelectorAll("#terminal-surface")).toHaveLength(1);
+    expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
+    expect(posted.filter((message) => message.type === "mobile-reflow-refresh")).toHaveLength(0);
   });
 
   it("uses the exact half-size font metrics at the smallest text preset", async () => {

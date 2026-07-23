@@ -29,6 +29,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   var mobileSnapshotPendingReason = '';
   var mobileSnapshotBuildOldLayout = '';
   var mobileSourceRevision = 0;
+  var mobileLiveInputText = '';
+  var mobileSnapshotProjectionPlan = null;
 
   function isMobileReflowTextScale() {
     return textScaleMode === 'mobile-reflow';
@@ -84,6 +86,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     mobileSnapshotPendingReason = '';
     mobileSnapshotBuildOldLayout = '';
     mobileSourceRevision = 0;
+    mobileSnapshotProjectionPlan = null;
     clearMobileRefreshTimer();
     clearMobileSnapshotRefreshTimer();
   }
@@ -293,6 +296,158 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return 0;
   }
 
+  function mobileSourceLineTextEnd(line, startCol) {
+    if (!line || !mobileSourceTerm) return startCol;
+    for (var col = mobileSourceTerm.cols - 1; col >= startCol; col--) {
+      var cell = line.getCell(col);
+      if (!cell || cell.getWidth() === 0) continue;
+      if (cell.getChars()) return col + Math.max(1, cell.getWidth());
+    }
+    return startCol;
+  }
+
+  function mobileSourceLinePlainText(line, startCol) {
+    var endCol = mobileSourceLineTextEnd(line, startCol);
+    var text = '';
+    for (var col = startCol; col < endCol; col++) {
+      var cell = line.getCell(col);
+      if (!cell || cell.getWidth() === 0) continue;
+      text += cell.getChars() || ' ';
+    }
+    return { text: text, endCol: endCol };
+  }
+
+  function mobileSourceCellText(line, col) {
+    if (!line) return '';
+    var cell = line.getCell(col);
+    return cell && cell.getWidth() !== 0 ? cell.getChars() : '';
+  }
+
+  function mobileSourceCellIsBlank(line, col) {
+    var text = mobileSourceCellText(line, col);
+    return text === '' || text === ' ';
+  }
+
+  function findMobileCodexComposerProjectionPlan(buffer) {
+    var inputText = mobileLiveInputText;
+    if (
+      !buffer ||
+      !mobileSourceTerm ||
+      typeof inputText !== 'string' ||
+      inputText.length === 0 ||
+      inputText.indexOf('\r') !== -1 ||
+      inputText.indexOf('\n') !== -1
+    ) {
+      return null;
+    }
+    var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
+    var cursorCol = buffer.cursorX || 0;
+    var firstSearchRow = Math.max(0, cursorRow - Math.max(1, mobileSourceTerm.rows));
+    // Codex draws a logical textarea as independent desktop-grid rows. Only
+    // join them when the mobile input field proves the complete text and the
+    // source cursor proves that the matched block is the active composer.
+    for (var promptRow = cursorRow; promptRow >= firstSearchRow; promptRow--) {
+      var promptLine = buffer.getLine(promptRow);
+      var prompt = mobileSourceCellText(promptLine, 0);
+      if (
+        !promptLine ||
+        promptLine.isWrapped ||
+        (prompt !== '\u203a' && prompt !== '!') ||
+        !mobileSourceCellIsBlank(promptLine, 1)
+      ) {
+        continue;
+      }
+      var expectedText = prompt === '!' && inputText.charAt(0) === '!'
+        ? inputText.slice(1)
+        : inputText;
+      var joinedText = '';
+      var lastCandidateRow = Math.min(
+        buffer.length - 1,
+        promptRow + Math.max(1, mobileSourceTerm.rows) - 1
+      );
+      for (var row = promptRow; row <= lastCandidateRow; row++) {
+        var line = buffer.getLine(row);
+        if (
+          !line ||
+          line.isWrapped ||
+          (row > promptRow &&
+            (!mobileSourceCellIsBlank(line, 0) || !mobileSourceCellIsBlank(line, 1)))
+        ) {
+          break;
+        }
+        var lineText = mobileSourceLinePlainText(line, 2);
+        joinedText += lineText.text;
+        if (expectedText.slice(0, joinedText.length) !== joinedText) break;
+        if (joinedText !== expectedText) continue;
+        if (
+          row > promptRow &&
+          row === cursorRow &&
+          cursorCol === lineText.endCol
+        ) {
+          return {
+            startRow: promptRow,
+            endRow: row,
+            sourceRevision: mobileSourceRevision
+          };
+        }
+        if (row >= cursorRow) break;
+      }
+    }
+    return null;
+  }
+
+  function mobileSnapshotRowSkip(plan, row) {
+    return plan && row > plan.startRow && row <= plan.endRow ? 2 : 0;
+  }
+
+  function mobileSnapshotProjectionLine(buffer, line, row, plan) {
+    var skip = mobileSnapshotRowSkip(plan, row);
+    if (!line || skip === 0) return line;
+    var cols = mobileSourceTerm.cols;
+    return {
+      isWrapped: true,
+      length: cols,
+      getCell: function(col, reusableCell) {
+        if (col >= 0 && col + skip < cols) {
+          return line.getCell(col + skip, reusableCell);
+        }
+        return buffer.getNullCell();
+      },
+      translateToString: function(trimRight, startCol, endCol) {
+        var start = Math.max(0, startCol || 0) + skip;
+        var end = typeof endCol === 'number'
+          ? Math.min(cols, endCol + skip)
+          : cols;
+        return line.translateToString(trimRight, start, end);
+      }
+    };
+  }
+
+  function mobileSnapshotProjectionBuffer(buffer, plan) {
+    if (!plan) return buffer;
+    // SerializeAddon reads this facade; the canonical source lines are never
+    // mutated. Continuations lose Codex's two layout columns and advertise a
+    // soft boundary so the phone terminal can wrap the logical input itself.
+    return {
+      type: buffer.type,
+      length: buffer.length,
+      baseY: buffer.baseY,
+      viewportY: buffer.viewportY,
+      cursorX: Math.max(
+        0,
+        (buffer.cursorX || 0) - mobileSnapshotRowSkip(
+          plan,
+          (buffer.baseY || 0) + (buffer.cursorY || 0)
+        )
+      ),
+      cursorY: buffer.cursorY,
+      getNullCell: function() { return buffer.getNullCell(); },
+      getLine: function(row) {
+        return mobileSnapshotProjectionLine(buffer, buffer.getLine(row), row, plan);
+      }
+    };
+  }
+
   function mobileProjectedCursorWithinLine(
     line,
     sourceCursorCol,
@@ -355,9 +510,11 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     // The pinned SerializeAddon has no public active-buffer-only API. Its range
     // serializer is bundled with this WebView and avoids replaying desktop modes
     // or the final desktop cursor move into the phone-width projection.
+    var plan = findMobileCodexComposerProjectionPlan(buffer);
+    mobileSnapshotProjectionPlan = plan;
     var serialized = mobileSourceSerializeAddon._serializeBufferByRange(
       source,
-      buffer,
+      mobileSnapshotProjectionBuffer(buffer, plan),
       { start: 0, end: buffer.length - 1 },
       true
     );
@@ -523,6 +680,11 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var projectedCursor = null;
     var projectedBgMode = 0;
     var projectedBgColor = -1;
+    var projectionPlan = isMobileReflowSnapshotLayout() &&
+      mobileSnapshotProjectionPlan &&
+      mobileSnapshotProjectionPlan.sourceRevision === mobileSourceRevision
+      ? mobileSnapshotProjectionPlan
+      : null;
 
     function closeActive() {
       if (active && active.endCol > active.startCol) links.push(active);
@@ -564,13 +726,24 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
     var lastSourceRow = Math.min(buffer.length - 1, cursorRow);
     for (var candidateRow = buffer.length - 1; candidateRow > lastSourceRow; candidateRow--) {
-      if (mobileSourceLineContentEnd(buffer.getLine(candidateRow)) > 0) {
+      var candidateLine = mobileSnapshotProjectionLine(
+        buffer,
+        buffer.getLine(candidateRow),
+        candidateRow,
+        projectionPlan
+      );
+      if (mobileSourceLineContentEnd(candidateLine) > 0) {
         lastSourceRow = candidateRow;
         break;
       }
     }
     for (var row = 0; row <= lastSourceRow; row++) {
-      var line = buffer.getLine(row);
+      var line = mobileSnapshotProjectionLine(
+        buffer,
+        buffer.getLine(row),
+        row,
+        projectionPlan
+      );
       if (!line) continue;
       if (row > 0 && !line.isWrapped) {
         closeActive();
@@ -580,7 +753,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       if (cursorTargetTerm && row === cursorRow) {
         projectedCursor = mobileProjectedCursorWithinLine(
           line,
-          buffer.cursorX || 0,
+          Math.max(
+            0,
+            (buffer.cursorX || 0) - mobileSnapshotRowSkip(projectionPlan, row)
+          ),
           targetRow,
           targetCol,
           targetCols
@@ -642,6 +818,21 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       configureMobileSnapshotCursor(cursorTargetTerm, projectedCursor);
     }
     return links;
+  }
+
+  function setMobileLiveInputText(text) {
+    var nextText = typeof text === 'string' ? text : '';
+    if (nextText === mobileLiveInputText) return;
+    mobileLiveInputText = nextText;
+    var buffer = mobileSourceTerm && mobileSourceTerm.buffer
+      ? mobileSourceTerm.buffer.active
+      : null;
+    if (
+      isMobileReflowSnapshotLayout() &&
+      (nextText.length === 0 || findMobileCodexComposerProjectionPlan(buffer))
+    ) {
+      scheduleMobileSnapshotProjection('live-input-text');
+    }
   }
 
   function readMobileSimpleCsi(data, index) {
@@ -751,14 +942,39 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return result;
   }
 
-  function mobileProjectionDimensions() {
-    var cellW = getCellWidth();
-    var cellH = getCellHeight();
+  function mobileProjectionDimensionsForTerm(targetTerm) {
+    var cell = null;
+    try {
+      var core = targetTerm && targetTerm._core;
+      cell = core && core._renderService && core._renderService.dimensions
+        ? core._renderService.dimensions.css.cell
+        : null;
+    } catch (e) {}
+    var cellW = cell && cell.width ? cell.width : 0;
+    var cellH = cell && cell.height ? cell.height : 0;
     if (cellW <= 0 || cellH <= 0) return null;
     return {
       cols: Math.max(MIN_FIT_COLS, Math.floor(window.innerWidth / cellW)),
       rows: Math.max(8, Math.floor(window.innerHeight / cellH))
     };
+  }
+
+  function mobileProjectionDimensions() {
+    return mobileProjectionDimensionsForTerm(term);
+  }
+
+  function waitForMobileProjectionDimensions(targetTerm, callback) {
+    var attempts = 0;
+    function attempt() {
+      attempts++;
+      var dimensions = mobileProjectionDimensionsForTerm(targetTerm);
+      if (dimensions || attempts >= FIT_RETRY_MAX_FRAMES) {
+        callback(dimensions);
+        return;
+      }
+      requestAnimationFrame(attempt);
+    }
+    requestAnimationFrame(attempt);
   }
 
   function revealMobileReplacement(gen, oldTerm, oldSurface, reason, metadata) {
@@ -948,23 +1164,17 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var oldLayout = mobileReflowLayout;
     mobileSnapshotBuildOldLayout = oldLayout;
     var scrollAnchorRows = mobileProjectionScrollAnchor(oldTerm);
-    var dimensions = mobileProjectionDimensions();
-    if (!dimensions) {
-      dimensions = {
-        cols: Math.max(MIN_FIT_COLS, oldTerm.cols || 80),
-        rows: Math.max(8, oldTerm.rows || 24)
-      };
-    }
+    var dimensions = null;
     var nextSurface = null;
     var nextTerm = null;
     try {
       nextSurface = prepareMobileReplacementSurface(oldTerm, oldSurface);
       nextTerm = createMobileProjectionTerminal(
-        dimensions.cols,
-        dimensions.rows,
+        Math.max(MIN_FIT_COLS, oldTerm.cols || 80),
+        Math.max(8, oldTerm.rows || 24),
         nextSurface
       );
-      nextTerm.write(serialized, function() {
+      waitForMobileProjectionDimensions(nextTerm, function(measuredDimensions) {
         if (token !== mobileSnapshotBuildToken || gen !== terminalGeneration) {
           discardMobileSnapshotReplacement(
             token,
@@ -978,43 +1188,86 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
           );
           return;
         }
-        try {
-          disposeTermObservers();
-          term = nextTerm;
-          surface = nextSurface;
-          mobileReflowLayout = 'snapshot';
-          initRows = dimensions.rows;
-          initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols, nextTerm);
-          mobileSourceTerm.options.scrollback = 30000;
-          restoreMobileProjectionScroll(nextTerm, scrollAnchorRows);
-          initialOscLinkRowOffset = Math.max(
-            0,
-            mobileProjectedContentRows - (nextTerm.buffer.normal.length || 0)
+        if (!measuredDimensions) {
+          discardMobileSnapshotReplacement(
+            token,
+            gen,
+            nextTerm,
+            nextSurface,
+            oldTerm,
+            oldSurface,
+            oldLayout,
+            new Error('target font metrics unavailable')
           );
-          captureInitialOscLinkTexts();
-          initialOscLinkEvictionReady = true;
-          applyFitScale('mobile-snapshot-' + reason, function() {
-            if (token !== mobileSnapshotBuildToken || gen !== terminalGeneration) return;
-            nextSurface.style.visibility = 'visible';
-            nextSurface.style.position = '';
-            nextSurface.style.left = '';
-            nextSurface.style.top = '';
-            disposeMobileRetiredReplacements(nextTerm, nextSurface);
-            mobileSnapshotBuildInFlight = false;
-            mobileSnapshotBuildOldLayout = '';
-            mobileProjectionDirty = false;
-            ready = true;
-            attachTermObservers();
-            emitKeyboardAvoidanceMetrics();
-            emitDiagnostic('mobile-reflow-layout', {
-              layout: 'snapshot',
-              reason: reason,
-              sourceRevision: sourceRevision
-            });
-            pumpMobileWrites();
-            if (mobileSourceRevision !== sourceRevision || mobileSnapshotPendingReason) {
-              scheduleMobileSnapshotProjection(
-                mobileSnapshotPendingReason || 'source-updated-during-build'
+          return;
+        }
+        dimensions = measuredDimensions;
+        try {
+          nextTerm.resize(dimensions.cols, dimensions.rows);
+          nextTerm.write(serialized, function() {
+            if (token !== mobileSnapshotBuildToken || gen !== terminalGeneration) {
+              discardMobileSnapshotReplacement(
+                token,
+                gen,
+                nextTerm,
+                nextSurface,
+                oldTerm,
+                oldSurface,
+                oldLayout,
+                null
+              );
+              return;
+            }
+            try {
+              disposeTermObservers();
+              term = nextTerm;
+              surface = nextSurface;
+              mobileReflowLayout = 'snapshot';
+              initRows = dimensions.rows;
+              initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols, nextTerm);
+              mobileSourceTerm.options.scrollback = 30000;
+              restoreMobileProjectionScroll(nextTerm, scrollAnchorRows);
+              initialOscLinkRowOffset = Math.max(
+                0,
+                mobileProjectedContentRows - (nextTerm.buffer.normal.length || 0)
+              );
+              captureInitialOscLinkTexts();
+              initialOscLinkEvictionReady = true;
+              applyFitScale('mobile-snapshot-' + reason, function() {
+                if (token !== mobileSnapshotBuildToken || gen !== terminalGeneration) return;
+                nextSurface.style.visibility = 'visible';
+                nextSurface.style.position = '';
+                nextSurface.style.left = '';
+                nextSurface.style.top = '';
+                disposeMobileRetiredReplacements(nextTerm, nextSurface);
+                mobileSnapshotBuildInFlight = false;
+                mobileSnapshotBuildOldLayout = '';
+                mobileProjectionDirty = false;
+                ready = true;
+                attachTermObservers();
+                emitKeyboardAvoidanceMetrics();
+                emitDiagnostic('mobile-reflow-layout', {
+                  layout: 'snapshot',
+                  reason: reason,
+                  sourceRevision: sourceRevision
+                });
+                pumpMobileWrites();
+                if (mobileSourceRevision !== sourceRevision || mobileSnapshotPendingReason) {
+                  scheduleMobileSnapshotProjection(
+                    mobileSnapshotPendingReason || 'source-updated-during-build'
+                  );
+                }
+              });
+            } catch (e) {
+              discardMobileSnapshotReplacement(
+                token,
+                gen,
+                nextTerm,
+                nextSurface,
+                oldTerm,
+                oldSurface,
+                oldLayout,
+                e
               );
             }
           });

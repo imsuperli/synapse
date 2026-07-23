@@ -23,6 +23,31 @@ function makeProjectionReflowSafe(serialized: string, sourceCols: number): strin
   return transform(serialized, sourceCols);
 }
 
+function serializeSnapshotProjection(
+  source: InstanceType<typeof Terminal>,
+  serializeAddon: InstanceType<typeof SerializeAddon>,
+  liveInputText: string,
+): string {
+  // Execute the production snapshot serializer, including its temporary Codex
+  // composer line view. The source terminal itself must remain untouched.
+  // eslint-disable-next-line no-new-func
+  const serialize = new Function(
+    "source",
+    "serializeAddon",
+    "liveInputText",
+    `${TERMINAL_MOBILE_REFLOW_JS}\n` +
+      "var trackedMouseTrackingMode = 'none'; " +
+      "mobileSourceTerm = source; mobileSourceSerializeAddon = serializeAddon; " +
+      "mobileSourceCols = source.cols; mobileSourceRows = source.rows; " +
+      "mobileLiveInputText = liveInputText; return serializeMobileSnapshotProjection();",
+  ) as (
+    source: InstanceType<typeof Terminal>,
+    serializeAddon: InstanceType<typeof SerializeAddon>,
+    liveInputText: string,
+  ) => string;
+  return serialize(source, serializeAddon, liveInputText);
+}
+
 function logicalLines(terminal: InstanceType<typeof Terminal>): string[] {
   const buffer = terminal.buffer.normal;
   const result: string[] = [];
@@ -145,5 +170,129 @@ describe("mobile terminal canonical model projection", () => {
 
     expect(transformed).not.toContain("\u001b[19C");
     expect(logicalLines(projection)).toEqual(logicalLines(source));
+  });
+
+  it("reflows Codex composer visual rows as one mobile logical line", async () => {
+    const source = new Terminal({ cols: 20, rows: 7, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    const input = "abcdefghijklmnopqrstuvwxyza123";
+    const firstVisualRow = input.slice(0, 17);
+    const secondVisualRow = input.slice(17);
+    await writeTerminal(
+      source,
+      `\u001b[2J\u001b[H› ${firstVisualRow}` +
+        `\u001b[2;3H${secondVisualRow}` +
+        "\u001b[4;3Hgpt-5.6-sol xhigh" +
+        `\u001b[2;${secondVisualRow.length + 3}H`,
+    );
+
+    const sourceBefore = logicalLines(source);
+    const projection = new Terminal({
+      cols: 8,
+      rows: 12,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, input),
+    );
+
+    expect(logicalLines(projection)).toEqual([
+      `› ${input}`,
+      "  gpt-5.6-sol xhigh",
+    ]);
+    expect(logicalLines(source)).toEqual(sourceBefore);
+    expect(source.buffer.active.getLine(1)?.isWrapped).toBe(false);
+  });
+
+  it("reflows mixed CJK and narrow cells without retaining Codex continuation indent", async () => {
+    const source = new Terminal({ cols: 20, rows: 7, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    const firstVisualRow = "知识库存储统一设a";
+    const secondVisualRow = "计.md继续输入";
+    const input = firstVisualRow + secondVisualRow;
+    await writeTerminal(
+      source,
+      `\u001b[2J\u001b[H› ${firstVisualRow}` +
+        `\u001b[2;3H${secondVisualRow}` +
+        "\u001b[4;3Hstatus" +
+        "\u001b[2;16H",
+    );
+
+    const projection = new Terminal({
+      cols: 7,
+      rows: 14,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, input),
+    );
+
+    expect(logicalLines(projection)).toEqual([`› ${input}`, "  status"]);
+  });
+
+  it("keeps explicit composer newlines and later status rows separate", async () => {
+    const source = new Terminal({ cols: 20, rows: 7, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    await writeTerminal(
+      source,
+      "\u001b[2J\u001b[H› first" +
+        "\u001b[2;3Hsecond" +
+        "\u001b[4;3Hstatus" +
+        "\u001b[2;9H",
+    );
+
+    const projection = new Terminal({
+      cols: 8,
+      rows: 12,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, "first\nsecond"),
+    );
+
+    expect(logicalLines(projection)).toEqual(["› first", "  second", "  status"]);
+  });
+
+  it("does not reinterpret similar rows in terminal history", async () => {
+    const source = new Terminal({ cols: 20, rows: 9, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    const input = "abcdefghijklmnopqrstuvwxyza123";
+    await writeTerminal(
+      source,
+      "\u001b[2J\u001b[H› old history row" +
+        "\u001b[2;3Hstill history" +
+        `\u001b[4;1H› ${input.slice(0, 17)}` +
+        `\u001b[5;3H${input.slice(17)}` +
+        "\u001b[7;3Hstatus" +
+        "\u001b[5;16H",
+    );
+
+    const projection = new Terminal({
+      cols: 8,
+      rows: 16,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, input),
+    );
+
+    expect(logicalLines(projection)).toEqual([
+      "› old history row",
+      "  still history",
+      `› ${input}`,
+      "  status",
+    ]);
   });
 });

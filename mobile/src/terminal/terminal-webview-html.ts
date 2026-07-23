@@ -1428,6 +1428,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       revealLiveInput();
     } else if (msg.type === 'restore-keyboard-viewport') {
       restoreKeyboardViewport();
+    } else if (msg.type === 'set-live-input-text') {
+      setMobileLiveInputText(msg.text);
     } else if (msg.type === 'set-theme') {
       applyTerminalTheme(msg.terminalTheme);
     } else if (msg.type === 'cancel-select') {

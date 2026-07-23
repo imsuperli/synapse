@@ -19,6 +19,16 @@ export function createTerminalWebViewPendingMessages() {
   }
 
   const queue = (msg: TerminalWebViewCommand) => {
+    if (msg.type === 'set-live-input-text') {
+      const stateIndex = pending.findIndex((candidate) => candidate.type === msg.type)
+      if (stateIndex === -1) {
+        pending.push(msg)
+      } else {
+        pending.splice(stateIndex, 1)
+        pending.push(msg)
+      }
+      return
+    }
     pending.push(msg)
     if (msg.type !== 'write') {
       return

@@ -1,4 +1,5 @@
 import type { TerminalAccessoryKey } from './terminal-accessory-keys'
+import type { TerminalOneShotModifier } from './terminal-one-shot-modifiers'
 
 export const TERMINAL_ACCESSORY_PAGE_ROWS = 2
 export const TERMINAL_ACCESSORY_PAGE_COLUMNS = 7
@@ -7,6 +8,13 @@ export const TERMINAL_ACCESSORY_PAGE_SIZE =
 
 export type TerminalAccessoryPageSlot =
   | { type: 'paste'; id: 'paste' }
+  | {
+      type: 'modifier'
+      id: TerminalOneShotModifier
+      modifier: TerminalOneShotModifier
+      label: string
+      accessibilityLabel: string
+    }
   | { type: 'key'; id: string; key: TerminalAccessoryKey }
   | null
 
@@ -21,13 +29,15 @@ const PRIMARY_PAGE_SLOT_IDS = [
   'end',
   'backspace',
   'tab',
-  'space',
-  'delete',
+  'ctrl',
+  'alt',
   'arrowLeft',
   'arrowDown',
   'arrowRight',
   'enter'
 ] as const
+
+const REPLACED_PRIMARY_KEY_IDS = new Set(['space', 'delete'])
 
 const SECONDARY_PAGE_SLOT_IDS = [
   'ctrlC',
@@ -61,6 +71,15 @@ export function buildTerminalAccessoryPages(
     if (id === 'paste') {
       return { type: 'paste', id }
     }
+    if (id === 'ctrl' || id === 'alt') {
+      return {
+        type: 'modifier',
+        id,
+        modifier: id,
+        label: id === 'ctrl' ? 'Ctrl' : 'Alt',
+        accessibilityLabel: id === 'ctrl' ? 'Control modifier' : 'Alt modifier'
+      }
+    }
     const key = keysById.get(id)
     return key ? { type: 'key', id, key } : null
   })
@@ -72,7 +91,12 @@ export function buildTerminalAccessoryPages(
     return key ? { type: 'key', id, key } : null
   })
   const extraSlots = keys
-    .filter((key) => !primaryIds.has(key.id) && !secondaryIds.has(key.id))
+    .filter(
+      (key) =>
+        !primaryIds.has(key.id) &&
+        !secondaryIds.has(key.id) &&
+        !REPLACED_PRIMARY_KEY_IDS.has(key.id)
+    )
     .map<TerminalAccessoryPageSlot>((key) => ({ type: 'key', id: key.id, key }))
   const secondaryExtraIndexes = SECONDARY_PAGE_SLOT_IDS.flatMap((id, index) =>
     id === null ? [index] : []

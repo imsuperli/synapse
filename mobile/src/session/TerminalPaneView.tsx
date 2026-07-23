@@ -17,6 +17,7 @@ type TerminalPaneViewProps = {
   terminalTheme?: MobileTerminalTheme
   textScale: number
   textScaleMode?: TerminalTextScaleMode
+  liveInputText?: string
   onRef: (handle: string, ref: TerminalWebViewHandle | null) => void
   onWebReady: (handle: string) => void
   onSelectionMode: (handle: string, active: boolean) => void
@@ -43,6 +44,7 @@ export function TerminalPaneView({
   terminalTheme,
   textScale,
   textScaleMode,
+  liveInputText,
   onRef,
   onWebReady,
   onSelectionMode,
@@ -85,6 +87,7 @@ export function TerminalPaneView({
         terminalTheme={terminalTheme}
         textScale={textScale}
         textScaleMode={textScaleMode}
+        liveInputText={liveInputText}
         onWebReady={() => onWebReady(handle)}
         onSelectionMode={(a) => onSelectionMode(handle, a)}
         onSelectionCopy={(t) => onSelectionCopy(handle, t)}

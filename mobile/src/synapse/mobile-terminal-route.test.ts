@@ -164,7 +164,14 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('pagingEnabled')
     expect(routeSource).toContain('disableIntervalMomentum')
     expect(routeSource).toContain('TERMINAL_ACCESSORY_PAGE_COLUMNS')
-    expect(routeSource).toContain('createTerminalLiveAccessoryInput(key)')
+    expect(routeSource).toContain(
+      'createTerminalLiveAccessoryInput(key, getTerminalOneShotModifierList(modifiers))'
+    )
+    expect(routeSource).toContain(
+      'buildTerminalOneShotTextBytes(previousText, normalizedText, modifiers)'
+    )
+    expect(routeSource).toContain("buildTerminalOneShotNativeKeyBytes('Enter', modifiers)")
+    expect(routeSource).toContain('toggleOneShotModifier(slot.modifier)')
     expect(routeSource).toContain('onPressIn={() => {')
     expect(routeSource).toContain('startAccessoryRepeat(input)')
     expect(routeSource).toContain('stopAccessoryRepeat()')
@@ -191,6 +198,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('fontSize: 12')
     expect(routeSource).toContain("fontWeight: '700'")
     expect(routeSource).toContain("accessoryKeyPressed: {\n    opacity: 0.65")
+    expect(routeSource).toContain('backgroundColor: colors.statusRed')
     expect(routeSource).not.toContain(
       "accessoryKeyPressed: {\n    backgroundColor: colors.borderSubtle"
     )
@@ -213,6 +221,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('const [terminalTextScale, setTerminalTextScale] = useState(1)')
     expect(routeSource).toContain('textScale={terminalTextScale}')
     expect(routeSource).toContain('textScaleMode="mobile-reflow"')
+    expect(routeSource).toContain("liveInputText={handle === terminalHandle ? liveInputCapture : ''}")
     expect(routeSource).toContain('onTextScaleChange={handleTextScaleChange}')
     expect(routeSource).toContain(
       'onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}'

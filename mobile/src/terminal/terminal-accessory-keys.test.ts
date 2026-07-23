@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildTerminalShortcutKey, TERMINAL_ACCESSORY_KEYS } from './terminal-accessory-keys'
+import { createTerminalLiveAccessoryInput } from './terminal-live-accessory-input'
 
 describe('TERMINAL_ACCESSORY_KEYS', () => {
   it('sends reverse-tab with a non-repeatable Shift+Tab key', () => {
@@ -121,6 +122,11 @@ describe('TERMINAL_ACCESSORY_KEYS', () => {
       bytes: '\x1b[Z',
       accessibilityLabel: 'Shift Tab'
     })
+    expect(buildTerminalShortcutKey({ key: 'tab', modifiers: ['ctrl', 'shift'] })).toEqual({
+      label: 'Ctrl+Shift+Tab',
+      bytes: '\x1b[1;6Z',
+      accessibilityLabel: 'Ctrl Shift Tab'
+    })
     expect(buildTerminalShortcutKey({ key: 'enter', modifiers: [] })).toEqual({
       label: 'Enter',
       bytes: '\r',
@@ -153,5 +159,21 @@ describe('TERMINAL_ACCESSORY_KEYS', () => {
 
   it('rejects control combinations that terminals cannot encode as control bytes', () => {
     expect(buildTerminalShortcutKey({ key: '1', modifiers: ['ctrl'] })).toBeNull()
+  })
+
+  it('applies one-shot modifiers to accessory keys without local field edits', () => {
+    const backspace = TERMINAL_ACCESSORY_KEYS.find((key) => key.id === 'backspace')!
+    const arrowRight = TERMINAL_ACCESSORY_KEYS.find((key) => key.id === 'arrowRight')!
+    const shiftTab = TERMINAL_ACCESSORY_KEYS.find((key) => key.id === 'shiftTab')!
+    const ctrlC = TERMINAL_ACCESSORY_KEYS.find((key) => key.id === 'ctrlC')!
+
+    expect(createTerminalLiveAccessoryInput(backspace, ['ctrl'])).toEqual({ bytes: '\b' })
+    expect(createTerminalLiveAccessoryInput(arrowRight, ['alt'])).toEqual({
+      bytes: '\x1b[1;3C'
+    })
+    expect(createTerminalLiveAccessoryInput(shiftTab, ['alt'])).toEqual({
+      bytes: '\x1b[1;4Z'
+    })
+    expect(createTerminalLiveAccessoryInput(ctrlC, ['alt'])).toEqual({ bytes: '\x1b\x03' })
   })
 })

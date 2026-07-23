@@ -296,8 +296,9 @@ function buildShortcutBytes(key: string, modifiers: TerminalShortcutModifier[]):
     return buildCsiTildeShortcut(csiTilde, modifiers)
   }
   if (key === 'tab') {
-    if (modifiers.includes('shift') && !modifiers.includes('ctrl') && !modifiers.includes('alt')) {
-      return `${ESC}[Z`
+    if (modifiers.includes('shift')) {
+      const parameter = csiModifierParameter(modifiers)
+      return parameter === 2 ? `${ESC}[Z` : `${ESC}[1;${parameter}Z`
     }
     const bytes = '\t'
     return modifiers.includes('alt') ? `${ESC}${bytes}` : bytes

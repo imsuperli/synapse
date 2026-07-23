@@ -60,6 +60,16 @@ import {
 } from '../../../../../src/terminal/terminal-accessory-pages'
 import { createTerminalLiveAccessoryInput } from '../../../../../src/terminal/terminal-live-accessory-input'
 import {
+  buildTerminalOneShotNativeKeyBytes,
+  buildTerminalOneShotTextBytes,
+  EMPTY_TERMINAL_ONE_SHOT_MODIFIERS,
+  getTerminalOneShotModifierList,
+  hasTerminalOneShotModifiers,
+  toggleTerminalOneShotModifier,
+  type TerminalOneShotModifier,
+  type TerminalOneShotModifiers
+} from '../../../../../src/terminal/terminal-one-shot-modifiers'
+import {
   clearTerminalLiveInputFocusTimer,
   focusTerminalLiveInputTarget,
   isTerminalLiveInputWithinByteLimit,
@@ -119,6 +129,11 @@ import {
 } from '../../../../../src/diagnostics/terminal-diagnostics-storage'
 
 type TerminalLiveAccessoryInput = ReturnType<typeof createTerminalLiveAccessoryInput>
+
+type SuppressedTerminalNativeEdit = {
+  expectedText: string
+  restoreText: string
+}
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 30
@@ -571,7 +586,15 @@ export default function RemoteTerminalScreen() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([])
-  const [liveInputCapture, setLiveInputCapture] = useState('')
+  const [liveInputCapture, setLiveInputCaptureState] = useState('')
+  const liveInputCaptureRef = useRef('')
+  const [oneShotModifiers, setOneShotModifiers] = useState<TerminalOneShotModifiers>(
+    EMPTY_TERMINAL_ONE_SHOT_MODIFIERS
+  )
+  const oneShotModifiersRef = useRef<TerminalOneShotModifiers>(
+    EMPTY_TERMINAL_ONE_SHOT_MODIFIERS
+  )
+  const suppressedTerminalNativeEditRef = useRef<SuppressedTerminalNativeEdit | null>(null)
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   const [terminalFrameHeight, setTerminalFrameHeight] = useState(0)
   const [terminalKeyboardMetrics, setTerminalKeyboardMetrics] =
@@ -617,6 +640,37 @@ export default function RemoteTerminalScreen() {
   activeHandleRef.current = terminalHandle
   activeSessionTabTypeRef.current = 'terminal'
   liveInputTerminalHandlesRef.current = liveInputTerminalHandles
+
+  const setLiveInputCapture = useCallback((text: string) => {
+    liveInputCaptureRef.current = text
+    setLiveInputCaptureState(text)
+  }, [])
+
+  const setTerminalOneShotModifiers = useCallback((modifiers: TerminalOneShotModifiers) => {
+    oneShotModifiersRef.current = modifiers
+    setOneShotModifiers(modifiers)
+  }, [])
+
+  const clearTerminalOneShotModifierState = useCallback(() => {
+    if (!hasTerminalOneShotModifiers(oneShotModifiersRef.current)) {
+      return
+    }
+    setTerminalOneShotModifiers(EMPTY_TERMINAL_ONE_SHOT_MODIFIERS)
+  }, [setTerminalOneShotModifiers])
+
+  const resetTerminalOneShotModifiers = useCallback(() => {
+    suppressedTerminalNativeEditRef.current = null
+    clearTerminalOneShotModifierState()
+  }, [clearTerminalOneShotModifierState])
+
+  const toggleOneShotModifier = useCallback(
+    (modifier: TerminalOneShotModifier) => {
+      setTerminalOneShotModifiers(
+        toggleTerminalOneShotModifier(oneShotModifiersRef.current, modifier)
+      )
+    },
+    [setTerminalOneShotModifiers]
+  )
 
   const flushDiagnosticsPersistence = useCallback(() => {
     if (diagnosticsPersistTimerRef.current) {
@@ -827,8 +881,9 @@ export default function RemoteTerminalScreen() {
     clearTerminalLiveInputFocusTimer(liveInputFocusTimerRef)
     cancelKeyboardViewportRestore()
     stopAccessoryRepeat()
+    resetTerminalOneShotModifiers()
     setLoadingOlderHistory(false)
-  }, [cancelKeyboardViewportRestore, stopAccessoryRepeat])
+  }, [cancelKeyboardViewportRestore, resetTerminalOneShotModifiers, stopAccessoryRepeat])
 
   const refitTerminalToPhone = useCallback(() => {
     const runtime = activeHandleRef.current
@@ -1847,6 +1902,7 @@ export default function RemoteTerminalScreen() {
           Keyboard.dismiss()
           setKeyboardHeight(0)
           cancelKeyboardViewportRestore()
+          resetTerminalOneShotModifiers()
           flushDiagnosticsPersistence()
           return
         }
@@ -1876,6 +1932,7 @@ export default function RemoteTerminalScreen() {
         subscription.remove()
         liveInputRef.current?.blur()
         Keyboard.dismiss()
+        resetTerminalOneShotModifiers()
         cleanup()
       }
     }, [
@@ -1883,17 +1940,19 @@ export default function RemoteTerminalScreen() {
       appendDiagnostic,
       cleanup,
       flushDiagnosticsPersistence,
+      resetTerminalOneShotModifiers,
       restoreTerminalAfterKeyboard
     ])
   )
 
   useEffect(() => {
+    resetTerminalOneShotModifiers()
     if (!screenFocusedRef.current || lastOpenedHandleRef.current === terminalHandle) {
       return
     }
     lastOpenedHandleRef.current = terminalHandle
     void openTerminalRef.current?.()
-  }, [terminalHandle])
+  }, [resetTerminalOneShotModifiers, terminalHandle])
 
   useEffect(() => {
     if (connectionState === 'connected' && foregroundRecoveryRequestedRef.current) {
@@ -2390,6 +2449,12 @@ export default function RemoteTerminalScreen() {
 
   const canSend = connectionState === 'connected' && !loading && terminalRunning && !stopping
 
+  useEffect(() => {
+    if (!canSend) {
+      resetTerminalOneShotModifiers()
+    }
+  }, [canSend, resetTerminalOneShotModifiers])
+
   const sendLiveTerminalInput = useCallback(
     async (handle: string, bytes: string): Promise<boolean> => {
       if (handle !== terminalHandle) {
@@ -2470,6 +2535,99 @@ export default function RemoteTerminalScreen() {
   )
   const handleAccessoryKeyRef = useRef(handleAccessoryKey)
   handleAccessoryKeyRef.current = handleAccessoryKey
+
+  const createAccessoryKeyInput = useCallback(
+    (key: Parameters<typeof createTerminalLiveAccessoryInput>[0]) => {
+      const modifiers = oneShotModifiersRef.current
+      clearTerminalOneShotModifierState()
+      return createTerminalLiveAccessoryInput(key, getTerminalOneShotModifierList(modifiers))
+    },
+    [clearTerminalOneShotModifierState]
+  )
+
+  const handleLiveInputChangeWithModifiers = useCallback(
+    (text: string) => {
+      const normalizedText = normalizeTerminalTextInput(text)
+      const suppressedEdit = suppressedTerminalNativeEditRef.current
+      if (suppressedEdit) {
+        suppressedTerminalNativeEditRef.current = null
+        if (normalizedText === suppressedEdit.expectedText) {
+          const currentText = liveInputCaptureRef.current
+          const restoredText =
+            currentText === suppressedEdit.restoreText ? suppressedEdit.restoreText : currentText
+          setLiveInputCapture(restoredText)
+          liveInputRef.current?.setNativeProps({ text: restoredText })
+          return
+        }
+      }
+
+      const modifiers = oneShotModifiersRef.current
+      if (!hasTerminalOneShotModifiers(modifiers)) {
+        handleLiveInputChange(normalizedText)
+        return
+      }
+
+      const previousText = liveInputCaptureRef.current
+      const bytes = buildTerminalOneShotTextBytes(previousText, normalizedText, modifiers)
+      clearTerminalOneShotModifierState()
+      if (bytes === null) {
+        handleLiveInputChange(normalizedText)
+        return
+      }
+
+      // The chord replaces the native field edit; resetting the hidden field
+      // prevents its ordinary character from being mirrored a second time.
+      setLiveInputCapture(previousText)
+      liveInputRef.current?.setNativeProps({ text: previousText })
+      void handleAccessoryKey({ bytes })
+    },
+    [
+      clearTerminalOneShotModifierState,
+      handleAccessoryKey,
+      handleLiveInputChange,
+      setLiveInputCapture
+    ]
+  )
+
+  const handleLiveInputKeyPressWithModifiers = useCallback(
+    (event: Parameters<typeof handleLiveInputKeyPress>[0]) => {
+      const key = event.nativeEvent.key
+      // Enter can produce both key and submit events; submit owns it so the
+      // terminal receives exactly one carriage return or modified return.
+      if (key === 'Enter') {
+        handleLiveInputKeyPress(event)
+        return
+      }
+      const modifiers = oneShotModifiersRef.current
+      const bytes = buildTerminalOneShotNativeKeyBytes(key, modifiers)
+      if (bytes === null) {
+        handleLiveInputKeyPress(event)
+        return
+      }
+
+      if (key === 'Backspace') {
+        const previousText = liveInputCaptureRef.current
+        suppressedTerminalNativeEditRef.current = {
+          expectedText: Array.from(previousText).slice(0, -1).join(''),
+          restoreText: previousText
+        }
+      }
+      clearTerminalOneShotModifierState()
+      void handleAccessoryKey({ bytes })
+    },
+    [clearTerminalOneShotModifierState, handleAccessoryKey, handleLiveInputKeyPress]
+  )
+
+  const handleLiveInputSubmitWithModifiers = useCallback(() => {
+    const modifiers = oneShotModifiersRef.current
+    const bytes = buildTerminalOneShotNativeKeyBytes('Enter', modifiers)
+    if (bytes === null) {
+      handleLiveInputSubmit()
+      return
+    }
+    clearTerminalOneShotModifierState()
+    void handleAccessoryKey({ bytes })
+  }, [clearTerminalOneShotModifierState, handleAccessoryKey, handleLiveInputSubmit])
 
   const startAccessoryRepeat = useCallback(
     (input: TerminalLiveAccessoryInput) => {
@@ -2942,6 +3100,7 @@ export default function RemoteTerminalScreen() {
               terminalTheme={terminalTheme}
               textScale={terminalTextScale}
               textScaleMode="mobile-reflow"
+              liveInputText={handle === terminalHandle ? liveInputCapture : ''}
               onRef={setTerminalWebViewRef}
               onWebReady={handleResidentTerminalWebReady}
               onSelectionMode={() => {}}
@@ -3066,6 +3225,35 @@ export default function RemoteTerminalScreen() {
                             </Pressable>
                           )
                         }
+                        if (slot.type === 'modifier') {
+                          const active = oneShotModifiers[slot.modifier]
+                          return (
+                            <Pressable
+                              key={slot.id}
+                              style={({ pressed }) => [
+                                styles.accessoryKey,
+                                active && styles.accessoryModifierActive,
+                                pressed && styles.accessoryKeyPressed,
+                                !canSend && styles.accessoryKeyDisabled
+                              ]}
+                              disabled={!canSend}
+                              onPress={() => toggleOneShotModifier(slot.modifier)}
+                              accessibilityLabel={slot.accessibilityLabel}
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: active, disabled: !canSend }}
+                            >
+                              <Text
+                                numberOfLines={1}
+                                style={[
+                                  styles.accessoryKeyText,
+                                  !canSend && styles.accessoryKeyTextDisabled
+                                ]}
+                              >
+                                {slot.label}
+                              </Text>
+                            </Pressable>
+                          )
+                        }
                         const key = slot.key
                         return (
                           <Pressable
@@ -3080,7 +3268,7 @@ export default function RemoteTerminalScreen() {
                               if (!key.repeatable) {
                                 return
                               }
-                              const input = createTerminalLiveAccessoryInput(key)
+                              const input = createAccessoryKeyInput(key)
                               void handleAccessoryKey(input)
                               startAccessoryRepeat(input)
                             }}
@@ -3093,7 +3281,7 @@ export default function RemoteTerminalScreen() {
                               if (key.repeatable) {
                                 return
                               }
-                              void handleAccessoryKey(createTerminalLiveAccessoryInput(key))
+                              void handleAccessoryKey(createAccessoryKeyInput(key))
                             }}
                             accessibilityLabel={
                               key.accessibilityLabel ?? t('terminal.sendKey', { key: key.label })
@@ -3124,9 +3312,9 @@ export default function RemoteTerminalScreen() {
           ref={liveInputRef}
           style={styles.liveInputCapture}
           value={liveInputCapture}
-          onChangeText={handleLiveInputChange}
-          onKeyPress={handleLiveInputKeyPress}
-          onSubmitEditing={handleLiveInputSubmit}
+          onChangeText={handleLiveInputChangeWithModifiers}
+          onKeyPress={handleLiveInputKeyPressWithModifiers}
+          onSubmitEditing={handleLiveInputSubmitWithModifiers}
           placeholder=""
           showSoftInputOnFocus
           autoCapitalize="none"
@@ -3361,6 +3549,9 @@ const styles = StyleSheet.create({
   },
   accessoryKeyPressed: {
     opacity: 0.65
+  },
+  accessoryModifierActive: {
+    backgroundColor: colors.statusRed
   },
   accessoryKeyDisabled: {
     opacity: 0.35

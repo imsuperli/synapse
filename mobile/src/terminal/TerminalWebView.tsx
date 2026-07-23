@@ -36,6 +36,8 @@ type Props = {
   // and magnifies the already-fitted surface for remote desktop snapshots.
   textScale?: number
   textScaleMode?: TerminalTextScaleMode
+  // Used only to prove which Codex composer rows are visual wraps.
+  liveInputText?: string
   onWebReady?: () => void
   onEngineError?: (message: string) => void
 } & TerminalSelectionEvents
@@ -46,6 +48,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     terminalTheme,
     textScale = 1,
     textScaleMode = 'font-size',
+    liveInputText = '',
     onWebReady,
     onEngineError,
     onSelectionMode,
@@ -287,6 +290,10 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
   useEffect(() => {
     postMessage({ type: 'set-font-scale', fontScale: textScale, textScaleMode })
   }, [postMessage, textScale, textScaleMode])
+
+  useEffect(() => {
+    postMessage({ type: 'set-live-input-text', text: liveInputText })
+  }, [liveInputText, postMessage])
 
   useImperativeHandle(
     ref,

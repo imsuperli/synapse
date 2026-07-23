@@ -33,13 +33,19 @@ describe('buildTerminalAccessoryPages', () => {
       'end',
       'backspace',
       'tab',
-      'space',
-      'delete',
+      'ctrl',
+      'alt',
       'arrowLeft',
       'arrowDown',
       'arrowRight',
       'enter'
     ])
+    expect(primaryPage![8]).toEqual(
+      expect.objectContaining({ type: 'modifier', modifier: 'ctrl', label: 'Ctrl' })
+    )
+    expect(primaryPage![9]).toEqual(
+      expect.objectContaining({ type: 'modifier', modifier: 'alt', label: 'Alt' })
+    )
   })
 
   it('places Ctrl shortcuts on the second page and leaves stable empty slots', () => {
