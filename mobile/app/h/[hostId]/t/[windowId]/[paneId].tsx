@@ -109,6 +109,7 @@ import {
   sameRemoteTerminalViewport,
   type RemoteTerminalViewport
 } from '../../../../../src/synapse/remote-terminal-viewport'
+import { terminalErrorAfterConnectionState } from '../../../../../src/synapse/terminal-connection-error'
 import {
   TERMINAL_FOREGROUND_SMALL_DELTA_BYTES,
   decideRemoteTerminalForegroundRecovery
@@ -1121,6 +1122,9 @@ export default function RemoteTerminalScreen() {
             }
             const subscribed = parseTerminalSubscribedEvent(payload)
             if (subscribed) {
+              if (activeHandleRef.current === terminalHandle) {
+                setError((current) => terminalErrorAfterConnectionState(current, 'connected'))
+              }
               appendDiagnostic('mobile', 'terminal-subscribed', {
                 handle: terminalHandle,
                 streamId: subscribed.streamId,
@@ -1842,6 +1846,7 @@ export default function RemoteTerminalScreen() {
           onStateChange: (state) => {
             if (runIdRef.current === runId) {
               setConnectionState(state)
+              setError((current) => terminalErrorAfterConnectionState(current, state))
               appendDiagnostic('network', 'connection-state', {
                 state,
                 transport: loadedHost.relayEndpoint ? 'relay' : 'direct'

@@ -114,6 +114,16 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('setError(terminalErrorMessage(err, t))')
   })
 
+  it('clears only transient connection errors after reconnecting', () => {
+    expect(routeSource).toContain('terminalErrorAfterConnectionState')
+    expect(routeSource).toContain(
+      'setError((current) => terminalErrorAfterConnectionState(current, state))'
+    )
+    expect(routeSource).toContain(
+      "setError((current) => terminalErrorAfterConnectionState(current, 'connected'))"
+    )
+  })
+
   it('ignores duplicate sequenced terminal events after replay or reconnect', () => {
     expect(routeSource).toContain('appendRemoteTerminalData(')
     expect(routeSource).toContain('appendRemoteTerminalHistoryIncrement(')

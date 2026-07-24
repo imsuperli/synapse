@@ -6,6 +6,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   // irreversibly discards history before the replacement projection is built.
   var MOBILE_REFLOW_SOURCE_SCROLLBACK = 30000;
   var MOBILE_REFLOW_REFRESH_DELAY_MS = 120;
+  var MOBILE_CODEX_HARD_WRAP_MAX_SLACK = 12;
   var mobileSourceTerm = null;
   var mobileSourceSerializeAddon = null;
   var mobileSourceCols = 80;
@@ -328,6 +329,125 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return text === '' || text === ' ';
   }
 
+  function mobileSourceCellHasAttributes(line, col) {
+    if (!line) return false;
+    var cell = line.getCell(col);
+    try {
+      return !!(cell && cell.isAttributeDefault && !cell.isAttributeDefault());
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function findMobileCodexActivePromptRow(buffer) {
+    if (!buffer || !mobileSourceTerm) return -1;
+    var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
+    var firstSearchRow = Math.max(0, cursorRow - Math.max(1, mobileSourceTerm.rows));
+    for (var promptRow = cursorRow; promptRow >= firstSearchRow; promptRow--) {
+      var promptLine = buffer.getLine(promptRow);
+      var prompt = mobileSourceCellText(promptLine, 0);
+      if (
+        !promptLine ||
+        promptLine.isWrapped ||
+        (prompt !== '\u203a' && prompt !== '!') ||
+        !mobileSourceCellIsBlank(promptLine, 1)
+      ) {
+        continue;
+      }
+      var reachesCursor = true;
+      for (var row = promptRow + 1; row <= cursorRow; row++) {
+        var continuation = buffer.getLine(row);
+        if (
+          !continuation ||
+          continuation.isWrapped ||
+          !mobileSourceCellIsBlank(continuation, 0) ||
+          !mobileSourceCellIsBlank(continuation, 1)
+        ) {
+          reachesCursor = false;
+          break;
+        }
+      }
+      if (reachesCursor) return promptRow;
+    }
+    return -1;
+  }
+
+  function mobileCodexRowText(line, startCol) {
+    return mobileSourceLinePlainText(line, startCol).text;
+  }
+
+  function mobileCodexRowHasTranscriptPrefix(line) {
+    var first = mobileSourceCellText(line, 0);
+    return (
+      ((first === '\u203a' || first === '!' || first === '\u2022') &&
+        mobileSourceCellIsBlank(line, 1)) ||
+      (mobileSourceCellIsBlank(line, 0) && mobileSourceCellIsBlank(line, 1))
+    );
+  }
+
+  function mobileCodexRowStartsOutputBlock(line) {
+    return (
+      mobileSourceCellText(line, 0) === '\u2022' &&
+      mobileSourceCellIsBlank(line, 1) &&
+      mobileSourceCellHasAttributes(line, 0)
+    );
+  }
+
+  function mobileCodexRowStartsStructure(line) {
+    var text = mobileCodexRowText(line, 2).trim();
+    if (!text) return true;
+    if (/^[\u2500-\u257f]/.test(text)) return true;
+    if (/^(?:[-*+>]|#{1,6})\s/.test(text)) return true;
+    if (/^\d+[.)]\s/.test(text)) return true;
+    return false;
+  }
+
+  function mobileCodexRowIsRule(line) {
+    var text = mobileCodexRowText(line, 2).trim();
+    var compact = text.replace(/\s/g, '');
+    if (compact.length < 4) return false;
+    var structuralCount = 0;
+    for (var index = 0; index < compact.length; index++) {
+      if (/[-_=\u2500-\u257f]/.test(compact.charAt(index))) structuralCount++;
+    }
+    return structuralCount / compact.length >= 0.6;
+  }
+
+  function mobileCodexHardWrapSkip(previousLine, line) {
+    if (
+      !previousLine ||
+      !line ||
+      previousLine.isWrapped ||
+      line.isWrapped ||
+      !mobileCodexRowHasTranscriptPrefix(previousLine) ||
+      !mobileSourceCellIsBlank(line, 0) ||
+      !mobileSourceCellIsBlank(line, 1) ||
+      mobileCodexRowIsRule(previousLine) ||
+      mobileCodexRowStartsStructure(line) ||
+      mobileCodexRowIsRule(line)
+    ) {
+      return 0;
+    }
+    var previousEnd = mobileSourceLineTextEnd(previousLine, 0);
+    var maxSlack = Math.min(
+      MOBILE_CODEX_HARD_WRAP_MAX_SLACK,
+      Math.max(4, Math.floor(mobileSourceTerm.cols / 8))
+    );
+    var slack = Math.max(0, mobileSourceTerm.cols - previousEnd);
+    if (previousEnd < mobileSourceTerm.cols - maxSlack) return 0;
+
+    // Codex word wrapping removes the separator before drawing the next
+    // physical row. Keep one of its two layout blanks only when a non-full
+    // ASCII prose row proves that a word-boundary space was consumed.
+    var previousText = mobileCodexRowText(previousLine, 0).trimEnd();
+    var nextText = mobileCodexRowText(line, 2).trimStart();
+    var restoresWordSpace =
+      slack > 0 &&
+      /[A-Za-z0-9,.;:!?)]$/.test(previousText) &&
+      /^[A-Za-z0-9([]/.test(nextText);
+    return restoresWordSpace ? 1 : 2;
+  }
+
   function findMobileCodexComposerProjectionPlan(buffer) {
     var inputText = mobileLiveInputText;
     if (
@@ -342,62 +462,112 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     }
     var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
     var cursorCol = buffer.cursorX || 0;
-    var firstSearchRow = Math.max(0, cursorRow - Math.max(1, mobileSourceTerm.rows));
+    var promptRow = findMobileCodexActivePromptRow(buffer);
+    if (promptRow < 0) return null;
     // Codex draws a logical textarea as independent desktop-grid rows. Only
     // join them when the mobile input field proves the complete text and the
     // source cursor proves that the matched block is the active composer.
-    for (var promptRow = cursorRow; promptRow >= firstSearchRow; promptRow--) {
-      var promptLine = buffer.getLine(promptRow);
-      var prompt = mobileSourceCellText(promptLine, 0);
+    var promptLine = buffer.getLine(promptRow);
+    var prompt = mobileSourceCellText(promptLine, 0);
+    var expectedText = prompt === '!' && inputText.charAt(0) === '!'
+      ? inputText.slice(1)
+      : inputText;
+    var joinedText = '';
+    var rowSkips = {};
+    var lastCandidateRow = Math.min(
+      buffer.length - 1,
+      promptRow + Math.max(1, mobileSourceTerm.rows) - 1
+    );
+    for (var row = promptRow; row <= lastCandidateRow; row++) {
+      var line = buffer.getLine(row);
       if (
-        !promptLine ||
-        promptLine.isWrapped ||
-        (prompt !== '\u203a' && prompt !== '!') ||
-        !mobileSourceCellIsBlank(promptLine, 1)
+        !line ||
+        line.isWrapped ||
+        (row > promptRow &&
+          (!mobileSourceCellIsBlank(line, 0) || !mobileSourceCellIsBlank(line, 1)))
       ) {
-        continue;
+        break;
       }
-      var expectedText = prompt === '!' && inputText.charAt(0) === '!'
-        ? inputText.slice(1)
-        : inputText;
-      var joinedText = '';
-      var lastCandidateRow = Math.min(
-        buffer.length - 1,
-        promptRow + Math.max(1, mobileSourceTerm.rows) - 1
-      );
-      for (var row = promptRow; row <= lastCandidateRow; row++) {
-        var line = buffer.getLine(row);
-        if (
-          !line ||
-          line.isWrapped ||
-          (row > promptRow &&
-            (!mobileSourceCellIsBlank(line, 0) || !mobileSourceCellIsBlank(line, 1)))
-        ) {
-          break;
-        }
-        var lineText = mobileSourceLinePlainText(line, 2);
-        joinedText += lineText.text;
-        if (expectedText.slice(0, joinedText.length) !== joinedText) break;
-        if (joinedText !== expectedText) continue;
-        if (
-          row > promptRow &&
-          row === cursorRow &&
-          cursorCol === lineText.endCol
-        ) {
-          return {
-            startRow: promptRow,
-            endRow: row,
-            sourceRevision: mobileSourceRevision
-          };
-        }
-        if (row >= cursorRow) break;
+      var lineText = mobileSourceLinePlainText(line, 2);
+      if (
+        row > promptRow &&
+        expectedText.charAt(joinedText.length) === ' ' &&
+        expectedText.slice(joinedText.length + 1, joinedText.length + 1 + lineText.text.length) ===
+          lineText.text
+      ) {
+        joinedText += ' ';
+        rowSkips[row] = 1;
+      } else if (row > promptRow) {
+        rowSkips[row] = 2;
       }
+      joinedText += lineText.text;
+      if (expectedText.slice(0, joinedText.length) !== joinedText) break;
+      if (joinedText !== expectedText) continue;
+      if (
+        row > promptRow &&
+        row === cursorRow &&
+        cursorCol === lineText.endCol
+      ) {
+        return {
+          startRow: promptRow,
+          endRow: row,
+          rowSkips: rowSkips,
+          sourceRevision: mobileSourceRevision
+        };
+      }
+      if (row >= cursorRow) break;
     }
     return null;
   }
 
+  function findMobileCodexSnapshotProjectionPlan(buffer) {
+    if (!buffer || !mobileSourceTerm) return null;
+    var promptRow = findMobileCodexActivePromptRow(buffer);
+    if (promptRow < 0) return null;
+    var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
+    var composerPlan = findMobileCodexComposerProjectionPlan(buffer);
+    var rowSkips = {};
+    var hasRows = false;
+    if (composerPlan) {
+      for (
+        var composerRow = composerPlan.startRow + 1;
+        composerRow <= composerPlan.endRow;
+        composerRow++
+      ) {
+        rowSkips[composerRow] = composerPlan.rowSkips[composerRow] || 2;
+        hasRows = true;
+      }
+    }
+    var composerHasExplicitNewline =
+      mobileLiveInputText.indexOf('\r') !== -1 || mobileLiveInputText.indexOf('\n') !== -1;
+    var inOutputBlock = false;
+    for (var row = 1; row < buffer.length; row++) {
+      var previousLine = buffer.getLine(row - 1);
+      var previousPrefix = mobileSourceCellText(previousLine, 0);
+      if (mobileCodexRowStartsOutputBlock(previousLine)) {
+        inOutputBlock = true;
+      } else if (previousPrefix === '\u203a' || previousPrefix === '!') {
+        inOutputBlock = false;
+      }
+      if (rowSkips[row]) continue;
+      var inActiveComposer = row > promptRow && row <= cursorRow;
+      if (composerHasExplicitNewline && inActiveComposer) continue;
+      if (!inActiveComposer && !inOutputBlock) continue;
+      var skip = mobileCodexHardWrapSkip(previousLine, buffer.getLine(row));
+      if (skip > 0) {
+        rowSkips[row] = skip;
+        hasRows = true;
+      }
+    }
+    return hasRows
+      ? { rowSkips: rowSkips, sourceRevision: mobileSourceRevision }
+      : null;
+  }
+
   function mobileSnapshotRowSkip(plan, row) {
-    return plan && row > plan.startRow && row <= plan.endRow ? 2 : 0;
+    if (!plan) return 0;
+    if (plan.rowSkips && plan.rowSkips[row]) return plan.rowSkips[row];
+    return row > plan.startRow && row <= plan.endRow ? 2 : 0;
   }
 
   function mobileSnapshotProjectionLine(buffer, line, row, plan) {
@@ -426,8 +596,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   function mobileSnapshotProjectionBuffer(buffer, plan) {
     if (!plan) return buffer;
     // SerializeAddon reads this facade; the canonical source lines are never
-    // mutated. Continuations lose Codex's two layout columns and advertise a
-    // soft boundary so the phone terminal can wrap the logical input itself.
+    // mutated. Continuations lose Codex's layout columns and advertise a soft
+    // boundary; word wraps retain one blank when Codex consumed a separator.
     return {
       type: buffer.type,
       length: buffer.length,
@@ -510,7 +680,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     // The pinned SerializeAddon has no public active-buffer-only API. Its range
     // serializer is bundled with this WebView and avoids replaying desktop modes
     // or the final desktop cursor move into the phone-width projection.
-    var plan = findMobileCodexComposerProjectionPlan(buffer);
+    var plan = findMobileCodexSnapshotProjectionPlan(buffer);
     mobileSnapshotProjectionPlan = plan;
     var serialized = mobileSourceSerializeAddon._serializeBufferByRange(
       source,
@@ -829,7 +999,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       : null;
     if (
       isMobileReflowSnapshotLayout() &&
-      (nextText.length === 0 || findMobileCodexComposerProjectionPlan(buffer))
+      (nextText.length === 0 || findMobileCodexActivePromptRow(buffer) >= 0)
     ) {
       scheduleMobileSnapshotProjection('live-input-text');
     }

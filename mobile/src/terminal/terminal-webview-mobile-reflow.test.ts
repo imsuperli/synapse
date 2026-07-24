@@ -332,7 +332,7 @@ function projectSourceSnapshotGeometry(
     `${TERMINAL_MOBILE_REFLOW_JS}\n` +
       "textScaleMode = 'mobile-reflow'; mobileReflowLayout = 'snapshot'; " +
       "mobileSourceTerm = source; mobileLiveInputText = liveInputText; " +
-      "mobileSnapshotProjectionPlan = findMobileCodexComposerProjectionPlan(source.buffer.active); " +
+      "mobileSnapshotProjectionPlan = findMobileCodexSnapshotProjectionPlan(source.buffer.active); " +
       "var target = { options: {} }; " +
       "collectMobileProjectedOscLinks(targetCols, target); " +
       "return { cursor: target.__mobileSnapshotCursor || null, " +

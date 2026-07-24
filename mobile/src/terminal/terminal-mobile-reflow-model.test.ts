@@ -236,6 +236,129 @@ describe("mobile terminal canonical model projection", () => {
     expect(logicalLines(projection)).toEqual([`› ${input}`, "  status"]);
   });
 
+  it("restores a word-boundary space omitted by Codex composer wrapping", async () => {
+    const source = new Terminal({ cols: 20, rows: 7, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    const input = "alpha beta gamma delta";
+    await writeTerminal(
+      source,
+      "\u001b[2J\u001b[H› alpha beta gamma" +
+        "\u001b[2;3Hdelta" +
+        "\u001b[4;3Hstatus" +
+        "\u001b[2;8H",
+    );
+
+    const projection = new Terminal({
+      cols: 9,
+      rows: 12,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, input),
+    );
+
+    expect(logicalLines(projection)).toEqual([`› ${input}`, "  status"]);
+  });
+
+  it("reflows the reported three-row CJK Codex composer without hard breaks", async () => {
+    const source = new Terminal({ cols: 111, rows: 12, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    const firstVisualRow =
+      "我的要求很简单，代码知识，除了  services.jsonl 和 capabilities.json之外，都必须要有meta.json，对应的jsonl中禁";
+    const secondVisualRow =
+      "止存储相同的冗余字段，构建索引时，自动拼接meta.json中的字段。按照这个思路，你梳理一下，哪些要修改？哪些知识可";
+    const thirdVisualRow = "以直接修正，哪些服务的知识必须要重新抽取？";
+    const input = firstVisualRow + secondVisualRow + thirdVisualRow;
+    await writeTerminal(
+      source,
+      `\u001b[2J\u001b[H› ${firstVisualRow}` +
+        `\u001b[2;3H${secondVisualRow}` +
+        `\u001b[3;3H${thirdVisualRow}` +
+        "\u001b7\u001b[5;3Hgpt-5.6-sol xhigh · ~/develop/synapse\u001b8",
+    );
+
+    const projection = new Terminal({
+      cols: 38,
+      rows: 18,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, input),
+    );
+
+    expect(logicalLines(projection)).toEqual([
+      `› ${input}`,
+      "  gpt-5.6-sol xhigh · ~/develop/synapse",
+    ]);
+  });
+
+  it("reflows Codex transcript rows that were wrapped for the desktop grid", async () => {
+    const source = new Terminal({ cols: 24, rows: 8, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    await writeTerminal(
+      source,
+      "\u001b[2J\u001b[H\u001b[2m•\u001b[0m alpha beta gamma xx" +
+        "\u001b[2;1H  continues here" +
+        "\u001b[4;1H› " +
+        "\u001b[4;3H",
+    );
+
+    const projection = new Terminal({
+      cols: 10,
+      rows: 14,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, ""),
+    );
+
+    expect(logicalLines(projection)).toEqual([
+      "• alpha beta gamma xx continues here",
+      "› ",
+    ]);
+  });
+
+  it("keeps Codex list and tool-tree rows as separate logical lines", async () => {
+    const source = new Terminal({ cols: 24, rows: 8, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    await writeTerminal(
+      source,
+      "\u001b[2J\u001b[H\u001b[2m•\u001b[0m alpha beta gamma xx" +
+        "\u001b[2;1H  - separate item" +
+        "\u001b[3;1H  └ tool result" +
+        "\u001b[5;1H› " +
+        "\u001b[5;3H",
+    );
+
+    const projection = new Terminal({
+      cols: 10,
+      rows: 14,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, ""),
+    );
+
+    expect(logicalLines(projection)).toEqual([
+      "• alpha beta gamma xx",
+      "  - separate item",
+      "  └ tool result",
+      "› ",
+    ]);
+  });
+
   it("keeps explicit composer newlines and later status rows separate", async () => {
     const source = new Terminal({ cols: 20, rows: 7, scrollback: 100, allowProposedApi: true });
     const serializeAddon = new SerializeAddon();
