@@ -55,6 +55,7 @@ import { normalizeImagePath, toFileUrl } from '../shared/utils/appImage';
 import { disposeAgentTaskForPane, getAgentController } from './handlers/agentHandlers';
 import { createSSHWindowSession, startSSHPaneSession } from './handlers/sshSessionHandlers';
 import { RemoteGateway } from './remote/RemoteGateway';
+import { getMainWindowChromeOptions, resolveMainWindowCloseAction } from './windowChrome';
 
 const APP_DISPLAY_NAME = 'Synapse';
 const USER_DATA_DIR_NAME = 'synapse';
@@ -202,7 +203,7 @@ function createWindow() {
     title: '',
     icon: APP_ICON_PATH,
     show: false, // 创建时不显示，等待渲染进程通知
-    frame: false, // 使用自定义标题栏
+    ...getMainWindowChromeOptions(process.platform),
     fullscreenable: true,
     webPreferences: {
       preload: preloadPath,
@@ -445,26 +446,28 @@ function createWindow() {
 
   // 窗口关闭前处理
   mainWindow.on('close', async (event) => {
-    // macOS: 关闭窗口只隐藏，不退出（除非用户通过 ⌘Q 触发退出）
-    if (process.platform === 'darwin' && !isQuitting) {
+    const currentViewState = viewSwitcher?.getCurrentView() || 'unified';
+    const closeAction = resolveMainWindowCloseAction(
+      process.platform,
+      currentViewState,
+      isQuitting,
+    );
+
+    // 终端和画布视图统一先返回主页，避免 macOS 的隐藏逻辑抢先执行。
+    if (closeAction === 'return-home') {
+      event.preventDefault();
+      viewSwitcher?.switchToUnifiedView();
+      return;
+    }
+
+    // macOS: 主页上的关闭只隐藏窗口，不退出应用。
+    if (closeAction === 'hide') {
       event.preventDefault();
       mainWindow?.hide();
       return;
     }
 
-    // Windows/Linux: 检查当前视图状态
-    const currentViewState = viewSwitcher?.getCurrentView() || 'unified';
-
-    // 如果在终端或画布视图，返回统一视图而不是关闭窗口
-    if ((currentViewState === 'terminal' || currentViewState === 'canvas') && !isQuitting) {
-      event.preventDefault();
-      // 通知渲染进程返回统一视图（会同时清除 activeWindowId 和 activeGroupId）
-      viewSwitcher?.switchToUnifiedView();
-      return;
-    }
-
-    // 在统一视图或已经在退出流程中，执行正常关闭
-    if (!isQuitting) {
+    if (closeAction === 'shutdown') {
       event.preventDefault();
       isQuitting = true;
 

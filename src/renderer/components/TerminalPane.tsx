@@ -2021,7 +2021,6 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     });
     terminal.open(terminalContainerRef.current);
     const pasteCaptureBlockMs = 300;
-    const disposeImeFix = installTerminalImeFix(terminal, imeCompositionStateRef.current);
     const disposeScrollbackPreservation = installTerminalScrollbackPreservation(terminal);
 
     terminalRef.current = terminal;
@@ -2426,8 +2425,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       return true;
     });
 
-    // 监听用户输入
-    const dataDisposable = terminal.onData((data) => {
+    const handleTerminalData = (data: string) => {
       if (
         isXtermFocusReport(data)
         && (
@@ -2452,6 +2450,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (window.electronAPI && !suppressPtyWriteRef.current && ptyInputEnabledRef.current) {
         window.electronAPI.ptyWrite(windowId, pane.id, data, { source: 'xterm.onData' });
       }
+    };
+
+    // 监听用户输入。macOS 的兼容输入也走同一处理函数，避免绕过
+    // SSH cwd 跟踪、输入权限和历史回放写入保护。
+    const dataDisposable = terminal.onData(handleTerminalData);
+    const disposeImeFix = installTerminalImeFix(terminal, imeCompositionStateRef.current, {
+      platform,
+      onCompatibilityInput: handleTerminalData,
     });
 
     const binaryDisposable = terminal.onBinary?.((data) => {
