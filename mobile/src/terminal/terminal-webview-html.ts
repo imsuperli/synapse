@@ -1890,7 +1890,11 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   }
 
   function shouldRouteScrollToTerminalInput() {
-    return isWheelMouseTrackingMode(getMouseTrackingMode()) || isAlternateBufferActive();
+    // Explicit history-reading mode owns the projected scrollback even when
+    // the desktop application is still using its alternate screen.
+    return !autoScrollDisabled && (
+      isWheelMouseTrackingMode(getMouseTrackingMode()) || isAlternateBufferActive()
+    );
   }
 
   function buildMouseWheelScrollInput(lines, clientX, clientY) {

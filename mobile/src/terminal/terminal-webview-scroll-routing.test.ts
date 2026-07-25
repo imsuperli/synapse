@@ -40,9 +40,9 @@ describe('TerminalWebView scroll routing', () => {
     expect(nextViewportY).toBe(118)
   })
 
-  it('routes alternate-screen and mouse-aware scroll before smooth normal scroll', () => {
+  it('routes alternate-screen and mouse-aware scroll before smooth normal scroll while live', () => {
     expect(source).toContain(
-      'return isWheelMouseTrackingMode(getMouseTrackingMode()) || isAlternateBufferActive();'
+      'return !autoScrollDisabled && (\n      isWheelMouseTrackingMode(getMouseTrackingMode()) || isAlternateBufferActive()'
     )
 
     const touchMoveBlock = sliceBetween(
@@ -61,7 +61,13 @@ describe('TerminalWebView scroll routing', () => {
     expect(momentumBlock).toContain('routeScrollLines(lines, ts.lastX, ts.lastY);')
   })
 
-  it('routes alternate-screen scrolling only to the TUI', () => {
+  it('gives explicit history-reading mode ownership before alternate-screen TUI routing', () => {
+    const routingDecision = sliceBetween(
+      'function shouldRouteScrollToTerminalInput()',
+      'function buildMouseWheelScrollInput'
+    )
+    expect(routingDecision).toContain('!autoScrollDisabled')
+
     const routeBlock = sliceBetween(
       'function routeScrollLines(lines, clientX, clientY)',
       'function clampNormalScrollLines(lines)'
