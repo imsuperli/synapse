@@ -98,6 +98,15 @@ describe('TerminalWebView scroll routing', () => {
     expect(momentumBlock).toContain('ts.momentumId = null;')
   })
 
+  it('does not commit a pending history request when Android cancels the gesture', () => {
+    const cancelBlock = sliceBetween(
+      "targetSurface.addEventListener('touchcancel'",
+      '}, { capture: true, passive: true });'
+    )
+    expect(cancelBlock).toContain('historyTopPending = false;')
+    expect(cancelBlock).not.toContain('flushPendingHistoryTopReached();')
+  })
+
   it('coalesces normal touch scroll row commits onto animation frames', () => {
     const enqueueBlock = sliceBetween(
       'function enqueueNormalBufferScrollDelta(deltaY)',

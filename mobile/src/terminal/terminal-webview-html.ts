@@ -2546,7 +2546,9 @@ ${TERMINAL_MOBILE_REFLOW_JS}
 
     targetSurface.addEventListener('touchcancel', function() {
       surfaceTouchActive = false;
-      flushPendingHistoryTopReached();
+      // A system gesture or app backgrounding cancelled this interaction. Only
+      // a completed touchend may commit a history request.
+      historyTopPending = false;
       historyTopPullDistance = 0;
       ts.isPinching = false;
       ts.velY = 0;

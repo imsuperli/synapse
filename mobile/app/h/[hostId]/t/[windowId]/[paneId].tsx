@@ -120,7 +120,8 @@ import {
 import { terminalErrorAfterConnectionState } from '../../../../../src/synapse/terminal-connection-error'
 import {
   TERMINAL_FOREGROUND_SMALL_DELTA_BYTES,
-  decideRemoteTerminalForegroundRecovery
+  decideRemoteTerminalForegroundRecovery,
+  remoteTerminalForegroundRetryDelay
 } from '../../../../../src/synapse/remote-terminal-foreground-recovery'
 import {
   DEFAULT_REMOTE_TERMINAL_RESIDENT_LIMIT,
@@ -532,6 +533,8 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
     terminalPendingOverflowedRef: { current: false },
     foregroundRecoveryRequestedRef: { current: false },
     foregroundRecoveryInFlightRef: { current: false },
+    foregroundRecoveryRetryTimerRef: { current: null as ReturnType<typeof setTimeout> | null },
+    foregroundRecoveryRetryAttemptRef: { current: 0 },
     recoverTerminalAfterForegroundRef: { current: null as (() => Promise<void>) | null },
     paneStatusSyncInFlightRef: { current: false },
     lastUsedAt: Date.now()
@@ -539,6 +542,14 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
 }
 
 type RemoteTerminalSessionRuntime = ReturnType<typeof createRemoteTerminalSessionRuntime>
+
+function clearRemoteTerminalForegroundRecoveryRetry(runtime: RemoteTerminalSessionRuntime): void {
+  if (runtime.foregroundRecoveryRetryTimerRef.current) {
+    clearTimeout(runtime.foregroundRecoveryRetryTimerRef.current)
+    runtime.foregroundRecoveryRetryTimerRef.current = null
+  }
+  runtime.foregroundRecoveryRetryAttemptRef.current = 0
+}
 
 export default function RemoteTerminalScreen() {
   const params = useLocalSearchParams<{ hostId?: string; windowId?: string; paneId?: string }>()
@@ -607,6 +618,8 @@ export default function RemoteTerminalScreen() {
   const terminalPendingOverflowedRef = sessionRuntime.terminalPendingOverflowedRef
   const foregroundRecoveryRequestedRef = sessionRuntime.foregroundRecoveryRequestedRef
   const foregroundRecoveryInFlightRef = sessionRuntime.foregroundRecoveryInFlightRef
+  const foregroundRecoveryRetryTimerRef = sessionRuntime.foregroundRecoveryRetryTimerRef
+  const foregroundRecoveryRetryAttemptRef = sessionRuntime.foregroundRecoveryRetryAttemptRef
   const recoverTerminalAfterForegroundRef = sessionRuntime.recoverTerminalAfterForegroundRef
   const paneStatusSyncInFlightRef = sessionRuntime.paneStatusSyncInFlightRef
   const syncPaneStatusRef = useRef<(() => Promise<void>) | null>(null)
@@ -917,6 +930,7 @@ export default function RemoteTerminalScreen() {
       runtime.terminalPendingOverflowedRef.current = false
       runtime.foregroundRecoveryRequestedRef.current = false
       runtime.foregroundRecoveryInFlightRef.current = false
+      clearRemoteTerminalForegroundRecoveryRetry(runtime)
       runtime.paneStatusSyncInFlightRef.current = false
       resetRemoteTerminalHistoryPrefetchState(runtime.terminalHistoryPrefetchRef.current)
     }
@@ -1370,7 +1384,12 @@ export default function RemoteTerminalScreen() {
       maxPages = 1
     ): Promise<{ activated: boolean; activatedBytes: number } | null> => {
       const client = clientRef.current
-      if (!client || loadingOlderHistoryRef.current || resyncingRef.current) {
+      if (
+        !client ||
+        loadingOlderHistoryRef.current ||
+        resyncingRef.current ||
+        terminalRenderPausedRef.current
+      ) {
         return null
       }
       const runId = runIdRef.current
@@ -1397,7 +1416,8 @@ export default function RemoteTerminalScreen() {
         if (
           runIdRef.current !== runId ||
           clientRef.current !== client ||
-          terminalHistoryGenerationRef.current !== historyGeneration
+          terminalHistoryGenerationRef.current !== historyGeneration ||
+          terminalRenderPausedRef.current
         ) {
           return null
         }
@@ -1721,6 +1741,47 @@ export default function RemoteTerminalScreen() {
   ])
   syncTerminalIncrementRef.current = syncTerminalIncrement
 
+  const clearForegroundRecoveryRetry = useCallback(() => {
+    clearRemoteTerminalForegroundRecoveryRetry(sessionRuntime)
+  }, [sessionRuntime])
+
+  const scheduleForegroundRecoveryRetry = useCallback(
+    (expectedRunId: number, expectedClient: RpcClient) => {
+      if (foregroundRecoveryRetryTimerRef.current) {
+        return
+      }
+      const attempt = foregroundRecoveryRetryAttemptRef.current
+      const delayMs = remoteTerminalForegroundRetryDelay(attempt)
+      foregroundRecoveryRetryAttemptRef.current = attempt + 1
+      appendDiagnostic('mobile', 'foreground-recovery-retry', {
+        handle: terminalHandle,
+        attempt: attempt + 1,
+        delayMs
+      })
+      foregroundRecoveryRetryTimerRef.current = setTimeout(() => {
+        foregroundRecoveryRetryTimerRef.current = null
+        if (
+          runIdRef.current !== expectedRunId ||
+          clientRef.current !== expectedClient ||
+          AppState.currentState !== 'active' ||
+          !screenFocusedRef.current ||
+          activeHandleRef.current !== terminalHandle ||
+          !foregroundRecoveryRequestedRef.current
+        ) {
+          return
+        }
+        void recoverTerminalAfterForegroundRef.current?.()
+      }, delayMs)
+    },
+    [
+      appendDiagnostic,
+      foregroundRecoveryRequestedRef,
+      foregroundRecoveryRetryAttemptRef,
+      foregroundRecoveryRetryTimerRef,
+      terminalHandle
+    ]
+  )
+
   const recoverTerminalAfterForeground = useCallback(async () => {
     const client = clientRef.current
     if (
@@ -1798,6 +1859,7 @@ export default function RemoteTerminalScreen() {
       }
       terminalPendingOverflowedRef.current = false
       foregroundRecoveryRequestedRef.current = false
+      clearForegroundRecoveryRetry()
     } catch (err) {
       if (runIdRef.current === runId && clientRef.current === client) {
         const message = err instanceof Error ? err.message : String(err)
@@ -1806,6 +1868,11 @@ export default function RemoteTerminalScreen() {
           foregroundRecoveryRequestedRef.current = false
           setTerminalRunning(false)
           setError(t('terminal.stoppedOnDesktop'))
+          clearForegroundRecoveryRetry()
+        } else {
+          terminalRenderPausedRef.current = true
+          foregroundRecoveryRequestedRef.current = true
+          scheduleForegroundRecoveryRetry(runId, client)
         }
       }
     } finally {
@@ -1815,9 +1882,11 @@ export default function RemoteTerminalScreen() {
     }
   }, [
     buildTerminalInitialData,
+    clearForegroundRecoveryRetry,
     connectionState,
     loading,
     paneId,
+    scheduleForegroundRecoveryRetry,
     hydrateInitialTerminalHistory,
     startTerminalSubscription,
     t,
@@ -2047,6 +2116,7 @@ export default function RemoteTerminalScreen() {
           for (const runtime of sessionRuntimesRef.current.values()) {
             runtime.terminalRenderPausedRef.current = true
             runtime.foregroundRecoveryRequestedRef.current = false
+            clearRemoteTerminalForegroundRecoveryRetry(runtime)
           }
           liveInputRef.current?.blur()
           Keyboard.dismiss()
@@ -2060,6 +2130,7 @@ export default function RemoteTerminalScreen() {
           ? sessionRuntimesRef.current.get(activeHandleRef.current)
           : null
         if (activeRuntime) {
+          clearRemoteTerminalForegroundRecoveryRetry(activeRuntime)
           activeRuntime.foregroundRecoveryRequestedRef.current = true
         }
         clientRef.current?.notifyForeground()
@@ -2241,6 +2312,7 @@ export default function RemoteTerminalScreen() {
           evicted.terminalInitializedRef.current = false
           evicted.terminalWebReadyRef.current = false
           evicted.resumeInitialHistoryHydrationRef.current = null
+          clearRemoteTerminalForegroundRecoveryRetry(evicted)
         }
       }
       setResidentTerminalHandles(residency.handles)

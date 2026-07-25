@@ -328,6 +328,19 @@ describe('Synapse Mobile terminal route wiring', () => {
     )
     expect(restoreIndex).toBeGreaterThanOrEqual(0)
     expect(recoverIndex).toBeGreaterThan(restoreIndex)
+    expect(routeSource).toContain('scheduleForegroundRecoveryRetry(runId, client)')
+    expect(routeSource).toContain('terminalRenderPausedRef.current = true')
+    expect(routeSource).toContain('clearRemoteTerminalForegroundRecoveryRetry(runtime)')
+    expect(routeSource).toContain("AppState.currentState !== 'active'")
+  })
+
+  it('does not consume or render prefetched history while terminal rendering is paused', () => {
+    expect(routeSource).toContain(
+      'resyncingRef.current ||\n        terminalRenderPausedRef.current'
+    )
+    expect(routeSource).toContain(
+      'terminalHistoryGenerationRef.current !== historyGeneration ||\n          terminalRenderPausedRef.current'
+    )
   })
 
   it('copies a non-empty selection only from the active terminal', () => {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   TERMINAL_FOREGROUND_SMALL_DELTA_BYTES,
-  decideRemoteTerminalForegroundRecovery
+  decideRemoteTerminalForegroundRecovery,
+  remoteTerminalForegroundRetryDelay
 } from './remote-terminal-foreground-recovery'
 
 const base = {
@@ -15,6 +16,13 @@ const base = {
 }
 
 describe('remote terminal foreground recovery decision', () => {
+  it('backs transient failures off without ever abandoning recovery', () => {
+    expect(remoteTerminalForegroundRetryDelay(0)).toBe(500)
+    expect(remoteTerminalForegroundRetryDelay(1)).toBe(1_000)
+    expect(remoteTerminalForegroundRetryDelay(2)).toBe(2_000)
+    expect(remoteTerminalForegroundRetryDelay(20)).toBe(5_000)
+  })
+
   it('does nothing when desktop and mobile render cursors already match', () => {
     expect(decideRemoteTerminalForegroundRecovery(base)).toBe('none')
   })
