@@ -40,6 +40,7 @@ type Props = {
   // Used only to prove which Codex composer rows are visual wraps.
   liveInputText?: string
   onWebReady?: () => void
+  onPendingWriteOverflow?: () => void
   onEngineError?: (message: string) => void
 } & TerminalSelectionEvents
 
@@ -51,6 +52,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     textScaleMode = 'font-size',
     liveInputText = '',
     onWebReady,
+    onPendingWriteOverflow,
     onEngineError,
     onSelectionMode,
     onSelectionCopy,
@@ -105,12 +107,15 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
   const postMessage = useCallback(
     (msg: TerminalWebViewCommand) => {
       if (!isWebReadyRef.current) {
-        pendingMessages.queue(msg)
+        const queued = pendingMessages.queue(msg)
+        if (queued.writeOverflowed) {
+          onPendingWriteOverflow?.()
+        }
         return
       }
       sendToWebView(msg)
     },
-    [pendingMessages, sendToWebView]
+    [onPendingWriteOverflow, pendingMessages, sendToWebView]
   )
 
   const handleMessage = useCallback(
@@ -126,8 +131,11 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         isWebReadyRef.current = true
         clearWebReadyWatchdog()
         clearEngineError()
-        onWebReady?.()
+        // Writes queued during this load belong before the route's latest full
+        // recovery init. That init resets the WebView queue and becomes the new
+        // replay baseline, so the final surface cannot contain duplicates.
         flushPendingMessages()
+        onWebReady?.()
       } else if (msg.type === 'ready') {
         // Why: the WebView's init() rAF chain has run — term is open,
         // renderService is populated, first paint has happened. Resolve
@@ -282,10 +290,10 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
   const handleLoadStart = useCallback(() => {
     isWebReadyRef.current = false
     armWebReadyWatchdog()
-    // Why: messages queued for a previous WebView generation are stale after a reload;
-    // dropping them avoids replaying terminal chunks before the next init snapshot.
-    pendingMessages.clear()
-  }, [armWebReadyWatchdog, pendingMessages])
+    // Do not clear here: initial init can be queued before React Native reports
+    // load-start. A later init supersedes stale writes through the queue's replay
+    // boundary instead of relying on platform event order.
+  }, [armWebReadyWatchdog])
 
   const handleReload = useCallback(() => {
     clearEngineError()

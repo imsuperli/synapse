@@ -3036,6 +3036,16 @@ export default function RemoteTerminalScreen() {
     [handleTerminalWebReady]
   )
 
+  const handlePendingWebWriteOverflow = useCallback((handle: string) => {
+    const runtime = sessionRuntimesRef.current.get(handle)
+    if (!runtime) {
+      return
+    }
+    runtime.terminalPendingOverflowedRef.current = true
+    appendDiagnostic('mobile', 'pending-web-write-overflow', { handle })
+    void runtime.syncTerminalIncrementRef.current?.()
+  }, [appendDiagnostic])
+
   useEffect(() => {
     const updateKeyboardHeight = (event: KeyboardEvent) => {
       cancelKeyboardViewportRestore()
@@ -3370,7 +3380,8 @@ export default function RemoteTerminalScreen() {
                 textScaleMode="mobile-reflow"
                 liveInputText={handle === terminalHandle ? liveInputCapture : ''}
                 onRef={setTerminalWebViewRef}
-                onWebReady={handleResidentTerminalWebReady}
+                      onWebReady={handleResidentTerminalWebReady}
+                      onPendingWriteOverflow={handlePendingWebWriteOverflow}
                 onSelectionMode={() => {}}
                 onSelectionCopy={handleSelectionCopy}
                 onSelectionEvicted={() => {}}

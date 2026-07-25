@@ -21,6 +21,7 @@ type TerminalPaneViewProps = {
   liveInputText?: string
   onRef: (handle: string, ref: TerminalWebViewHandle | null) => void
   onWebReady: (handle: string) => void
+  onPendingWriteOverflow?: (handle: string) => void
   onSelectionMode: (handle: string, active: boolean) => void
   onSelectionCopy: (handle: string, text: string) => void
   onSelectionEvicted: (handle: string) => void
@@ -49,6 +50,7 @@ export function TerminalPaneView({
   liveInputText,
   onRef,
   onWebReady,
+  onPendingWriteOverflow,
   onSelectionMode,
   onSelectionCopy,
   onSelectionEvicted,
@@ -92,6 +94,7 @@ export function TerminalPaneView({
         textScaleMode={textScaleMode}
         liveInputText={liveInputText}
         onWebReady={() => onWebReady(handle)}
+        onPendingWriteOverflow={() => onPendingWriteOverflow?.(handle)}
         onSelectionMode={(a) => onSelectionMode(handle, a)}
         onSelectionCopy={(t) => onSelectionCopy(handle, t)}
         onSelectionEvicted={() => onSelectionEvicted(handle)}

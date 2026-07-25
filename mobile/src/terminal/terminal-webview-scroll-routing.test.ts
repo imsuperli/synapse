@@ -145,10 +145,18 @@ describe('TerminalWebView scroll routing', () => {
     expect(source).toContain('let pendingWriteBytes = 0')
     expect(source).toContain('let pendingWriteCount = 0')
     expect(source).toContain('const queue = (msg: TerminalWebViewCommand)')
-    expect(source).toContain('pendingWriteCount > MAX_PENDING_WEB_WRITE_MESSAGES')
-    expect(source).toContain("candidate.type === 'write'")
+    expect(source).toContain('pendingWriteCount > maxWriteMessages')
+    expect(source).toContain("candidate.type !== 'write' && candidate.type !== 'init'")
     expect(source).toContain('pendingMessages.queue(msg)')
-    expect(source).toContain('pendingMessages.clear()')
+    expect(source).toContain('onPendingWriteOverflow?.()')
+    expect(source).not.toContain('pendingMessages.clear()')
+    const webReadyBlock = sliceBetween(
+      "if (msg.type === 'web-ready')",
+      "} else if (msg.type === 'ready')"
+    )
+    expect(webReadyBlock.indexOf('flushPendingMessages()')).toBeLessThan(
+      webReadyBlock.indexOf('onWebReady?.()')
+    )
   })
 
   it('clears WebView await timers when the real response wins', () => {

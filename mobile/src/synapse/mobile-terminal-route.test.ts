@@ -325,6 +325,13 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('await reloadSnapshotForCurrentRun()')
   })
 
+  it('recovers explicitly when a resident WebView pending write queue overflows', () => {
+    expect(routeSource).toContain('const handlePendingWebWriteOverflow = useCallback(')
+    expect(routeSource).toContain('runtime.terminalPendingOverflowedRef.current = true')
+    expect(routeSource).toContain('void runtime.syncTerminalIncrementRef.current?.()')
+    expect(routeSource).toContain('onPendingWriteOverflow={handlePendingWebWriteOverflow}')
+  })
+
   it('coalesces small foreground deltas and replaces large backlogs with a compact snapshot', () => {
     expect(routeSource).toContain('terminalRenderPausedRef.current = true')
     expect(routeSource).toContain('decideRemoteTerminalForegroundRecovery({')
