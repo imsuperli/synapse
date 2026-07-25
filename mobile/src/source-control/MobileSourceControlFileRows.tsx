@@ -1,4 +1,5 @@
-import { ActivityIndicator, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { ChevronRight, FileText, Minus, Plus, Trash2 } from 'lucide-react-native'
 import type { SectionListRenderItem } from 'react-native'
 import { colors } from '../theme/mobile-theme'

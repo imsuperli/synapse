@@ -4,10 +4,10 @@ import {
   View,
   Text,
   StyleSheet,
-  Pressable,
   Switch,
   type AppStateStatus
 } from 'react-native'
+import { Pressable } from './Pressable'
 import { useFocusEffect } from 'expo-router'
 import { ChevronRight, X } from 'lucide-react-native'
 import type Animated from 'react-native-reanimated'

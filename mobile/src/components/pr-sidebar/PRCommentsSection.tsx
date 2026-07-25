@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, Text, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { ChevronDown, ChevronRight } from 'lucide-react-native'
 import type { GitHubWorkItemDetails, PRState } from '../../../../src/shared/types'
 import type { GitHubPrRepoSlug } from '../../session/github-pr-rpc'

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Linking, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { WebView } from 'react-native-webview'
 import { Code, Eye } from 'lucide-react-native'
 import { colors, spacing, typography } from '../theme/mobile-theme'

@@ -6,7 +6,6 @@ import {
   BackHandler,
   Keyboard,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,6 +15,7 @@ import {
   type KeyboardEvent,
   type LayoutChangeEvent
 } from 'react-native'
+import { Pressable } from '../../../../../src/components/Pressable'
 import * as Clipboard from 'expo-clipboard'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import {

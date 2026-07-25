@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { MessageSquare } from 'lucide-react-native'
 import type { DiffComment } from '../../../src/shared/types'
 import type { MobileDiffLine } from '../session/mobile-diff-lines'

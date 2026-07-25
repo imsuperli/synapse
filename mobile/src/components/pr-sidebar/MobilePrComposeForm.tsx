@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import { ActivityIndicator, Pressable, Switch, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Switch, Text, TextInput, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import {
   ArrowRight,
   GitMerge,

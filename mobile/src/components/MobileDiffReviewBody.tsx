@@ -1,4 +1,5 @@
-import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, FlatList, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { RefreshCw } from 'lucide-react-native'
 import type { RefObject } from 'react'
 import type { DiffComment } from '../../../src/shared/types'

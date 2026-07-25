@@ -1,5 +1,6 @@
 import { Fragment, memo, useMemo, type ReactNode } from 'react'
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { colors, radii, spacing, typography } from '../theme/mobile-theme'
 import { normalizeMobileMarkdownPreviewHtml } from './mobile-markdown-preview-html'
 import { parseMobileMarkdown } from './mobile-markdown-parser'

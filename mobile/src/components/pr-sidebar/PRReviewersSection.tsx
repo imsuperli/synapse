@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { ActivityIndicator, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, Text, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { UserPlus, X } from 'lucide-react-native'
 import { colors } from '../../theme/mobile-theme'
 import type { GitHubWorkItemDetails } from '../../../../src/shared/types'

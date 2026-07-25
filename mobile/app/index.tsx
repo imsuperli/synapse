@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Alert, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from '../src/components/Pressable'
 import { Link, useFocusEffect, useRouter } from 'expo-router'
 import { ChevronRight, Cloud, Languages, Pencil, Plus, Server, Trash2, Wifi } from 'lucide-react-native'
 import { loadHosts, removeHost, setHostConnectionRoute } from '../src/transport/host-store'

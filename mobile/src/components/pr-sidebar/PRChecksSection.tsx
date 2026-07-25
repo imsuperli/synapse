@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, Linking, Text, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { ChevronDown, ChevronRight, ExternalLink, RotateCw, Sparkles } from 'lucide-react-native'
 import { colors } from '../../theme/mobile-theme'
 import type { PRCheckDetail } from '../../../../src/shared/types'

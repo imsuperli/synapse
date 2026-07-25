@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Pressable } from '../src/components/Pressable'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Check, X } from 'lucide-react-native'
 import { ConnectionLog } from '../src/components/ConnectionLog'

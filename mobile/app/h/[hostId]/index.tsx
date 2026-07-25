@@ -4,7 +4,6 @@ import {
   Alert,
   AppState,
   FlatList,
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -13,6 +12,7 @@ import {
   useWindowDimensions,
   View
 } from 'react-native'
+import { Pressable } from '../../../src/components/Pressable'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import {
   Check,

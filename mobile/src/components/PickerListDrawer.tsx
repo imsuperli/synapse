@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
+import { FlatList, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { Check } from 'lucide-react-native'
 
 import { colors, spacing, typography } from '../theme/mobile-theme'

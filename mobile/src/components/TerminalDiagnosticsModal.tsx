@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Modal, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import * as Clipboard from 'expo-clipboard'
 import { Check, Copy, X } from 'lucide-react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'

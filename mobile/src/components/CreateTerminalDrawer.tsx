@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
   View
 } from 'react-native'
+import { Pressable } from './Pressable'
 import { Check, ChevronDown, HardDrive, Server, TerminalSquare } from 'lucide-react-native'
 import type { RemoteSSHProfileSummary } from '../synapse/remote'
 import type { WindowCreateParams } from '../../../src/shared/remote/window-protocol'

@@ -41,6 +41,7 @@ export default defineConfig({
       'src/transport/rpc-response-shape.test.ts',
       'src/transport/websocket-payload-bytes.test.ts',
       'src/i18n/**/*.test.ts',
+      'src/components/Pressable.test.ts',
       'src/terminal/terminal-accessory-*.test.ts',
       'src/terminal/terminal-text-input-normalization.test.ts',
       'src/terminal/terminal-keyboard-avoidance.test.ts',

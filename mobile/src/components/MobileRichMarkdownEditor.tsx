@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, type ComponentType } from 'react'
-import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { Linking, ScrollView, StyleSheet, View } from 'react-native'
+import { Pressable } from './Pressable'
 import {
   Bold,
   Code2,

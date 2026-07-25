@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Pressable, ScrollView, View } from 'react-native'
+import { ScrollView, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { Code, Pencil } from 'lucide-react-native'
 import { MobileMarkdown } from '../components/MobileMarkdown'
 import { colors } from '../theme/mobile-theme'

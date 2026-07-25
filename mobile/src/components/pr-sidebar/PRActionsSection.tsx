@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import { ActivityIndicator, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, Text, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { GitMerge, Link2Off } from 'lucide-react-native'
 import { colors } from '../../theme/mobile-theme'
 import type { GitHubPRMergeMethod, PRInfo } from '../../../../src/shared/types'

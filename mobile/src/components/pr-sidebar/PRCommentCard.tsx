@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
-import { Image, Linking, Pressable, Text, View } from 'react-native'
+import { Image, Linking, Text, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { Check, CornerDownRight, ExternalLink, Pencil, Trash2, Undo2 } from 'lucide-react-native'
 import type { GitHubReaction, GitHubReactionContent, PRComment } from '../../../../src/shared/types'
 import { colors } from '../../theme/mobile-theme'

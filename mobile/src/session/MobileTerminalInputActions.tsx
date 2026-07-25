@@ -1,4 +1,5 @@
-import { ActivityIndicator, Pressable, type StyleProp, type ViewStyle } from 'react-native'
+import { ActivityIndicator, type StyleProp, type ViewStyle } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { ImagePlus, Mic } from 'lucide-react-native'
 import { colors } from '../theme/mobile-theme'
 

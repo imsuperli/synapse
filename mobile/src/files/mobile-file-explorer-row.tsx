@@ -1,4 +1,5 @@
-import { ActivityIndicator, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import {
   ChevronDown,
   ChevronRight,

@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet } from 'react-native'
+import { StyleSheet } from 'react-native'
+import { Pressable } from './Pressable'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Plus } from 'lucide-react-native'
 import { colors, spacing } from '../theme/mobile-theme'

@@ -1,4 +1,5 @@
-import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Linking, Platform, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { router } from 'expo-router'
 import { colors, radii, spacing, typography } from '../theme/mobile-theme'
 import type { CompatVerdict } from '../transport/protocol-compat'

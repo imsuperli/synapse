@@ -1,5 +1,6 @@
 import { Bell, ChevronDown, ChevronRight, GitBranch, GitPullRequest } from 'lucide-react-native'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import type { RepoIcon } from '../../../src/shared/repo-icon'
 import type { RuntimeWorktreeAgentRow } from '../../../src/shared/runtime-types'
 import { triggerMediumImpact } from '../platform/haptics'

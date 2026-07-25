@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { colors, radii, spacing } from '../theme/mobile-theme'
 import type { MobileBrowserViewMode } from './browser-screencast-request'
 

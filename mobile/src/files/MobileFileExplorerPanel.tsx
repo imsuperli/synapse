@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
-  Pressable,
   Text,
   View,
   type ListRenderItem
 } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { ChevronLeft, X } from 'lucide-react-native'

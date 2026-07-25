@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native'
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import type { ReactNode } from 'react'
 import { colors, radii } from '../theme/mobile-theme'
 

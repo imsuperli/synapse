@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, FlatList, Text, TextInput, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { Check } from 'lucide-react-native'
 import { colors } from '../../theme/mobile-theme'
 import type { GitHubAssignableUser } from '../../../../src/shared/types'

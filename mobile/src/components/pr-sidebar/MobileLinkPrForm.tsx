@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { colors, radii, spacing, typography } from '../../theme/mobile-theme'
 import type { RpcClient } from '../../transport/rpc-client'
 import { triggerError, triggerSuccess } from '../../platform/haptics'

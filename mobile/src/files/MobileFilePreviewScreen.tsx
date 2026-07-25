@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, BackHandler, Pressable, Text, View, useWindowDimensions } from 'react-native'
+import { Alert, BackHandler, Text, View, useWindowDimensions } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { ChevronLeft, Save } from 'lucide-react-native'

@@ -1,4 +1,5 @@
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from 'react-native'
+import { ActivityIndicator, Image, ScrollView, Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { colors } from '../theme/mobile-theme'
 import type { MobileFilePreviewResult } from './mobile-file-preview-request'
 import { MobileFileMarkdownPreview } from './MobileFileMarkdownPreview'

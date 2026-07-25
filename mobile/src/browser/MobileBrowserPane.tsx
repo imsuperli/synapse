@@ -10,7 +10,6 @@ import {
   PanResponder,
   PixelRatio,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -18,6 +17,7 @@ import {
   type GestureResponderEvent,
   type PanResponderGestureState
 } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { ArrowUp, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react-native'
 import type { RpcClient } from '../transport/rpc-client'
 import type { RpcFailure, RpcSuccess } from '../transport/types'

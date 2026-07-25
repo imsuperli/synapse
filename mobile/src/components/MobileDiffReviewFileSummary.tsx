@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from 'react-native'
+import { Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { ArrowDown, ArrowUp } from 'lucide-react-native'
 import type { DiffComment } from '../../../src/shared/types'
 import { colors } from '../theme/mobile-theme'

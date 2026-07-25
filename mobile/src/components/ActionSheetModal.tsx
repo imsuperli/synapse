@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { ActivityIndicator, View, Text, Pressable, StyleSheet } from 'react-native'
+import { ActivityIndicator, View, Text, StyleSheet } from 'react-native'
+import { Pressable } from './Pressable'
 import { Edit3, Trash2, type LucideIcon } from 'lucide-react-native'
 import { colors, spacing, typography } from '../theme/mobile-theme'
 import { BottomDrawer } from './BottomDrawer'

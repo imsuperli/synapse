@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from 'react-native'
+import { KeyboardAvoidingView, Platform, Text, TextInput, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { Check, Copy, FileText, Plus, Send, Trash2, X } from 'lucide-react-native'
 import type { DiffComment } from '../../../src/shared/types'
 import { colors } from '../theme/mobile-theme'

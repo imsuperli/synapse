@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from 'react-native'
+import { Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { ChevronLeft, RefreshCw, X } from 'lucide-react-native'
 import { colors } from '../theme/mobile-theme'
 import { styles } from './mobile-source-control-styles'

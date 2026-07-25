@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { colors, radii, spacing, typography } from '../theme/mobile-theme'
 
 const BROWSER_KEYS = ['Enter', 'Backspace', 'Tab', 'Escape'] as const

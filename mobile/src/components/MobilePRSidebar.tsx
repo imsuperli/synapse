@@ -1,4 +1,5 @@
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native'
+import { ActivityIndicator, ScrollView, Text, View } from 'react-native'
+import { Pressable } from './Pressable'
 import { RotateCw } from 'lucide-react-native'
 import { colors } from '../theme/mobile-theme'
 import type { PrSidebarState } from '../session/mobile-pr-sidebar-state'

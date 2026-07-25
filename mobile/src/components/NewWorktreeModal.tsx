@@ -3,13 +3,13 @@ import {
   View,
   Text,
   TextInput,
-  Pressable,
   Switch,
   StyleSheet,
   Platform,
   ActivityIndicator,
   Keyboard
 } from 'react-native'
+import { Pressable } from './Pressable'
 import { ChevronDown, ChevronUp, Check } from 'lucide-react-native'
 import type { RpcClient } from '../transport/rpc-client'
 import type { RpcSuccess } from '../transport/types'

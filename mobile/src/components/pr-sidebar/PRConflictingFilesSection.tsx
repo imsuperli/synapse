@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native'
+import { ActivityIndicator, ScrollView, Text, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import * as Clipboard from 'expo-clipboard'
 import { Check, Copy, FileWarning, Sparkles } from 'lucide-react-native'
 import { colors } from '../../theme/mobile-theme'

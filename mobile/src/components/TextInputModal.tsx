@@ -3,11 +3,11 @@ import {
   View,
   Text,
   TextInput,
-  Pressable,
   StyleSheet,
   Platform,
   type KeyboardTypeOptions
 } from 'react-native'
+import { Pressable } from './Pressable'
 import { colors, spacing, radii, typography } from '../theme/mobile-theme'
 import { BottomDrawer } from './BottomDrawer'
 import { useMobileI18n } from '../i18n'

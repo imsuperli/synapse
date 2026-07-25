@@ -75,7 +75,7 @@
     {
       "files": ["src/components/CustomKeyModal.tsx"],
       "rules": {
-        "max-lines": ["error", { "max": 645, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 646, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

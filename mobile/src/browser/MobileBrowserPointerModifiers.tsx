@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { colors, radii, spacing, typography } from '../theme/mobile-theme'
 
 export type BrowserPointerModifier = 'cmd' | 'ctrl' | 'alt' | 'shift'

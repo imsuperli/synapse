@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Alert, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from '../../../src/components/Pressable'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { Cloud, Languages, Pencil, Trash2 } from 'lucide-react-native'
 import { TextInputModal } from '../../../src/components/TextInputModal'

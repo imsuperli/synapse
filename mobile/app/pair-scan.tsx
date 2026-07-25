@@ -2,12 +2,12 @@ import { useCallback, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Linking,
-  Pressable,
   StyleSheet,
   Text,
   View,
   type LayoutChangeEvent
 } from 'react-native'
+import { Pressable } from '../src/components/Pressable'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'

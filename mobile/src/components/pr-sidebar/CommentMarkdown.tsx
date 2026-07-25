@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Pressable } from '../Pressable'
 import { ChevronDown, ChevronRight } from 'lucide-react-native'
 import { colors, radii, spacing, typography } from '../../theme/mobile-theme'
 import { MermaidDiagram } from './MermaidDiagram'

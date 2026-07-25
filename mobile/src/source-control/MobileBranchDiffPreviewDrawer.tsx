@@ -1,4 +1,5 @@
-import { ActivityIndicator, Pressable, Text, View } from 'react-native'
+import { ActivityIndicator, Text, View } from 'react-native'
+import { Pressable } from '../components/Pressable'
 import { X } from 'lucide-react-native'
 import { colors } from '../theme/mobile-theme'
 import { BottomDrawer } from '../components/BottomDrawer'
