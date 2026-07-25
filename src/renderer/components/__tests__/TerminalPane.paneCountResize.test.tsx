@@ -23,10 +23,13 @@ type MockTerminalInstance = {
   textarea: HTMLTextAreaElement | null;
   cols: number;
   rows: number;
+  lineTexts: Map<number, string>;
   buffer: {
     active: {
       viewportY: number;
       baseY: number;
+      length: number;
+      getLine: (row: number) => { translateToString: (trimRight?: boolean) => string } | undefined;
     };
   };
   _core: {
@@ -34,7 +37,8 @@ type MockTerminalInstance = {
   };
 };
 
-const { fitAddonInstances, terminalInstances, terminalScrollCallbacks } = vi.hoisted(() => ({
+const { containerSize, fitAddonInstances, terminalInstances, terminalScrollCallbacks } = vi.hoisted(() => ({
+  containerSize: { width: 900, height: 600 },
   fitAddonInstances: [] as Array<{
     fit: ReturnType<typeof vi.fn>;
   }>,
@@ -55,6 +59,7 @@ vi.mock('@xterm/xterm', () => ({
       refreshRows: vi.fn(),
     };
     const instance = {
+      lineTexts: new Map<number, string>(),
       loadAddon: vi.fn(),
       registerLinkProvider: vi.fn(() => ({ dispose: vi.fn() })),
       open: vi.fn((container?: HTMLElement) => {
@@ -92,6 +97,13 @@ vi.mock('@xterm/xterm', () => ({
         active: {
           viewportY: 0,
           baseY: 0,
+          length: 40,
+          getLine: (row: number) => {
+            const text = instance.lineTexts.get(row);
+            return text === undefined
+              ? undefined
+              : { translateToString: () => text };
+          },
         },
       },
       _core: {
@@ -138,14 +150,16 @@ describe('TerminalPane resize on resume', () => {
     fitAddonInstances.length = 0;
     terminalInstances.length = 0;
     terminalScrollCallbacks.length = 0;
+    containerSize.width = 900;
+    containerSize.height = 600;
 
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
       configurable: true,
-      get: () => 900,
+      get: () => containerSize.width,
     });
     Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
       configurable: true,
-      get: () => 600,
+      get: () => containerSize.height,
     });
 
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -263,6 +277,54 @@ describe('TerminalPane resize on resume', () => {
       expect(fitAddonInstances[0]?.fit).toHaveBeenCalled();
       expect(window.electronAPI.ptyResize).toHaveBeenCalledWith('win-1', 'pane-1', 120, 40);
     });
+  });
+
+  it('keeps the same visible content anchored across an ordinary width resize', async () => {
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+      window.setTimeout(() => callback(0), 0));
+    render(
+      <TerminalPane
+        windowId="win-1"
+        pane={{
+          id: 'pane-1',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]).toBeDefined();
+    });
+    await waitForTerminalMountResizeSettle();
+
+    const terminal = terminalInstances[0]!;
+    terminal.buffer.active.baseY = 100;
+    terminal.buffer.active.viewportY = 60;
+    terminal.buffer.active.length = 140;
+    terminal.lineTexts.set(62, 'UNIQUE-RESIZE-ANCHOR');
+    terminalScrollCallbacks.forEach((callback) => callback(60));
+    terminal.scrollToLine.mockClear();
+    fitAddonInstances[0]?.fit.mockImplementationOnce(() => {
+      terminal.buffer.active.baseY = 200;
+      terminal.buffer.active.viewportY = 200;
+      terminal.buffer.active.length = 240;
+      terminal.lineTexts.delete(62);
+      terminal.lineTexts.set(125, 'UNIQUE-RESIZE-ANCHOR');
+    });
+
+    containerSize.width = 760;
+    window.dispatchEvent(new Event('resize'));
+
+    await waitFor(() => {
+      expect(terminal.scrollToLine).toHaveBeenCalledWith(123);
+    });
+    expect(terminal.buffer.active.viewportY).toBe(123);
   });
 
   it('recovers a paused xterm render service without resizing the PTY when the terminal window becomes active', async () => {

@@ -258,6 +258,82 @@ function restoreTerminalViewportY(terminal: Terminal, viewportY: number | null):
   terminal.scrollToLine(targetViewportY);
 }
 
+type TerminalViewportContentAnchor = {
+  text: string;
+  rowOffset: number;
+  absoluteViewportY: number;
+  rowsFromBottom: number;
+};
+
+function terminalViewportAnchorLineText(terminal: Terminal, row: number): string {
+  try {
+    return terminal.buffer.active.getLine(row)?.translateToString(true).slice(0, 512) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function captureTerminalViewportContentAnchor(terminal: Terminal): TerminalViewportContentAnchor {
+  const buffer = terminal.buffer.active;
+  const viewportY = Math.max(0, buffer.viewportY);
+  const baseY = Math.max(0, buffer.baseY);
+  const visibleEnd = Math.min(buffer.length, viewportY + Math.max(1, terminal.rows));
+  for (let row = viewportY; row < visibleEnd; row += 1) {
+    const text = terminalViewportAnchorLineText(terminal, row);
+    if (text) {
+      return {
+        text,
+        rowOffset: row - viewportY,
+        absoluteViewportY: viewportY,
+        rowsFromBottom: Math.max(0, baseY - viewportY),
+      };
+    }
+  }
+  return {
+    text: '',
+    rowOffset: 0,
+    absoluteViewportY: viewportY,
+    rowsFromBottom: Math.max(0, baseY - viewportY),
+  };
+}
+
+function restoreTerminalViewportContentAnchor(
+  terminal: Terminal,
+  anchor: TerminalViewportContentAnchor,
+): void {
+  const buffer = terminal.buffer.active;
+  const baseY = Math.max(0, buffer.baseY);
+  const fallbackY = baseY - anchor.rowsFromBottom;
+  const expectedRow = fallbackY + anchor.rowOffset;
+  let matchedRow = -1;
+  if (anchor.text && buffer.length > 0) {
+    const center = Math.round(clampNumber(expectedRow, 0, buffer.length - 1));
+    const maxRadius = Math.min(buffer.length - 1, 12_000);
+    for (let radius = 0; radius <= maxRadius; radius += 1) {
+      const before = center - radius;
+      if (before >= 0 && terminalViewportAnchorLineText(terminal, before) === anchor.text) {
+        matchedRow = before;
+        break;
+      }
+      const after = center + radius;
+      if (
+        radius > 0
+        && after < buffer.length
+        && terminalViewportAnchorLineText(terminal, after) === anchor.text
+      ) {
+        matchedRow = after;
+        break;
+      }
+    }
+  }
+  const targetY = matchedRow >= 0
+    ? matchedRow - anchor.rowOffset
+    : Number.isFinite(fallbackY)
+      ? fallbackY
+      : anchor.absoluteViewportY;
+  restoreTerminalViewportY(terminal, targetY);
+}
+
 /**
  * 根据窗格状态获取选中时的边框颜色
  */
@@ -1093,6 +1169,18 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     try {
       run();
       restoreTerminalViewportY(terminal, viewportYToPreserve);
+    } finally {
+      isRestoringViewportRef.current = false;
+      rememberTerminalViewportY(readTerminalViewportY(terminal));
+    }
+  }, [rememberTerminalViewportY]);
+
+  const preserveTerminalViewportContent = useCallback((terminal: Terminal, run: () => void) => {
+    const anchor = captureTerminalViewportContentAnchor(terminal);
+    isRestoringViewportRef.current = true;
+    try {
+      run();
+      restoreTerminalViewportContentAnchor(terminal, anchor);
     } finally {
       isRestoringViewportRef.current = false;
       rememberTerminalViewportY(readTerminalViewportY(terminal));
@@ -2303,9 +2391,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
 
       lastContainerSizeRef.current = { width, height };
-      currentFitAddon.fit();
-      refreshTerminalViewport(currentTerminal);
-      syncPtySize(currentTerminal);
+      preserveTerminalViewportContent(currentTerminal, () => {
+        currentFitAddon.fit();
+        refreshTerminalViewport(currentTerminal);
+        syncPtySize(currentTerminal);
+      });
     };
 
     const scheduleResize = () => {
@@ -2581,6 +2671,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     handleTerminalLinkHover,
     handleTerminalLinkLeave,
     hideSelectionAiOverlay,
+    preserveTerminalViewportContent,
     rememberTerminalViewportY,
     scheduleTerminalScreenSnapshot,
     scheduleStaleRenderSurfaceRecovery,
