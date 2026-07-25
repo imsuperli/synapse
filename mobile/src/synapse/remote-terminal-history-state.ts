@@ -1,5 +1,7 @@
 export type RemoteTerminalHistoryState = {
   chunks: string[]
+  retainedChars: number
+  budgetExceeded: boolean
   firstSeq: number
   lastSeq: number
   hasMoreBefore: boolean
@@ -47,10 +49,14 @@ export type RemoteTerminalAppendResult = {
 
 const MAX_PENDING_DATA_ENTRIES = 10_000
 const MAX_PENDING_DATA_BYTES = 4 * 1024 * 1024
+export const MAX_REMOTE_TERMINAL_HISTORY_CHUNKS = 250_000
+export const MAX_REMOTE_TERMINAL_HISTORY_CHARS = 20_000_000
 
 export function createRemoteTerminalHistoryState(): RemoteTerminalHistoryState {
   return {
     chunks: [],
+    retainedChars: 0,
+    budgetExceeded: false,
     firstSeq: 0,
     lastSeq: 0,
     hasMoreBefore: false,
@@ -65,6 +71,8 @@ export function createRemoteTerminalHistoryState(): RemoteTerminalHistoryState {
 
 export function resetRemoteTerminalHistoryState(state: RemoteTerminalHistoryState): void {
   state.chunks = []
+  state.retainedChars = 0
+  state.budgetExceeded = false
   state.firstSeq = 0
   state.lastSeq = 0
   state.hasMoreBefore = false
@@ -82,6 +90,8 @@ export function replaceRemoteTerminalHistorySnapshot(
 ): void {
   const extracted = extractScreenSnapshot(snapshot)
   state.chunks = extracted.historyChunks
+  state.retainedChars = snapshot.serialized.length
+  state.budgetExceeded = remoteTerminalHistoryBudgetExceeded(state)
   state.firstSeq = snapshot.firstSeq
   state.lastSeq = snapshot.lastSeq
   state.hasMoreBefore = snapshot.hasMoreBefore
@@ -130,7 +140,7 @@ export function appendRemoteTerminalData(
   return {
     data: appended,
     needsHistorySync: state.pendingDataBySeq.size > 0,
-    overflowed: false
+    overflowed: state.budgetExceeded
   }
 }
 
@@ -171,7 +181,7 @@ export function appendRemoteTerminalHistoryIncrement(
   return {
     data: `${freshChunks.join('')}${pending}`,
     needsHistorySync: state.pendingDataBySeq.size > 0,
-    overflowed: false
+    overflowed: state.budgetExceeded
   }
 }
 
@@ -205,7 +215,7 @@ export function appendRemoteTerminalIncrementalSnapshot(
   return {
     data: `${snapshot.serialized}${pending}`,
     needsHistorySync: snapshot.hasMoreAfter || state.pendingDataBySeq.size > 0,
-    overflowed: false
+    overflowed: state.budgetExceeded
   }
 }
 
@@ -230,6 +240,8 @@ export function prependRemoteTerminalHistoryPage(
   const olderChunks = page.chunks.slice(0, takeCount)
   if (olderChunks.length > 0) {
     state.chunks = [...olderChunks, ...state.chunks]
+    state.retainedChars += olderChunks.reduce((total, chunk) => total + chunk.length, 0)
+    state.budgetExceeded = remoteTerminalHistoryBudgetExceeded(state)
     state.firstSeq = page.firstSeq
   }
   state.hasMoreBefore = page.hasMoreBefore
@@ -278,9 +290,18 @@ function discardPendingDataThrough(state: RemoteTerminalHistoryState, seq: numbe
 
 function appendHistoryChunks(state: RemoteTerminalHistoryState, chunks: string[]): void {
   state.chunks.push(...chunks)
+  state.retainedChars += chunks.reduce((total, chunk) => total + chunk.length, 0)
+  state.budgetExceeded = remoteTerminalHistoryBudgetExceeded(state)
   if (state.screenSnapshotData) {
     state.screenSnapshotTailChunkCount += chunks.length
   }
+}
+
+export function remoteTerminalHistoryBudgetExceeded(state: RemoteTerminalHistoryState): boolean {
+  return (
+    state.chunks.length > MAX_REMOTE_TERMINAL_HISTORY_CHUNKS ||
+    state.retainedChars > MAX_REMOTE_TERMINAL_HISTORY_CHARS
+  )
 }
 
 function extractScreenSnapshot(snapshot: RemoteTerminalSnapshot): {

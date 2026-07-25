@@ -551,6 +551,23 @@ function clearRemoteTerminalForegroundRecoveryRetry(runtime: RemoteTerminalSessi
   runtime.foregroundRecoveryRetryAttemptRef.current = 0
 }
 
+function disposeRemoteTerminalSessionRuntime(runtime: RemoteTerminalSessionRuntime): void {
+  runtime.terminalSubscriptionGenerationRef.current += 1
+  runtime.terminalHistoryGenerationRef.current += 1
+  runtime.unsubscribeRef.current?.()
+  runtime.unsubscribeRef.current = null
+  runtime.terminalSubscribeParamsRef.current = null
+  runtime.terminalHistoryPrefetchPromiseRef.current = null
+  runtime.initialHistoryHydrationPromiseRef.current = null
+  runtime.resumeInitialHistoryHydrationRef.current = null
+  runtime.terminalRef.current = null
+  runtime.terminalInitializedRef.current = false
+  runtime.terminalWebReadyRef.current = false
+  clearRemoteTerminalForegroundRecoveryRetry(runtime)
+  resetRemoteTerminalHistoryState(runtime.terminalHistoryRef.current)
+  resetRemoteTerminalHistoryPrefetchState(runtime.terminalHistoryPrefetchRef.current)
+}
+
 export default function RemoteTerminalScreen() {
   const params = useLocalSearchParams<{ hostId?: string; windowId?: string; paneId?: string }>()
   const hostId = getParam(params.hostId)
@@ -1266,7 +1283,7 @@ export default function RemoteTerminalScreen() {
             }
             terminalPendingOverflowedRef.current ||= appended.overflowed
             updateTerminalSubscriptionCursor()
-            if (appended.needsHistorySync) {
+            if (appended.needsHistorySync || appended.overflowed) {
               setTimeout(() => {
                 void syncTerminalIncrementRef.current?.()
               }, 0)
@@ -1462,6 +1479,9 @@ export default function RemoteTerminalScreen() {
             page
           ).length
         }
+        if (terminalHistoryRef.current.budgetExceeded) {
+          terminalPendingOverflowedRef.current = true
+        }
         terminalHistoryRef.current.hasMoreBefore = prefetched.hasMoreBefore
         if (prependedCount === 0) {
           appendDiagnostic('mobile', 'history-activation-result', {
@@ -1634,6 +1654,24 @@ export default function RemoteTerminalScreen() {
       return true
     }
     try {
+      if (terminalPendingOverflowedRef.current) {
+        resyncingRef.current = true
+        if (activeHandleRef.current === terminalHandle) {
+          setLoading(true)
+        }
+        try {
+          await reloadSnapshotForCurrentRun()
+          terminalPendingOverflowedRef.current = false
+        } finally {
+          if (runIdRef.current === runId && clientRef.current === client) {
+            resyncingRef.current = false
+            if (activeHandleRef.current === terminalHandle) {
+              setLoading(false)
+            }
+          }
+        }
+        return
+      }
       for (let page = 0; page < TERMINAL_INCREMENTAL_SYNC_PAGE_LIMIT; page += 1) {
         const sinceSeq = terminalHistoryRef.current.lastSeq
         const history = await requestTerminalHistory(client, windowId, paneId, {
@@ -2304,15 +2342,8 @@ export default function RemoteTerminalScreen() {
       if (residency.evictedHandle) {
         const evicted = sessionRuntimesRef.current.get(residency.evictedHandle)
         if (evicted) {
-          evicted.terminalSubscriptionGenerationRef.current += 1
-          evicted.terminalHistoryGenerationRef.current += 1
-          evicted.unsubscribeRef.current?.()
-          evicted.unsubscribeRef.current = null
-          evicted.terminalSubscribeParamsRef.current = null
-          evicted.terminalInitializedRef.current = false
-          evicted.terminalWebReadyRef.current = false
-          evicted.resumeInitialHistoryHydrationRef.current = null
-          clearRemoteTerminalForegroundRecoveryRetry(evicted)
+          disposeRemoteTerminalSessionRuntime(evicted)
+          sessionRuntimesRef.current.delete(residency.evictedHandle)
         }
       }
       setResidentTerminalHandles(residency.handles)
@@ -2375,11 +2406,7 @@ export default function RemoteTerminalScreen() {
   const disposeTerminalRuntime = useCallback((handle: string) => {
     const runtime = sessionRuntimesRef.current.get(handle)
     if (runtime) {
-      runtime.terminalSubscriptionGenerationRef.current += 1
-      runtime.terminalHistoryGenerationRef.current += 1
-      runtime.unsubscribeRef.current?.()
-      runtime.unsubscribeRef.current = null
-      runtime.resumeInitialHistoryHydrationRef.current = null
+      disposeRemoteTerminalSessionRuntime(runtime)
       sessionRuntimesRef.current.delete(handle)
     }
     setResidentTerminalHandles((handles) => handles.filter((item) => item !== handle))

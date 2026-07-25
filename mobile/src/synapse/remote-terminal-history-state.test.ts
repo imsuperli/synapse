@@ -5,8 +5,10 @@ import {
   appendRemoteTerminalIncrementalSnapshot,
   buildRemoteTerminalInitialData,
   createRemoteTerminalHistoryState,
+  MAX_REMOTE_TERMINAL_HISTORY_CHARS,
   prependRemoteTerminalHistoryPage,
-  replaceRemoteTerminalHistorySnapshot
+  replaceRemoteTerminalHistorySnapshot,
+  resetRemoteTerminalHistoryState
 } from './remote-terminal-history-state'
 
 describe('remote terminal history state', () => {
@@ -218,5 +220,26 @@ describe('remote terminal history state', () => {
       evictedBeforeSeq: 3,
       hasMoreBefore: false
     })
+  })
+
+  it('tracks retained history and requests compaction at the desktop source budget', () => {
+    const state = createRemoteTerminalHistoryState()
+    replaceRemoteTerminalHistorySnapshot(state, {
+      serialized: 'seed',
+      firstSeq: 1,
+      lastSeq: 1,
+      hasMoreBefore: false
+    })
+
+    expect(state.retainedChars).toBe(4)
+    state.retainedChars = MAX_REMOTE_TERMINAL_HISTORY_CHARS
+    const result = appendRemoteTerminalData(state, 2, 'x')
+
+    expect(result.overflowed).toBe(true)
+    expect(state.budgetExceeded).toBe(true)
+
+    resetRemoteTerminalHistoryState(state)
+    expect(state.retainedChars).toBe(0)
+    expect(state.budgetExceeded).toBe(false)
   })
 })

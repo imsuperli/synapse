@@ -313,6 +313,16 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('residentTerminalHandles.map((handle) => (')
     expect(routeSource).toContain('<TerminalPaneView')
     expect(routeSource).not.toContain('router.replace(targetPath)')
+    expect(routeSource).toContain('disposeRemoteTerminalSessionRuntime(evicted)')
+    expect(routeSource).toContain(
+      'sessionRuntimesRef.current.delete(residency.evictedHandle)'
+    )
+  })
+
+  it('compacts retained raw history after reaching the desktop source budget', () => {
+    expect(routeSource).toContain('terminalHistoryRef.current.budgetExceeded')
+    expect(routeSource).toContain('if (terminalPendingOverflowedRef.current)')
+    expect(routeSource).toContain('await reloadSnapshotForCurrentRun()')
   })
 
   it('coalesces small foreground deltas and replaces large backlogs with a compact snapshot', () => {
