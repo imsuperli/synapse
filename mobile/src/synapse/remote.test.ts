@@ -21,6 +21,7 @@ import {
   parseGroupDeleteResult,
   parseGroupWindowRemoveResult,
   parsePaneDeleteResult,
+  parseRemoteStatus,
   parseWindowCreateResult,
   parseWindowDeleteResult,
   parsePaneCloseResult,
@@ -71,6 +72,7 @@ describe('Synapse remote terminal helpers', () => {
       id: 'host-1',
       name: 'Desktop',
       endpoint: 'ws://127.0.0.1:6868',
+      connectionRoute: 'relay',
       deviceToken: 'device-token',
       publicKeyB64: 'server-key',
       relayEndpoint: 'wss://relay.example.com/v1/relay',
@@ -94,6 +96,28 @@ describe('Synapse remote terminal helpers', () => {
     )
   })
 
+  it('uses the direct endpoint when direct is selected even if relay credentials exist', () => {
+    connectToHost({
+      id: 'host-direct',
+      name: 'Desktop',
+      endpoint: 'ws://192.168.1.10:6868',
+      connectionRoute: 'direct',
+      deviceToken: 'device-token',
+      publicKeyB64: 'server-key',
+      relayEndpoint: 'wss://relay.example.com/v1/relay',
+      relaySessionId: 'relay-session',
+      relayClientToken: 'relay-client-token',
+      lastConnected: 0
+    })
+
+    expect(connect).toHaveBeenCalledWith(
+      'ws://192.168.1.10:6868',
+      'device-token',
+      'server-key',
+      expect.objectContaining({ relay: undefined })
+    )
+  })
+
   it('updates lastConnected only after the host reaches connected state', () => {
     const onStateChange = vi.fn()
     connectToHost(
@@ -101,6 +125,7 @@ describe('Synapse remote terminal helpers', () => {
         id: 'host-connected',
         name: 'Desktop',
         endpoint: 'ws://127.0.0.1:6868',
+        connectionRoute: 'direct',
         deviceToken: 'device-token',
         publicKeyB64: 'server-key',
         lastConnected: 0
@@ -122,6 +147,30 @@ describe('Synapse remote terminal helpers', () => {
     expect(onStateChange).toHaveBeenCalledWith('connected')
     expect(updateLastConnected).toHaveBeenCalledTimes(1)
     expect(updateLastConnected).toHaveBeenCalledWith('host-connected')
+  })
+
+  it('accepts an optional authenticated direct endpoint in remote status', () => {
+    expect(
+      parseRemoteStatus({
+        ok: true,
+        protocolVersion: 1,
+        deviceScope: 'mobile.window-control',
+        directEndpoint: ' ws://10.0.0.8:6868 '
+      })
+    ).toEqual({
+      ok: true,
+      protocolVersion: 1,
+      deviceScope: 'mobile.window-control',
+      directEndpoint: 'ws://10.0.0.8:6868'
+    })
+    expect(
+      parseRemoteStatus({
+        ok: true,
+        protocolVersion: 1,
+        deviceScope: 'mobile.window-control',
+        directEndpoint: 'https://not-a-websocket.example.com'
+      })
+    ).not.toHaveProperty('directEndpoint')
   })
 
   it('parses only controllable terminal list entries', () => {

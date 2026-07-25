@@ -155,7 +155,7 @@ describe('Synapse Mobile host overview route wiring', () => {
     expect(routeSource).toContain('const hostSwitcherPanelWidth = Math.min(286, Math.max(220, screenWidth - spacing.lg * 2))')
     expect(routeSource).toContain('const [pairedHosts, setPairedHosts] = useState<HostProfile[]>([])')
     expect(routeSource).toContain('const [hostSwitcherOpen, setHostSwitcherOpen] = useState(false)')
-    expect(routeSource).toContain('await withSwitchTimeout(loadHostOverviewData(client))')
+    expect(routeSource).toContain('await withSwitchTimeout(loadHostOverviewData(client, host.id))')
     expect(routeSource).toContain('router.replace(`/h/${host.id}`)')
     expect(routeSource).toContain('setHostSwitchError(')
     expect(routeSource).toContain('styles.hostSwitcherDock')

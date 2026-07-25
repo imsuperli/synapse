@@ -1,4 +1,5 @@
 import type { RpcClient } from '../transport/rpc-client'
+import { updateHostDirectEndpoint } from '../transport/host-store'
 import {
   requestRemoteCapabilities,
   requestRemoteStatus,
@@ -32,11 +33,17 @@ export type HostOverviewData =
 
 const WINDOW_LIST_SCOPES = new Set<RemoteDeviceScope>(['mobile.window-control', 'mobile.admin'])
 
-export async function loadHostOverviewData(client: RpcClient): Promise<HostOverviewData> {
+export async function loadHostOverviewData(
+  client: RpcClient,
+  hostId?: string
+): Promise<HostOverviewData> {
   const [status, capabilities] = await Promise.all([
     requestRemoteStatus(client),
     requestRemoteCapabilities(client)
   ])
+  if (hostId && status.directEndpoint) {
+    await updateHostDirectEndpoint(hostId, status.directEndpoint).catch(() => undefined)
+  }
   if (canUseWindowList(status.deviceScope, capabilities.methods)) {
     const { windows, groups } = await requestWindowList(client)
     return {

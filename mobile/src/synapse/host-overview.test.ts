@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../transport/host-store', () => ({
   loadHosts: vi.fn(),
-  updateLastConnected: vi.fn()
+  updateLastConnected: vi.fn(),
+  updateHostDirectEndpoint: vi.fn(() => Promise.resolve())
 }))
 
 vi.mock('../transport/rpc-client', () => ({
@@ -18,6 +19,7 @@ import {
 } from './host-overview'
 import type { RpcClient } from '../transport/rpc-client'
 import type { RpcResponse } from '../transport/types'
+import { updateHostDirectEndpoint } from '../transport/host-store'
 
 function mockClient(responses: Record<string, RpcResponse>): RpcClient {
   return {
@@ -80,6 +82,40 @@ describe('Synapse Mobile host overview data', () => {
       terminals: [{ windowId: 'w1', paneId: 'p1' }]
     })
     expect(client.sendRequest).not.toHaveBeenCalledWith('window.list', expect.anything())
+  })
+
+  it('refreshes the saved direct endpoint without changing overview behavior', async () => {
+    const client = mockClient({
+      'status.get': {
+        id: 'rpc-1',
+        ok: true,
+        result: {
+          ok: true,
+          protocolVersion: 1,
+          deviceScope: 'mobile.control',
+          directEndpoint: 'ws://10.0.0.9:6868'
+        }
+      },
+      'remote.capabilities': {
+        id: 'rpc-2',
+        ok: true,
+        result: { protocolVersion: 1, methods: ['terminal.list'] }
+      },
+      'terminal.list': {
+        id: 'rpc-3',
+        ok: true,
+        result: { terminals: [] }
+      }
+    })
+
+    await expect(loadHostOverviewData(client, 'host-moving')).resolves.toMatchObject({
+      mode: 'terminals',
+      terminals: []
+    })
+    expect(updateHostDirectEndpoint).toHaveBeenCalledWith(
+      'host-moving',
+      'ws://10.0.0.9:6868'
+    )
   })
 
   it('uses window.list when scope and capabilities allow it', async () => {

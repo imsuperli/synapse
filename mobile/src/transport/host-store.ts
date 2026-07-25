@@ -4,6 +4,7 @@ import { Platform } from 'react-native'
 import {
   HostProfileSchema,
   StoredHostProfileSchema,
+  type HostConnectionRoute,
   type HostProfile,
   type StoredHostProfile
 } from './types'
@@ -182,13 +183,24 @@ async function doLoadHosts(): Promise<HostProfile[]> {
       }
     }
 
+    const hasRelay = Boolean(
+      relayClientToken && stored.data.relayEndpoint && stored.data.relaySessionId
+    )
     out.push({
       id: stored.data.id,
       name: stored.data.name,
       endpoint: stored.data.endpoint,
+      connectionRoute:
+        stored.data.connectionRoute === 'relay' && hasRelay
+          ? 'relay'
+          : stored.data.connectionRoute === 'direct'
+            ? 'direct'
+            : hasRelay
+              ? 'relay'
+              : 'direct',
       publicKeyB64: stored.data.publicKeyB64,
       lastConnected: stored.data.lastConnected,
-      ...(relayClientToken && stored.data.relayEndpoint && stored.data.relaySessionId
+      ...(hasRelay && relayClientToken && stored.data.relayEndpoint && stored.data.relaySessionId
         ? {
             relayEndpoint: stored.data.relayEndpoint,
             relaySessionId: stored.data.relaySessionId,
@@ -198,7 +210,72 @@ async function doLoadHosts(): Promise<HostProfile[]> {
       deviceToken: token
     })
   }
-  return out
+  return consolidateDuplicateHosts(out)
+}
+
+async function consolidateDuplicateHosts(hosts: HostProfile[]): Promise<HostProfile[]> {
+  const byPublicKey = new Map<string, HostProfile[]>()
+  for (const host of hosts) {
+    const matches = byPublicKey.get(host.publicKeyB64) ?? []
+    matches.push(host)
+    byPublicKey.set(host.publicKeyB64, matches)
+  }
+
+  const consolidated: HostProfile[] = []
+  const duplicateIds: string[] = []
+  for (const matches of byPublicKey.values()) {
+    if (matches.length === 1) {
+      consolidated.push(matches[0])
+      continue
+    }
+
+    const newestFirst = [...matches].sort((a, b) => b.lastConnected - a.lastConnected)
+    const newest = newestFirst[0]
+    const relaySource = newestFirst.find(hasCompleteRelayConfig)
+    consolidated.push({
+      ...newest,
+      ...(relaySource
+        ? {
+            relayEndpoint: relaySource.relayEndpoint,
+            relaySessionId: relaySource.relaySessionId,
+            relayClientToken: relaySource.relayClientToken
+          }
+        : {})
+    })
+    duplicateIds.push(
+      ...matches.filter((host) => host.id !== newest.id).map((host) => host.id)
+    )
+  }
+
+  if (duplicateIds.length === 0) {
+    return consolidated
+  }
+
+  try {
+    for (const host of consolidated) {
+      await writeDeviceToken(host.id, host.deviceToken)
+      if (host.relayClientToken) {
+        await writeRelayClientToken(host.id, host.relayClientToken)
+      }
+    }
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(consolidated.map(toStored)))
+    await Promise.all(
+      duplicateIds.flatMap((hostId) => [deleteDeviceToken(hostId), deleteRelayClientToken(hostId)])
+    )
+    for (const hostId of duplicateIds) {
+      tokenCache.delete(hostId)
+      relayTokenCache.delete(hostId)
+    }
+    for (const host of consolidated) {
+      tokenCache.set(host.id, host.deviceToken)
+      if (host.relayClientToken) {
+        relayTokenCache.set(host.id, host.relayClientToken)
+      }
+    }
+  } catch {
+    // A cleanup failure must not hide otherwise usable paired computers.
+  }
+  return consolidated
 }
 
 async function loadStoredHosts(): Promise<StoredHostProfile[]> {
@@ -230,6 +307,7 @@ function toStored(host: HostProfile): StoredHostProfile {
     id: host.id,
     name: host.name,
     endpoint: host.endpoint,
+    connectionRoute: host.connectionRoute,
     publicKeyB64: host.publicKeyB64,
     relayEndpoint: host.relayEndpoint,
     relaySessionId: host.relaySessionId,
@@ -262,6 +340,26 @@ export async function saveHost(host: HostProfile): Promise<void> {
     relayTokenCache.delete(stored.id)
   }
   tokenCache.set(stored.id, validated.deviceToken)
+}
+
+export async function savePairedHost(
+  host: Omit<HostProfile, 'id' | 'name' | 'connectionRoute' | 'lastConnected'> & {
+    name?: string
+  }
+): Promise<HostProfile> {
+  const existingHosts = await loadHosts()
+  const existing = existingHosts.find((saved) => saved.publicKeyB64 === host.publicKeyB64)
+  const hasRelay = hasCompleteRelayConfig(host)
+  const offeredName = host.name?.trim()
+  const savedHost: HostProfile = {
+    ...host,
+    id: existing?.id ?? `host-${Date.now()}`,
+    name: existing?.name ?? (offeredName || getNextHostNameFromHosts(existingHosts)),
+    connectionRoute: hasRelay ? 'relay' : 'direct',
+    lastConnected: Date.now()
+  }
+  await saveHost(savedHost)
+  return savedHost
 }
 
 export async function removeHost(hostId: string): Promise<void> {
@@ -297,6 +395,40 @@ export async function updateHostRelayEndpoint(hostId: string, endpoint: string):
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
 }
 
+export async function setHostConnectionRoute(
+  hostId: string,
+  connectionRoute: HostConnectionRoute
+): Promise<void> {
+  const hosts = await loadStoredHosts()
+  const host = hosts.find((saved) => saved.id === hostId)
+  if (!host) {
+    throw new Error('Host not found')
+  }
+  if (connectionRoute === 'relay') {
+    const relayToken = relayTokenCache.get(hostId) ?? (await readRelayClientToken(hostId))
+    if (!host.relayEndpoint || !host.relaySessionId || !relayToken) {
+      throw new Error('This host was not paired with relay support')
+    }
+    relayTokenCache.set(hostId, relayToken)
+  }
+  host.connectionRoute = connectionRoute
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
+}
+
+export async function updateHostDirectEndpoint(hostId: string, endpoint: string): Promise<void> {
+  const normalizedEndpoint = validateDirectEndpoint(endpoint)
+  const hosts = await loadStoredHosts()
+  const host = hosts.find((saved) => saved.id === hostId)
+  if (!host) {
+    throw new Error('Host not found')
+  }
+  if (host.endpoint === normalizedEndpoint) {
+    return
+  }
+  host.endpoint = normalizedEndpoint
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
+}
+
 export async function getNextHostName(): Promise<string> {
   const hosts = await loadStoredHosts()
   return getNextHostNameFromHosts(hosts)
@@ -309,4 +441,24 @@ export async function updateLastConnected(hostId: string): Promise<void> {
     host.lastConnected = Date.now()
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(hosts))
   }
+}
+
+function hasCompleteRelayConfig(
+  host: Pick<HostProfile, 'relayEndpoint' | 'relaySessionId' | 'relayClientToken'>
+): boolean {
+  return Boolean(host.relayEndpoint && host.relaySessionId && host.relayClientToken)
+}
+
+function validateDirectEndpoint(endpoint: string): string {
+  const normalized = endpoint.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(normalized)
+  } catch {
+    throw new Error('Invalid direct endpoint')
+  }
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+    throw new Error('Direct endpoint must use ws:// or wss://')
+  }
+  return normalized
 }

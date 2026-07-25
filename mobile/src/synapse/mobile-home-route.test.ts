@@ -5,19 +5,19 @@ const routeSource = readFileSync(new URL('../../app/index.tsx', import.meta.url)
 
 describe('Synapse Mobile home route wiring', () => {
   it('lets users remove saved paired desktops only after confirmation', () => {
-    expect(routeSource).toContain("import { loadHosts, removeHost } from '../src/transport/host-store'")
+    expect(routeSource).toContain('removeHost,')
     expect(routeSource).toContain("Alert.alert(t('home.removeHostTitle'), t('home.removeHostMessage')")
     expect(routeSource).toContain('await removeHost(hostId)')
-    expect(routeSource).toContain('event.stopPropagation()')
+    expect(routeSource).toContain('confirmRemoveHost(host)')
   })
 
-  it('groups paired desktops by relay while showing each desktop name and IP address', () => {
+  it('shows one desktop group with independently selectable direct and relay rows', () => {
     expect(routeSource).toContain("from '../src/transport/host-display'")
-    expect(routeSource).toContain('const hostListItems = useMemo<HostListItem[]>(')
-    expect(routeSource).toContain('groupHostsByRelay(hosts).flatMap')
-    expect(routeSource).toContain("item.relayEndpoint ?? t('common.localNetwork')")
-    expect(routeSource).toContain('hostNetworkAddress(host.endpoint)')
-    expect(routeSource).toContain("t('common.desktopIp', { address })")
+    expect(routeSource).toContain('hostConnectionOptions(host)')
+    expect(routeSource).toContain("connection.route === 'direct'")
+    expect(routeSource).toContain('await setHostConnectionRoute(host.id, route)')
+    expect(routeSource).toContain('onPress={() => void openHostRoute(host, connection.route)}')
+    expect(routeSource).toContain('hostNetworkAddress(connection.endpoint)')
     expect(routeSource).toContain("router.push(`/h/${host.id}/settings`)")
   })
 })

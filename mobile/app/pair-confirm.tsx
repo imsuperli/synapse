@@ -3,13 +3,14 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Check, X } from 'lucide-react-native'
 import { ConnectionLog } from '../src/components/ConnectionLog'
-import { getNextHostName, saveHost } from '../src/transport/host-store'
+import { savePairedHost } from '../src/transport/host-store'
 import { resolvePairConfirmRouteState } from '../src/transport/pair-confirm-state'
 import {
   startPairingConnectionAttempt,
   type PairingConnectionAttempt
 } from '../src/transport/pairing-connection-attempt'
 import { connect } from '../src/transport/rpc-client'
+import { parseRemoteStatus } from '../src/synapse/remote'
 import type { ConnectionLogEntry, PairingOffer, RpcResponse } from '../src/transport/types'
 import { colors, radii, spacing, typography } from '../src/theme/mobile-theme'
 import { normalizeRelayEndpoint } from '../../src/shared/remote/relay'
@@ -131,11 +132,11 @@ export default function PairConfirmScreen() {
       }
 
       try {
-        const hostId = `host-${Date.now()}`
-        await saveHost({
-          id: hostId,
-          name: offer.hostName || (await getNextHostName()),
-          endpoint: offer.endpoint,
+        const advertisedDirectEndpoint =
+          parseRemoteStatus(response.result).directEndpoint ?? offer.endpoint
+        const savedHost = await savePairedHost({
+          name: offer.hostName,
+          endpoint: advertisedDirectEndpoint,
           deviceToken: offer.deviceToken,
           publicKeyB64: offer.publicKeyB64,
           ...(offer.relaySessionId && offer.relayClientToken && relay
@@ -144,10 +145,9 @@ export default function PairConfirmScreen() {
                 relaySessionId: offer.relaySessionId,
                 relayClientToken: offer.relayClientToken
               }
-            : {}),
-          lastConnected: Date.now()
+            : {})
         })
-        router.replace(`/h/${hostId}`)
+        router.replace(`/h/${savedHost.id}`)
       } catch (err) {
         setStatus('error')
         setErrorMessage(

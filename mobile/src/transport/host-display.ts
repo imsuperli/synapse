@@ -1,4 +1,9 @@
-import type { HostProfile } from './types'
+import type { HostConnectionRoute, HostProfile } from './types'
+
+export type HostConnectionOption = {
+  route: HostConnectionRoute
+  endpoint: string
+}
 
 export type HostConnectionGroup = {
   id: string
@@ -45,6 +50,14 @@ export function hostNetworkAddress(endpoint: string): string {
   } catch {
     return endpoint.trim()
   }
+}
+
+export function hostConnectionOptions(host: HostProfile): HostConnectionOption[] {
+  const options: HostConnectionOption[] = [{ route: 'direct', endpoint: host.endpoint }]
+  if (host.relayEndpoint && host.relaySessionId && host.relayClientToken) {
+    options.push({ route: 'relay', endpoint: host.relayEndpoint })
+  }
+  return options
 }
 
 export function hostDisplayName(host: Pick<HostProfile, 'name'>): string | null {

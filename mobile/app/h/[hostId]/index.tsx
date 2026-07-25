@@ -610,7 +610,7 @@ export default function HostOverviewScreen() {
         return
       }
       clientRef.current = client
-      const overview = await loadHostOverviewData(client)
+      const overview = await loadHostOverviewData(client, hostId)
       if (!isCurrentLoad() || clientRef.current !== client) {
         client.close()
         return
@@ -1035,7 +1035,7 @@ export default function HostOverviewScreen() {
     }
     syncOverviewStateInFlightRef.current = true
     try {
-      const overview = await loadHostOverviewData(client)
+      const overview = await loadHostOverviewData(client, hostId)
       if (clientRef.current !== client) {
         return
       }
@@ -1126,7 +1126,7 @@ export default function HostOverviewScreen() {
       setHostSwitchError(null)
       try {
         client = connectToHost(host)
-        await withSwitchTimeout(loadHostOverviewData(client))
+        await withSwitchTimeout(loadHostOverviewData(client, host.id))
         client.close()
         client = null
         setHostSwitcherOpen(false)

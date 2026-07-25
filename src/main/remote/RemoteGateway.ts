@@ -173,6 +173,7 @@ export class RemoteGateway {
       deviceRegistry: this.deviceRegistry,
       appVersion: this.appVersion,
       hostName: this.hostName,
+      getDirectEndpoint: () => this.getCurrentDirectEndpoint(),
       stateProvider,
       onDeviceRevoked: (device) => {
         this.transport?.terminateClientConnections(device.token);
@@ -342,6 +343,18 @@ export class RemoteGateway {
 
   getWebSocketEndpoint(): string | null {
     return this.transport?.endpoint ?? null;
+  }
+
+  private getCurrentDirectEndpoint(): string | null {
+    const rawEndpoint = this.getWebSocketEndpoint();
+    if (!rawEndpoint) {
+      return null;
+    }
+    return resolveCurrentDirectEndpoint(
+      rawEndpoint,
+      this.settingsStore.getSettings(),
+      networkInterfaces(),
+    );
   }
 
   getSettings(): RemoteSettings {
@@ -814,6 +827,25 @@ export function resolvePairingEndpoint(rawEndpoint: string, address: string | nu
     endpoint.port = parsed.port;
   }
   return formatWebSocketUrl(endpoint);
+}
+
+export function resolveCurrentDirectEndpoint(
+  rawEndpoint: string,
+  settings: Pick<RemoteSettings, 'manualEndpoint' | 'selectedAddress'>,
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>,
+): string | null {
+  const selectedAddress = settings.selectedAddress?.trim();
+  const selectedAddressAvailable = selectedAddress
+    ? Object.values(interfaces)
+        .flatMap((entries) => entries ?? [])
+        .some(
+          (entry) =>
+            entry.family === 'IPv4' && !entry.internal && entry.address === selectedAddress,
+        )
+    : false;
+  const advertisedAddress = settings.manualEndpoint
+    ?? (selectedAddressAvailable ? selectedAddress : selectPreferredPairingAddress(interfaces));
+  return advertisedAddress ? resolvePairingEndpoint(rawEndpoint, advertisedAddress) : null;
 }
 
 export function selectPreferredPairingAddress(

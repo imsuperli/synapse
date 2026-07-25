@@ -13,7 +13,11 @@ import {
   generateKeyPair,
   publicKeyFromBase64,
 } from '../../../shared/remote/e2ee-crypto';
-import { RemoteGateway, selectPreferredPairingAddress } from '../RemoteGateway';
+import {
+  RemoteGateway,
+  resolveCurrentDirectEndpoint,
+  selectPreferredPairingAddress,
+} from '../RemoteGateway';
 import { SynapseRelayServer } from '../../../relay/SynapseRelayServer';
 import { buildRelayClientUrl } from '../../../shared/remote/relay';
 
@@ -45,6 +49,29 @@ describe('RemoteGateway integration', () => {
     expect(selectPreferredPairingAddress({
       loopback: [{ family: 'IPv4', internal: true, address: '127.0.0.1' } as any],
     })).toBeNull();
+  });
+
+  it('refreshes stale selected addresses while preserving explicit endpoints', () => {
+    const interfaces = {
+      ethernet: [{ family: 'IPv4', internal: false, address: '192.168.2.15' } as any],
+      tailscale: [{ family: 'IPv4', internal: false, address: '100.64.2.15' } as any],
+    };
+
+    expect(resolveCurrentDirectEndpoint(
+      'ws://0.0.0.0:6868',
+      { manualEndpoint: null, selectedAddress: '192.168.2.15' },
+      interfaces,
+    )).toBe('ws://192.168.2.15:6868');
+    expect(resolveCurrentDirectEndpoint(
+      'ws://0.0.0.0:6868',
+      { manualEndpoint: null, selectedAddress: '192.168.1.20' },
+      interfaces,
+    )).toBe('ws://100.64.2.15:6868');
+    expect(resolveCurrentDirectEndpoint(
+      'ws://0.0.0.0:6868',
+      { manualEndpoint: 'wss://desktop.example.com/remote', selectedAddress: '192.168.1.20' },
+      interfaces,
+    )).toBe('wss://desktop.example.com/remote');
   });
 
   it('authenticates an encrypted WebSocket client and dispatches status.get', async () => {

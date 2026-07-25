@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   groupHostsByRelay,
+  hostConnectionOptions,
   hostDisplayName,
   hostNetworkAddress
 } from './host-display'
@@ -11,6 +12,7 @@ function host(overrides: Partial<HostProfile> & Pick<HostProfile, 'id'>): HostPr
     id: overrides.id,
     name: overrides.name ?? `Desktop ${overrides.id}`,
     endpoint: overrides.endpoint ?? 'ws://192.168.1.10:6868',
+    connectionRoute: overrides.connectionRoute ?? 'direct',
     deviceToken: overrides.deviceToken ?? 'device-token',
     publicKeyB64: overrides.publicKeyB64 ?? 'public-key',
     relayEndpoint: overrides.relayEndpoint,
@@ -51,6 +53,25 @@ describe('host display helpers', () => {
   it('shows the paired computer address instead of the relay endpoint', () => {
     expect(hostNetworkAddress('ws://192.168.1.24:6868')).toBe('192.168.1.24')
     expect(hostNetworkAddress('wss://desktop.example.com/v1/remote')).toBe('desktop.example.com')
+  })
+
+  it('builds one direct row and adds relay only when its credentials are complete', () => {
+    expect(hostConnectionOptions(host({ id: 'direct' }))).toEqual([
+      { route: 'direct', endpoint: 'ws://192.168.1.10:6868' }
+    ])
+    expect(
+      hostConnectionOptions(
+        host({
+          id: 'relay',
+          relayEndpoint: 'wss://relay.example.com/v1/relay',
+          relaySessionId: 'relay-session',
+          relayClientToken: 'relay-token'
+        })
+      )
+    ).toEqual([
+      { route: 'direct', endpoint: 'ws://192.168.1.10:6868' },
+      { route: 'relay', endpoint: 'wss://relay.example.com/v1/relay' }
+    ])
   })
 
   it('does not show the generic Synapse pairing name as a computer name', () => {

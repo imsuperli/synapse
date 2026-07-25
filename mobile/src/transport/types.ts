@@ -46,10 +46,13 @@ export type ConnectionState =
   | 'reconnecting'
   | 'auth-failed'
 
+export type HostConnectionRoute = 'direct' | 'relay'
+
 export type HostProfile = {
   id: string
   name: string
   endpoint: string
+  connectionRoute: HostConnectionRoute
   deviceToken: string
   publicKeyB64: string
   relayEndpoint?: string
@@ -62,6 +65,7 @@ const HostProfileBaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   endpoint: z.string().min(1),
+  connectionRoute: z.enum(['direct', 'relay']),
   deviceToken: z.string().min(1),
   publicKeyB64: z.string().min(1),
   relayEndpoint: z.string().min(1).optional(),
@@ -81,6 +85,13 @@ export const HostProfileSchema = HostProfileBaseSchema.superRefine((host, ctx) =
       path: ['relayEndpoint']
     })
   }
+  if (host.connectionRoute === 'relay' && !hasAll) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Relay connection route requires complete relay settings',
+      path: ['connectionRoute']
+    })
+  }
 })
 
 // Why: persisted host record after the v0.0.3 keychain split. The
@@ -90,6 +101,7 @@ const StoredHostProfileBaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   endpoint: z.string().min(1),
+  connectionRoute: z.enum(['direct', 'relay']).optional(),
   publicKeyB64: z.string().min(1),
   relayEndpoint: z.string().min(1).optional(),
   relaySessionId: z.string().min(1).optional(),

@@ -42,6 +42,7 @@ type DispatchOptions = {
   deviceRegistry: RemoteDeviceRegistry;
   appVersion?: string;
   hostName?: string;
+  getDirectEndpoint?: () => string | null;
   stateProvider?: RemoteStateProvider;
   onDeviceRevoked?: (device: RemoteDeviceEntry) => void;
 };
@@ -71,6 +72,7 @@ export class RemoteDispatcher {
   private readonly deviceRegistry: RemoteDeviceRegistry;
   private readonly appVersion: string;
   private readonly hostName: string;
+  private readonly getDirectEndpoint: (() => string | null) | undefined;
   private readonly stateProvider: RemoteStateProvider | undefined;
   private readonly onDeviceRevoked: ((device: RemoteDeviceEntry) => void) | undefined;
   private readonly methods = new Map<string, RemoteMethodSpec>();
@@ -81,6 +83,7 @@ export class RemoteDispatcher {
     this.deviceRegistry = options.deviceRegistry;
     this.appVersion = options.appVersion ?? 'unknown';
     this.hostName = options.hostName ?? hostname();
+    this.getDirectEndpoint = options.getDirectEndpoint;
     this.stateProvider = options.stateProvider;
     this.onDeviceRevoked = options.onDeviceRevoked;
     this.registerMethods();
@@ -171,10 +174,12 @@ export class RemoteDispatcher {
       params: null,
       handler: (_params, context) => {
         this.deviceRegistry.markPairingProbeSucceeded(context.device.deviceId);
+        const directEndpoint = this.getDirectEndpoint?.();
         return {
           ok: true,
           protocolVersion: REMOTE_PROTOCOL_VERSION,
           deviceScope: context.device.scope,
+          ...(directEndpoint ? { directEndpoint } : {}),
         };
       },
     });

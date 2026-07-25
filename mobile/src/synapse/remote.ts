@@ -63,6 +63,7 @@ export type RemoteStatus = {
   ok: boolean
   protocolVersion: number
   deviceScope: RemoteDeviceScope
+  directEndpoint?: string
 }
 
 export type TerminalHistoryResult = {
@@ -140,7 +141,11 @@ export function connectToHost(
     onLog?: (entry: ConnectionLogEntry) => void
   } = {}
 ): RpcClient {
-  const relay = host.relayEndpoint && host.relaySessionId && host.relayClientToken
+  const relay =
+    host.connectionRoute === 'relay' &&
+    host.relayEndpoint &&
+    host.relaySessionId &&
+    host.relayClientToken
     ? {
         endpoint: host.relayEndpoint,
         sessionId: host.relaySessionId,
@@ -376,10 +381,25 @@ export function parseRemoteStatus(value: unknown): RemoteStatus {
   ) {
     throw new Error('Invalid remote status response')
   }
+  const directEndpoint = parseRemoteDirectEndpoint(result.directEndpoint)
   return {
     ok: true,
     protocolVersion: result.protocolVersion,
-    deviceScope
+    deviceScope,
+    ...(directEndpoint ? { directEndpoint } : {})
+  }
+}
+
+function parseRemoteDirectEndpoint(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) {
+    return undefined
+  }
+  const endpoint = value.trim()
+  try {
+    const parsed = new URL(endpoint)
+    return parsed.protocol === 'ws:' || parsed.protocol === 'wss:' ? endpoint : undefined
+  } catch {
+    return undefined
   }
 }
 

@@ -62,6 +62,7 @@ describe('RemoteDispatcher', () => {
     scope: RemoteDeviceEntry['scope'] = 'mobile.control',
     options: {
       paired?: boolean;
+      getDirectEndpoint?: () => string | null;
       onDeviceRevoked?: (device: RemoteDeviceEntry) => void;
       stateProvider?: {
         listWindows: ReturnType<typeof vi.fn>;
@@ -91,6 +92,7 @@ describe('RemoteDispatcher', () => {
       deviceRegistry: registry,
       hostName: 'Synapse Test',
       appVersion: '9.9.9',
+      getDirectEndpoint: options.getDirectEndpoint,
       stateProvider: options.stateProvider as any,
       onDeviceRevoked: options.onDeviceRevoked,
     });
@@ -183,13 +185,19 @@ describe('RemoteDispatcher', () => {
   }
 
   it('marks a pending device paired only after status.get', async () => {
-    const harness = createHarness('mobile.control', { paired: false });
+    const harness = createHarness('mobile.control', {
+      paired: false,
+      getDirectEndpoint: () => 'ws://10.0.0.20:6868',
+    });
 
     expect(harness.registry.listDevices()).toHaveLength(0);
 
     const response = await dispatch(harness, REMOTE_METHODS.STATUS_GET);
 
-    expect(response.ok).toBe(true);
+    expect(response).toMatchObject({
+      ok: true,
+      result: { directEndpoint: 'ws://10.0.0.20:6868' },
+    });
     expect(harness.registry.listDevices()).toHaveLength(1);
   });
 
