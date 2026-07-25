@@ -1893,7 +1893,6 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     initialOscLinkEvictionReady = false;
     preservePanOnNextFit = !!(oldTerm && preserveScroll);
     disposeTermObservers();
-    resetEvictionCounter();
     cancelSelect();
     clearMobileRefreshTimer();
     if (oldSource && oldSource !== oldTerm) {

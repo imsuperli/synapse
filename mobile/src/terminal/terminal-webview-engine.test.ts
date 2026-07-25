@@ -176,4 +176,13 @@ describe('terminal WebView bundled engine', () => {
     expect(restoreSource).not.toContain('term.resize(')
     expect(restoreSource).not.toContain('applyFitScale(')
   })
+
+  it('tracks real xterm buffer trims instead of estimating a fixed scrollback size', () => {
+    expect(terminalHtmlSource).toContain('normalLines.onTrim(applyActualBufferTrim)')
+    expect(terminalHtmlSource).toContain('sel.anchor.row -= trimmed;')
+    expect(terminalHtmlSource).toContain('initialOscLinkRowOffset += trimmed;')
+    expect(terminalHtmlSource).toContain('handleUnobservableBufferBoundary')
+    expect(terminalHtmlSource).not.toContain('linesEverWritten')
+    expect(terminalHtmlSource).not.toContain('5000 + (term.rows || 0)')
+  })
 })

@@ -1093,8 +1093,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       enqueueWrite(replayData);
     }
 
-    // Why: reset eviction tracking + attach observers for the new term.
-    resetEvictionCounter();
+    // Observe the new terminal before replay reaches its scrollback boundary.
     cancelSelect();
     attachTermObservers();
 
@@ -1420,7 +1419,6 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       }
       emitModesIfChanged();
       emitKeyboardAvoidanceMetrics();
-      resetEvictionCounter();
       if (selMode === 'select') {
         notify({ type: 'selection-evicted' });
         cancelSelect();
@@ -1506,18 +1504,6 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   var edgeScrollClientX = 0;
   var edgeScrollClientY = 0;
 
-  // Eviction watchdog: linesEverWritten counts onLineFeed since last init.
-  // Once buffer is full, every onLineFeed evicts the top row in xterm and
-  // we mirror that by decrementing stored absolute rows.
-  var linesEverWritten = 0;
-
-  function resetEvictionCounter() { linesEverWritten = 0; }
-
-  function isBufferFull() {
-    if (!term) return false;
-    return linesEverWritten >= 5000 + (term.rows || 0);
-  }
-
   function checkEviction() {
     if (selMode !== 'select' || !sel) return;
     var oldest = Math.min(sel.anchor.row, sel.focus.row);
@@ -1527,14 +1513,30 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     }
   }
 
-  function logFeedAndEvict() {
-    linesEverWritten++;
-    if (initialOscLinkEvictionReady && isBufferFull()) initialOscLinkRowOffset += 1;
-    if (selMode === 'select' && sel && isBufferFull()) {
-      sel.anchor.row -= 1;
-      sel.focus.row -= 1;
+  function applyActualBufferTrim(amount) {
+    var trimmed = Math.max(0, Math.floor(amount || 0));
+    if (trimmed <= 0) return;
+    if (initialOscLinkEvictionReady) initialOscLinkRowOffset += trimmed;
+    if (selMode === 'select' && sel) {
+      sel.anchor.row -= trimmed;
+      sel.focus.row -= trimmed;
       checkEviction();
       repositionOverlay();
+    }
+  }
+
+  function handleUnobservableBufferBoundary() {
+    if (!term || !term.buffer || !term.buffer.normal) return;
+    var normal = term.buffer.normal;
+    var scrollback = Math.max(0, Math.floor(term.options.scrollback || 0));
+    var capacity = scrollback + Math.max(1, term.rows || 1);
+    if ((normal.length || 0) < capacity) return;
+    // The pinned xterm exposes CircularList.onTrim. If a future xterm removes
+    // it, cancel coordinate-sensitive state instead of guessing an eviction.
+    initialOscLinkEvictionReady = false;
+    if (selMode === 'select' && sel) {
+      notify({ type: 'selection-evicted' });
+      cancelSelect();
     }
   }
 
@@ -1677,7 +1679,22 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   function attachTermObservers() {
     if (!term) return;
     disposeTermObservers();
-    try { termObserverDisposables.push(term.onLineFeed(logFeedAndEvict)); } catch (e) {}
+    var trimObserverAttached = false;
+    try {
+      var core = term._core;
+      var bufferService = core && core._bufferService;
+      var normalBuffer = bufferService && bufferService.buffers && bufferService.buffers.normal;
+      var normalLines = normalBuffer && normalBuffer.lines;
+      if (normalLines && typeof normalLines.onTrim === 'function') {
+        termObserverDisposables.push(normalLines.onTrim(applyActualBufferTrim));
+        trimObserverAttached = true;
+      }
+    } catch (e) {}
+    if (!trimObserverAttached) {
+      try {
+        termObserverDisposables.push(term.onLineFeed(handleUnobservableBufferBoundary));
+      } catch (e) {}
+    }
     try {
       termObserverDisposables.push(term.onScroll(function() {
         updateScrollIndicator(false);
