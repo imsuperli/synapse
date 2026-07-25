@@ -21,6 +21,7 @@ import { createTerminalWebViewPendingMessages } from './terminal-webview-pending
 
 export type {
   MobileTerminalTheme,
+  TerminalHistoryMetrics,
   TerminalKeyboardAvoidanceMetrics,
   TerminalModes,
   TerminalSelectionEvents,
@@ -56,6 +57,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
     onSelectionEvicted,
     onModesChanged,
     onKeyboardAvoidanceMetrics,
+    onHistoryMetrics,
     onHaptic,
     onTerminalInput,
     onTerminalTap,
@@ -204,6 +206,19 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
           cursorBottomPx,
           rowHeightPx
         })
+      } else if (msg.type === 'history-metrics') {
+        const viewportRows = typeof msg.viewportRows === 'number' ? msg.viewportRows : 0
+        const scrollbackRows = typeof msg.scrollbackRows === 'number' ? msg.scrollbackRows : 0
+        const nonEmptyScrollbackRows =
+          typeof msg.nonEmptyScrollbackRows === 'number' ? msg.nonEmptyScrollbackRows : 0
+        const scannedScrollbackRows =
+          typeof msg.scannedScrollbackRows === 'number' ? msg.scannedScrollbackRows : 0
+        onHistoryMetrics?.({
+          viewportRows,
+          scrollbackRows,
+          nonEmptyScrollbackRows,
+          scannedScrollbackRows
+        })
       } else if (msg.type === 'haptic') {
         const kind = msg.kind
         if (
@@ -229,12 +244,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       } else if (msg.type === 'diagnostic') {
         const diagnosticEvent = typeof msg.event === 'string' ? msg.event : ''
         const metrics = msg.metrics
-        if (
-          diagnosticEvent &&
-          metrics &&
-          typeof metrics === 'object' &&
-          !Array.isArray(metrics)
-        ) {
+        if (diagnosticEvent && metrics && typeof metrics === 'object' && !Array.isArray(metrics)) {
           onDiagnostic?.({
             event: diagnosticEvent,
             metrics: metrics as TerminalWebViewDiagnostic['metrics']
@@ -256,6 +266,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       onSelectionEvicted,
       onModesChanged,
       onKeyboardAvoidanceMetrics,
+      onHistoryMetrics,
       onHaptic,
       onTerminalInput,
       onTerminalTap,
@@ -389,6 +400,9 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       },
       restoreKeyboardViewport() {
         postMessage({ type: 'restore-keyboard-viewport' })
+      },
+      setAutoScrollDisabled(disabled: boolean) {
+        postMessage({ type: 'set-auto-scroll-disabled', disabled })
       },
       cancelSelect() {
         postMessage({ type: 'cancel-select' })

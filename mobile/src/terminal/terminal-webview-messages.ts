@@ -36,6 +36,7 @@ export type TerminalWebViewCommand =
   | { type: 'restore-foreground'; id?: number }
   | { type: 'reveal-live-input'; id?: number }
   | { type: 'restore-keyboard-viewport'; id?: number }
+  | { type: 'set-auto-scroll-disabled'; id?: number; disabled: boolean }
   | { type: 'set-live-input-text'; id?: number; text: string }
   | { type: 'cancel-select'; id?: number }
   | { type: 'do-select-all'; id?: number }

@@ -27,7 +27,7 @@ describe('buildTerminalAccessoryPages', () => {
     expect(slotIds(primaryPage!)).toEqual([
       'escape',
       'paste',
-      'shiftTab',
+      'scroll',
       'home',
       'arrowUp',
       'end',
@@ -46,6 +46,7 @@ describe('buildTerminalAccessoryPages', () => {
     expect(primaryPage![9]).toEqual(
       expect.objectContaining({ type: 'modifier', modifier: 'alt', label: 'Alt' })
     )
+    expect(primaryPage![2]).toEqual({ type: 'scroll', id: 'scroll' })
   })
 
   it('places Ctrl shortcuts on the second page and leaves stable empty slots', () => {

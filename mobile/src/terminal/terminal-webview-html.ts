@@ -413,6 +413,9 @@ window.onerror = function(msg) {
   var historyTopPending = false;
   var lastGestureDiagnosticRoute = '';
   var historyTopPullDistance = 0;
+  // Termux-style SCROLL state. False follows live output; true keeps the
+  // reader's normal-buffer viewport stable while output continues.
+  var autoScrollDisabled = false;
 
   // Diagnostic logger — bridges WebView console.log to RN via postMessage.
   // Tag with [fit] so it's easy to filter in the Expo/Metro logs.
@@ -1121,6 +1124,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
             nextSurface.style.top = '';
           }
           disposeMobileRetiredReplacements(term, surface);
+          emitHistoryMetrics();
           notify({ type: 'ready', cols: cols, rows: rows });
           emitDiagnostic('terminal-ready', {
             initialDataChars: typeof replayData === 'string' ? replayData.length : 0,
@@ -1179,6 +1183,13 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       afterWritesDrained(function() {
         if (gen !== terminalGeneration) return;
         applyFitScale('first-data');
+      });
+    }
+    if (!autoScrollDisabled) {
+      var followGeneration = terminalGeneration;
+      afterWritesDrained(function() {
+        if (followGeneration !== terminalGeneration || !term) return;
+        try { term.scrollToBottom(); } catch (e) {}
       });
     }
   }
@@ -1428,6 +1439,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       revealLiveInput();
     } else if (msg.type === 'restore-keyboard-viewport') {
       restoreKeyboardViewport();
+    } else if (msg.type === 'set-auto-scroll-disabled') {
+      setAutoScrollDisabled(msg.disabled === true);
     } else if (msg.type === 'set-live-input-text') {
       setMobileLiveInputText(msg.text);
     } else if (msg.type === 'set-theme') {
@@ -1588,6 +1601,49 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       cursorBottomPx: cursorBottomPx,
       rowHeightPx: rowHeightPx
     });
+  }
+
+  function emitHistoryMetrics() {
+    if (!term || !term.buffer || !term.buffer.active) return;
+    var buffer = term.buffer.active;
+    var viewportRows = Math.max(0, term.rows || 0);
+    var scrollbackRows = buffer.type === 'normal' ? Math.max(0, buffer.baseY || 0) : 0;
+    var scanLimit = Math.max(256, viewportRows * 8);
+    var scanStart = Math.max(0, scrollbackRows - scanLimit);
+    var nonEmptyScrollbackRows = 0;
+    for (var row = scrollbackRows - 1; row >= scanStart; row--) {
+      var line = buffer.getLine(row);
+      if (line && line.translateToString(true).trim().length > 0) {
+        nonEmptyScrollbackRows++;
+      }
+    }
+    notify({
+      type: 'history-metrics',
+      viewportRows: viewportRows,
+      scrollbackRows: scrollbackRows,
+      nonEmptyScrollbackRows: nonEmptyScrollbackRows,
+      scannedScrollbackRows: scrollbackRows - scanStart
+    });
+  }
+
+  function setAutoScrollDisabled(disabled) {
+    var next = disabled === true;
+    if (autoScrollDisabled === next) {
+      if (!next && term) {
+        try { term.scrollToBottom(); } catch (e) {}
+      }
+      return;
+    }
+    autoScrollDisabled = next;
+    resetSmoothScrollOffset();
+    if (!autoScrollDisabled && term) {
+      try { term.scrollToBottom(); } catch (e) {}
+      if (isMobileReflowTextScale() && mobileSourceTerm) {
+        scheduleMobileSnapshotProjection('follow-live');
+      }
+    }
+    updateScrollIndicator(false);
+    emitDiagnostic('auto-scroll', { disabled: autoScrollDisabled });
   }
 
   function revealLiveInput() {
@@ -2275,6 +2331,9 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     targetSurface.addEventListener('touchstart', function(e) {
       if (dispatcherShouldBlockSurface()) return;
       surfaceTouchActive = true;
+      if (isMobileReflowTextScale()) {
+        deferMobileProjectionRefreshForInteraction('touch-active');
+      }
       historyTopPullDistance = 0;
       lastGestureDiagnosticRoute = '';
       if (ts.momentumId) {
@@ -2453,7 +2512,11 @@ ${TERMINAL_MOBILE_REFLOW_JS}
         var MIN_VEL = 0.012;
         function momentumStep() {
           vel *= FRICTION;
-          if (Math.abs(vel) < MIN_VEL) { ts.momentumId = null; return; }
+          if (Math.abs(vel) < MIN_VEL) {
+            ts.momentumId = null;
+            resumeMobileProjectionRefreshAfterInteraction();
+            return;
+          }
           var delta = vel * 16;
           if (shouldRouteScrollToTerminalInput()) {
             resetSmoothScrollOffset();
@@ -2467,6 +2530,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
           } else {
             if (!applyNormalBufferScrollDelta(delta, false)) {
               ts.momentumId = null;
+              resumeMobileProjectionRefreshAfterInteraction();
               return;
             }
           }
@@ -2474,6 +2538,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
         }
         if (Math.abs(vel) > MIN_VEL) {
           ts.momentumId = requestAnimationFrame(momentumStep);
+        } else {
+          resumeMobileProjectionRefreshAfterInteraction();
         }
       }
     }, { capture: true, passive: true });
@@ -2485,6 +2551,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       ts.isPinching = false;
       ts.velY = 0;
       ts.accumDelta = 0;
+      resumeMobileProjectionRefreshAfterInteraction();
     }, { capture: true, passive: true });
   }
 

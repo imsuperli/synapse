@@ -10,24 +10,34 @@ const mobileThemeSource = readFileSync(new URL('../theme/mobile-theme.ts', impor
 describe('Synapse Mobile terminal route wiring', () => {
   it('subscribes to a binary terminal stream before rendering live output', () => {
     const subscribeIndex = routeSource.indexOf("client.subscribe(\n          'terminal.subscribe'")
-    const snapshotIndex = routeSource.indexOf('const snapshot = parseTerminalScrollbackEvent(payload)')
+    const snapshotIndex = routeSource.indexOf(
+      'const snapshot = parseTerminalScrollbackEvent(payload)'
+    )
     const applyIndex = routeSource.indexOf('await applyTerminalScrollbackSnapshot(')
 
     expect(subscribeIndex).toBeGreaterThanOrEqual(0)
     expect(snapshotIndex).toBeGreaterThan(subscribeIndex)
     expect(applyIndex).toBeGreaterThan(snapshotIndex)
-    expect(routeSource).toContain('const viewport = updateTerminalViewportFromDesktop(snapshot, false)')
+    expect(routeSource).toContain(
+      'const viewport = updateTerminalViewportFromDesktop(snapshot, false)'
+    )
     expect(routeSource).not.toContain('fitTerminalRowsToPhone')
     expect(routeSource).not.toContain('fittedPhoneRowsRef')
-    expect(routeSource).toContain('sinceSeq: options.sinceSeq ?? terminalHistoryRef.current.lastSeq')
+    expect(routeSource).toContain(
+      'sinceSeq: options.sinceSeq ?? terminalHistoryRef.current.lastSeq'
+    )
     expect(routeSource).toContain('capabilities: { terminalBinaryStream: 1 }')
     expect(routeSource).toContain('parseTerminalSubscribedEvent(payload)')
     expect(routeSource).toContain('parseTerminalScrollbackEvent(payload)')
     expect(routeSource).toContain('parseTerminalDataEvent(payload)')
     expect(routeSource).toContain('parseTerminalStreamErrorEvent(payload)')
-    expect(routeSource).toContain('terminalHistoryRef: { current: createRemoteTerminalHistoryState() }')
+    expect(routeSource).toContain(
+      'terminalHistoryRef: { current: createRemoteTerminalHistoryState() }'
+    )
     expect(routeSource).toContain('const buildTerminalInitialData = useCallback(() => {')
-    expect(routeSource).toContain('replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)')
+    expect(routeSource).toContain(
+      'replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)'
+    )
     expect(routeSource).toContain('screenSnapshotOffset?: number')
     expect(routeSource).toContain('screenSnapshotLength?: number')
     expect(routeSource).toContain('buildTerminalInitialData()')
@@ -46,17 +56,24 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_CHUNKS = 50_000')
     expect(routeSource).toContain('const TERMINAL_HISTORY_PREFETCH_BYTES = 768 * 1024')
     expect(routeSource).toContain('const handleHistoryTopReached = useCallback(() => {')
-    expect(routeSource).toContain('await prefetchOlderTerminalHistory()')
-    expect(routeSource).toContain('takePrefetchedRemoteTerminalHistory(prefetch)')
-    expect(routeSource).toContain('prependRemoteTerminalHistoryPage(\n            terminalHistoryRef.current,\n            page')
+    expect(routeSource).toContain('await prefetchOlderTerminalHistory(TERMINAL_HISTORY_PAGE_BYTES)')
+    expect(routeSource).toContain('takePrefetchedRemoteTerminalHistory(prefetch, { maxPages })')
+    expect(routeSource).toContain(
+      'prependRemoteTerminalHistoryPage(\n            terminalHistoryRef.current,\n            page'
+    )
     expect(routeSource).toContain('buildRemoteTerminalInitialData(terminalHistoryRef.current)')
     expect(routeSource).toContain('handleHistoryTopReachedRef.current?.()')
     expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
     expect(routeSource).toContain('void prefetchOlderTerminalHistory().catch(() => {})')
-    expect(routeSource).toContain('void activatePrefetchedTerminalHistory().catch((err) => {')
-    expect(routeSource).not.toContain('prefetchAndActivateInitialTerminalHistory')
-    expect(routeSource).not.toContain("activatePrefetchedTerminalHistory('initial')")
-    expect(routeSource).not.toContain('initialHistoryActivatedRef')
+    expect(routeSource).toContain(
+      "void activatePrefetchedTerminalHistory('history-top', 1).catch((err) => {"
+    )
+    expect(routeSource).toContain('const hydrateInitialTerminalHistory = useCallback(')
+    expect(routeSource).toContain("activatePrefetchedTerminalHistory('initial', 1)")
+    expect(routeSource).toContain('shouldLoadInitialTerminalHistory({')
+    expect(routeSource).toContain('!terminalRenderPausedRef.current')
+    expect(routeSource).toContain('await runtime?.resumeInitialHistoryHydrationRef.current?.()')
+    expect(routeSource).toContain('setLoadingOlderHistory(true)')
     expect(routeSource).toContain('snapshot.evictedBeforeSeq')
     expect(routeSource).toContain('terminalHistoryBoundaryMessage(terminalHistoryRef.current, t)')
   })
@@ -73,7 +90,9 @@ describe('Synapse Mobile terminal route wiring', () => {
     )
     expect(routeSource).toContain('currentPaneRuntimeKeyRef: { current: null as string | null }')
     expect(routeSource).toContain('const previousRuntimeKey = currentPaneRuntimeKeyRef.current')
-    expect(routeSource).toContain('previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey')
+    expect(routeSource).toContain(
+      'previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey'
+    )
     expect(routeSource).toContain('await reloadCurrentTerminalStream(client)')
     expect(routeSource).toContain('resetRemoteTerminalHistoryState(terminalHistoryRef.current)')
   })
@@ -108,7 +127,9 @@ describe('Synapse Mobile terminal route wiring', () => {
   })
 
   it('maps protocol-level terminal errors to user-facing messages', () => {
-    expect(routeSource).toContain('function terminalErrorMessage(err: unknown, t: MobileTranslate): string')
+    expect(routeSource).toContain(
+      'function terminalErrorMessage(err: unknown, t: MobileTranslate): string'
+    )
     expect(routeSource).toContain("t('terminal.stoppedOnDesktop')")
     expect(routeSource).toContain("t('terminal.workspaceNotLoaded')")
     expect(routeSource).toContain('setError(terminalErrorMessage(err, t))')
@@ -130,13 +151,19 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('appendRemoteTerminalIncrementalSnapshot(')
     expect(routeSource).toContain('if (appliedSnapshot)')
     expect(routeSource).toContain('void syncTerminalIncrementRef.current?.()')
-    expect(routeSource).toContain('terminalSubscribeParamsRef.current.sinceSeq = terminalHistoryRef.current.lastSeq')
+    expect(routeSource).toContain(
+      'terminalSubscribeParamsRef.current.sinceSeq = terminalHistoryRef.current.lastSeq'
+    )
   })
 
   it('preserves both desktop grid dimensions on mobile', () => {
     expect(routeSource).toContain('desktopViewportRef: {')
-    expect(routeSource).toContain('const nextViewport = resolveMobileTerminalViewport(desktopViewport)')
-    expect(routeSource).toContain('terminalRef.current?.resize(nextViewport.cols, nextViewport.rows)')
+    expect(routeSource).toContain(
+      'const nextViewport = resolveMobileTerminalViewport(desktopViewport)'
+    )
+    expect(routeSource).toContain(
+      'terminalRef.current?.resize(nextViewport.cols, nextViewport.rows)'
+    )
     expect(routeSource).not.toContain('fittedPhoneRowsRef')
     expect(routeSource).not.toContain('measureFitDimensions(')
     expect(routeSource).not.toContain('resizeTerminal(client')
@@ -159,7 +186,9 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('runtime?.terminalRef.current?.revealLiveInput()')
     expect(routeSource).toContain('runtime?.terminalRef.current?.restoreKeyboardViewport()')
     expect(routeSource).toContain('const restoreTerminalAfterKeyboard = useCallback(() => {')
-    expect(routeSource).toContain("Keyboard.addListener('keyboardDidHide', restoreTerminalAfterKeyboard)")
+    expect(routeSource).toContain(
+      "Keyboard.addListener('keyboardDidHide', restoreTerminalAfterKeyboard)"
+    )
     expect(routeSource).toContain('if (!Keyboard.isVisible()) {')
     expect(routeSource).toContain('liveInputRef.current?.blur()')
     expect(routeSource).toContain('Keyboard.dismiss()')
@@ -182,6 +211,9 @@ describe('Synapse Mobile terminal route wiring', () => {
     )
     expect(routeSource).toContain("buildTerminalOneShotNativeKeyBytes('Enter', modifiers)")
     expect(routeSource).toContain('toggleOneShotModifier(slot.modifier)')
+    expect(routeSource).toContain("if (slot.type === 'scroll')")
+    expect(routeSource).toContain("{'⇳'}")
+    expect(routeSource).toContain('terminalRef.current?.setAutoScrollDisabled(nextDisabled)')
     expect(routeSource).toContain('onPressIn={() => {')
     expect(routeSource).toContain('startAccessoryRepeat(input)')
     expect(routeSource).toContain('stopAccessoryRepeat()')
@@ -207,10 +239,10 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain("color: '#ffffff'")
     expect(routeSource).toContain('fontSize: 12')
     expect(routeSource).toContain("fontWeight: '700'")
-    expect(routeSource).toContain("accessoryKeyPressed: {\n    opacity: 0.65")
+    expect(routeSource).toContain('accessoryKeyPressed: {\n    opacity: 0.65')
     expect(routeSource).toContain('backgroundColor: colors.statusRed')
     expect(routeSource).not.toContain(
-      "accessoryKeyPressed: {\n    backgroundColor: colors.borderSubtle"
+      'accessoryKeyPressed: {\n    backgroundColor: colors.borderSubtle'
     )
   })
 
@@ -231,11 +263,11 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('const [terminalTextScale, setTerminalTextScale] = useState(1)')
     expect(routeSource).toContain('textScale={terminalTextScale}')
     expect(routeSource).toContain('textScaleMode="mobile-reflow"')
-    expect(routeSource).toContain("liveInputText={handle === terminalHandle ? liveInputCapture : ''}")
-    expect(routeSource).toContain('onTextScaleChange={handleTextScaleChange}')
     expect(routeSource).toContain(
-      'onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}'
+      "liveInputText={handle === terminalHandle ? liveInputCapture : ''}"
     )
+    expect(routeSource).toContain('onTextScaleChange={handleTextScaleChange}')
+    expect(routeSource).toContain('onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}')
   })
 
   it('exposes bounded copyable terminal diagnostics directly on mobile', () => {
@@ -255,9 +287,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('setHistoryNotice(null)')
     expect(routeSource).toContain('}, TERMINAL_HISTORY_NOTICE_MS)')
     expect(routeSource).toContain('return () => clearTimeout(timer)')
-    expect(routeSource).toContain(
-      'if (!prefetched.hasMoreBefore && activeHandleRef.current === terminalHandle)'
-    )
+    expect(routeSource).toContain("trigger === 'history-top'")
     expect(routeSource).toContain(
       'setLoadingOlderHistory(false)\n      setHistoryNotice(null)\n      activeHandleRef.current = targetHandle\n      setActiveTerminal('
     )
@@ -267,7 +297,9 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('requestWindowList(client)')
     expect(routeSource).toContain('windowPanes.length > 1')
     expect(routeSource).toContain('activateTerminalTarget(pane.windowId, pane.paneId)')
-    expect(routeSource).toContain('startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)')
+    expect(routeSource).toContain(
+      'startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)'
+    )
     expect(routeSource).toContain('isStartableTerminalPane(pane)')
     expect(routeSource).not.toContain('isStartableLocalPane')
     expect(routeSource).toContain("t('terminal.sshCredentialsUnavailable')")
@@ -291,7 +323,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('limitBytes: TERMINAL_FOREGROUND_SMALL_DELTA_BYTES')
     const restoreIndex = routeSource.indexOf('runtime?.terminalRef.current?.restoreForeground()')
     const recoverIndex = routeSource.indexOf(
-      'void runtime?.recoverTerminalAfterForegroundRef.current?.()',
+      'await runtime?.recoverTerminalAfterForegroundRef.current?.()',
       restoreIndex
     )
     expect(restoreIndex).toBeGreaterThanOrEqual(0)

@@ -8,6 +8,7 @@ export const TERMINAL_ACCESSORY_PAGE_SIZE =
 
 export type TerminalAccessoryPageSlot =
   | { type: 'paste'; id: 'paste' }
+  | { type: 'scroll'; id: 'scroll' }
   | {
       type: 'modifier'
       id: TerminalOneShotModifier
@@ -23,7 +24,7 @@ export type TerminalAccessoryPage = TerminalAccessoryPageSlot[]
 const PRIMARY_PAGE_SLOT_IDS = [
   'escape',
   'paste',
-  'shiftTab',
+  'scroll',
   'home',
   'arrowUp',
   'end',
@@ -37,7 +38,7 @@ const PRIMARY_PAGE_SLOT_IDS = [
   'enter'
 ] as const
 
-const REPLACED_PRIMARY_KEY_IDS = new Set(['space', 'delete'])
+const REPLACED_PRIMARY_KEY_IDS = new Set(['space', 'delete', 'shiftTab'])
 
 const SECONDARY_PAGE_SLOT_IDS = [
   'ctrlC',
@@ -70,6 +71,9 @@ export function buildTerminalAccessoryPages(
   const primaryPage = PRIMARY_PAGE_SLOT_IDS.map<TerminalAccessoryPageSlot>((id) => {
     if (id === 'paste') {
       return { type: 'paste', id }
+    }
+    if (id === 'scroll') {
+      return { type: 'scroll', id }
     }
     if (id === 'ctrl' || id === 'alt') {
       return {

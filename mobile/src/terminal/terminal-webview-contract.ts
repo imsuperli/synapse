@@ -20,6 +20,13 @@ export type TerminalKeyboardAvoidanceMetrics = {
   rowHeightPx: number
 }
 
+export type TerminalHistoryMetrics = {
+  viewportRows: number
+  scrollbackRows: number
+  nonEmptyScrollbackRows: number
+  scannedScrollbackRows: number
+}
+
 export type TerminalWebViewDiagnostic = {
   event: string
   metrics: Record<string, string | number | boolean | null>
@@ -31,6 +38,7 @@ export type TerminalSelectionEvents = {
   onSelectionEvicted?: () => void
   onModesChanged?: (modes: TerminalModes) => void
   onKeyboardAvoidanceMetrics?: (metrics: TerminalKeyboardAvoidanceMetrics) => void
+  onHistoryMetrics?: (metrics: TerminalHistoryMetrics) => void
   onHaptic?: (kind: 'selection' | 'success' | 'error' | 'edge-bump') => void
   onTerminalInput?: (bytes: string) => void
   onTerminalTap?: () => void
@@ -72,6 +80,7 @@ export type TerminalWebViewHandle = {
   restoreForeground: () => void
   revealLiveInput: () => void
   restoreKeyboardViewport: () => void
+  setAutoScrollDisabled: (disabled: boolean) => void
   cancelSelect: () => void
   doSelectAll: () => void
   // Why: lets callers await the WebView-side `init` rAF chain (term.open

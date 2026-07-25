@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native'
 import {
   TerminalWebView,
   type MobileTerminalTheme,
+  type TerminalHistoryMetrics,
   type TerminalKeyboardAvoidanceMetrics,
   type TerminalModes,
   type TerminalWebViewDiagnostic,
@@ -25,6 +26,7 @@ type TerminalPaneViewProps = {
   onSelectionEvicted: (handle: string) => void
   onModesChanged: (handle: string, modes: TerminalModes) => void
   onKeyboardAvoidanceMetrics: (handle: string, metrics: TerminalKeyboardAvoidanceMetrics) => void
+  onHistoryMetrics?: (handle: string, metrics: TerminalHistoryMetrics) => void
   onHaptic: (kind: 'selection' | 'success' | 'error' | 'edge-bump') => void
   onTerminalInput: (handle: string, bytes: string) => void
   onTerminalTap: (handle: string) => void
@@ -52,6 +54,7 @@ export function TerminalPaneView({
   onSelectionEvicted,
   onModesChanged,
   onKeyboardAvoidanceMetrics,
+  onHistoryMetrics,
   onHaptic,
   onTerminalInput,
   onTerminalTap,
@@ -94,6 +97,7 @@ export function TerminalPaneView({
         onSelectionEvicted={() => onSelectionEvicted(handle)}
         onModesChanged={(m) => onModesChanged(handle, m)}
         onKeyboardAvoidanceMetrics={(m) => onKeyboardAvoidanceMetrics(handle, m)}
+        onHistoryMetrics={(m) => onHistoryMetrics?.(handle, m)}
         onHaptic={onHaptic}
         onTerminalInput={(bytes) => onTerminalInput(handle, bytes)}
         onTerminalTap={() => onTerminalTap(handle)}

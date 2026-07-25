@@ -12,18 +12,22 @@ describe('remote terminal history prefetch', () => {
     const state = createRemoteTerminalHistoryPrefetchState()
     resetRemoteTerminalHistoryPrefetchState(state, 10, true)
 
-    expect(cacheRemoteTerminalHistoryPage(state, {
-      chunks: ['7', '8', '9'],
-      firstSeq: 7,
-      lastSeq: 9,
-      hasMoreBefore: true
-    })).toBe(true)
-    expect(cacheRemoteTerminalHistoryPage(state, {
-      chunks: ['4', '5', '6'],
-      firstSeq: 4,
-      lastSeq: 6,
-      hasMoreBefore: false
-    })).toBe(true)
+    expect(
+      cacheRemoteTerminalHistoryPage(state, {
+        chunks: ['7', '8', '9'],
+        firstSeq: 7,
+        lastSeq: 9,
+        hasMoreBefore: true
+      })
+    ).toBe(true)
+    expect(
+      cacheRemoteTerminalHistoryPage(state, {
+        chunks: ['4', '5', '6'],
+        firstSeq: 4,
+        lastSeq: 6,
+        hasMoreBefore: false
+      })
+    ).toBe(true)
 
     const cached = takePrefetchedRemoteTerminalHistory(state)
     expect(cached.pages.map((page) => page.firstSeq)).toEqual([7, 4])
@@ -35,14 +39,44 @@ describe('remote terminal history prefetch', () => {
     const state = createRemoteTerminalHistoryPrefetchState()
     resetRemoteTerminalHistoryPrefetchState(state, 4, true)
 
-    expect(cacheRemoteTerminalHistoryPage(state, {
-      chunks: [],
-      firstSeq: 0,
-      lastSeq: 0,
-      hasMoreBefore: false
-    })).toBe(false)
+    expect(
+      cacheRemoteTerminalHistoryPage(state, {
+        chunks: [],
+        firstSeq: 0,
+        lastSeq: 0,
+        hasMoreBefore: false
+      })
+    ).toBe(false)
     expect(state.hasMoreBefore).toBe(false)
     expect(canPrefetchRemoteTerminalHistory(state, 1024)).toBe(false)
+  })
+
+  it('activates cached pages in bounded stages without dropping the remainder', () => {
+    const state = createRemoteTerminalHistoryPrefetchState()
+    resetRemoteTerminalHistoryPrefetchState(state, 10, true)
+    cacheRemoteTerminalHistoryPage(state, {
+      chunks: ['789'],
+      firstSeq: 7,
+      lastSeq: 9,
+      hasMoreBefore: true
+    })
+    cacheRemoteTerminalHistoryPage(state, {
+      chunks: ['456'],
+      firstSeq: 4,
+      lastSeq: 6,
+      hasMoreBefore: false
+    })
+
+    const first = takePrefetchedRemoteTerminalHistory(state, { maxPages: 1 })
+    expect(first.pages.map((page) => page.firstSeq)).toEqual([7])
+    expect(first.hasMoreBefore).toBe(true)
+    expect(state.pages.map((page) => page.firstSeq)).toEqual([4])
+    expect(state.cachedBytes).toBe(3)
+
+    const second = takePrefetchedRemoteTerminalHistory(state, { maxPages: 1 })
+    expect(second.pages.map((page) => page.firstSeq)).toEqual([4])
+    expect(second.hasMoreBefore).toBe(false)
+    expect(state.cachedBytes).toBe(0)
   })
 
   it('stops background prefetch at the memory bound', () => {
@@ -62,12 +96,14 @@ describe('remote terminal history prefetch', () => {
     const state = createRemoteTerminalHistoryPrefetchState()
     resetRemoteTerminalHistoryPrefetchState(state, 10, true)
 
-    expect(cacheRemoteTerminalHistoryPage(state, {
-      chunks: ['overlap'],
-      firstSeq: 9,
-      lastSeq: 10,
-      hasMoreBefore: true
-    })).toBe(false)
+    expect(
+      cacheRemoteTerminalHistoryPage(state, {
+        chunks: ['overlap'],
+        firstSeq: 9,
+        lastSeq: 10,
+        hasMoreBefore: true
+      })
+    ).toBe(false)
     expect(state.nextBeforeSeq).toBe(10)
   })
 

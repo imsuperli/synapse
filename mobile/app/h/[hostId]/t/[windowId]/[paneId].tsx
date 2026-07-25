@@ -14,7 +14,7 @@ import {
   View,
   useWindowDimensions,
   type KeyboardEvent,
-  type LayoutChangeEvent,
+  type LayoutChangeEvent
 } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
@@ -31,6 +31,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   type TerminalKeyboardAvoidanceMetrics,
+  type TerminalHistoryMetrics,
   type TerminalWebViewDiagnostic,
   type TerminalWebViewHandle
 } from '../../../../../src/terminal/TerminalWebView'
@@ -84,7 +85,10 @@ import type { ConnectionLogEntry, ConnectionState } from '../../../../../src/tra
 import type { MobileTerminalTheme } from '../../../../../src/terminal/mobile-terminal-theme'
 import { colors, radii, spacing, typography } from '../../../../../src/theme/mobile-theme'
 import { useMobileI18n, type MobileTranslate } from '../../../../../src/i18n'
-import { loadTerminalTextScale, saveTerminalTextScale } from '../../../../../src/storage/preferences'
+import {
+  loadTerminalTextScale,
+  saveTerminalTextScale
+} from '../../../../../src/storage/preferences'
 import { getTerminalKeyboardAvoidanceLift } from '../../../../../src/terminal/terminal-keyboard-avoidance'
 import {
   appendRemoteTerminalData,
@@ -103,6 +107,10 @@ import {
   resetRemoteTerminalHistoryPrefetchState,
   takePrefetchedRemoteTerminalHistory
 } from '../../../../../src/synapse/remote-terminal-history-prefetch'
+import {
+  INITIAL_TERMINAL_HISTORY_DELAY_MS,
+  shouldLoadInitialTerminalHistory
+} from '../../../../../src/synapse/remote-terminal-initial-history'
 import {
   normalizeDesktopTerminalViewport,
   resolveMobileTerminalViewport,
@@ -248,10 +256,7 @@ function ManagedTerminalTab({
         accessibilityState={{ selected: active, disabled: normalDisabled || starting }}
       >
         <View style={[styles.paneTabDot, { backgroundColor: statusColor }]} />
-        <Text
-          style={[styles.paneTabText, active && styles.paneTabTextActive]}
-          numberOfLines={1}
-        >
+        <Text style={[styles.paneTabText, active && styles.paneTabTextActive]} numberOfLines={1}>
           {label}
         </Text>
       </Pressable>
@@ -280,7 +285,12 @@ function ManagedTerminalTab({
 }
 
 function terminalPaneLabel(pane: RemotePaneSummary, t: MobileTranslate): string {
-  return pane.title || pane.command || pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || t('common.terminal')
+  return (
+    pane.title ||
+    pane.command ||
+    pane.cwd?.split(/[\\/]/).filter(Boolean).at(-1) ||
+    t('common.terminal')
+  )
 }
 
 function terminalPaneStatusColor(pane: RemotePaneSummary): string {
@@ -300,10 +310,15 @@ function isStartableTerminalPane(pane: RemotePaneSummary): boolean {
   return pane.kind === 'terminal' && !pane.running
 }
 
-function getActiveTerminalPane(panes: RemotePaneSummary[], activePaneId: string): RemotePaneSummary | null {
-  return panes.find((pane) => pane.paneId === activePaneId && pane.kind === 'terminal') ??
+function getActiveTerminalPane(
+  panes: RemotePaneSummary[],
+  activePaneId: string
+): RemotePaneSummary | null {
+  return (
+    panes.find((pane) => pane.paneId === activePaneId && pane.kind === 'terminal') ??
     panes.find((pane) => pane.kind === 'terminal') ??
     null
+  )
 }
 
 function terminalPaneRuntimeKey(pane: RemotePaneSummary | null | undefined): string | null {
@@ -400,9 +415,7 @@ function parseTerminalScrollbackEvent(value: unknown): TerminalScrollbackEvent |
     hasMoreBefore: event.hasMoreBefore === true,
     evictedBeforeSeq: typeof event.evictedBeforeSeq === 'number' ? event.evictedBeforeSeq : 0,
     incremental: event.incremental === true,
-    requestedSinceSeq: typeof event.requestedSinceSeq === 'number'
-      ? event.requestedSinceSeq
-      : 0,
+    requestedSinceSeq: typeof event.requestedSinceSeq === 'number' ? event.requestedSinceSeq : 0,
     hasMoreAfter: event.hasMoreAfter === true,
     ...(typeof event.cols === 'number' && event.cols > 0 ? { cols: event.cols } : {}),
     ...(typeof event.rows === 'number' && event.rows > 0 ? { rows: event.rows } : {}),
@@ -474,7 +487,7 @@ const terminalTheme: MobileTerminalTheme = {
 }
 
 function getParam(value: string | string[] | undefined): string {
-  const raw = Array.isArray(value) ? value[0] ?? '' : value ?? ''
+  const raw = Array.isArray(value) ? (value[0] ?? '') : (value ?? '')
   try {
     return decodeURIComponent(raw)
   } catch {
@@ -495,6 +508,12 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
     terminalHistoryRef: { current: createRemoteTerminalHistoryState() },
     terminalHistoryPrefetchRef: { current: createRemoteTerminalHistoryPrefetchState() },
     terminalHistoryPrefetchPromiseRef: { current: null as Promise<void> | null },
+    initialHistoryHydrationPromiseRef: { current: null as Promise<void> | null },
+    resumeInitialHistoryHydrationRef: { current: null as (() => Promise<void>) | null },
+    initialHistoryStagesRef: { current: 0 },
+    initialHistoryActivatedBytesRef: { current: 0 },
+    terminalHistoryMetricsRef: { current: null as TerminalHistoryMetrics | null },
+    autoScrollDisabledRef: { current: false },
     terminalInitializedRef: { current: false },
     terminalWebReadyRef: { current: false },
     resyncingRef: { current: false },
@@ -556,6 +575,12 @@ export default function RemoteTerminalScreen() {
   const terminalHistoryRef = sessionRuntime.terminalHistoryRef
   const terminalHistoryPrefetchRef = sessionRuntime.terminalHistoryPrefetchRef
   const terminalHistoryPrefetchPromiseRef = sessionRuntime.terminalHistoryPrefetchPromiseRef
+  const initialHistoryHydrationPromiseRef = sessionRuntime.initialHistoryHydrationPromiseRef
+  const resumeInitialHistoryHydrationRef = sessionRuntime.resumeInitialHistoryHydrationRef
+  const initialHistoryStagesRef = sessionRuntime.initialHistoryStagesRef
+  const initialHistoryActivatedBytesRef = sessionRuntime.initialHistoryActivatedBytesRef
+  const terminalHistoryMetricsRef = sessionRuntime.terminalHistoryMetricsRef
+  const autoScrollDisabledRef = sessionRuntime.autoScrollDisabledRef
   const terminalInitializedRef = sessionRuntime.terminalInitializedRef
   const terminalWebReadyRef = sessionRuntime.terminalWebReadyRef
   const resyncingRef = sessionRuntime.resyncingRef
@@ -566,8 +591,9 @@ export default function RemoteTerminalScreen() {
   const activeSessionTabTypeRef = useRef<'terminal' | null>('terminal')
   const liveInputRef = useRef<TextInput | null>(null)
   const liveInputFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const keyboardViewportRestoreFrameRef =
-    useRef<ReturnType<typeof requestAnimationFrame> | null>(null)
+  const keyboardViewportRestoreFrameRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(
+    null
+  )
   const repeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const tabDeleteModeRef = useRef<TabDeleteMode | null>(null)
@@ -602,9 +628,7 @@ export default function RemoteTerminalScreen() {
   const [oneShotModifiers, setOneShotModifiers] = useState<TerminalOneShotModifiers>(
     EMPTY_TERMINAL_ONE_SHOT_MODIFIERS
   )
-  const oneShotModifiersRef = useRef<TerminalOneShotModifiers>(
-    EMPTY_TERMINAL_ONE_SHOT_MODIFIERS
-  )
+  const oneShotModifiersRef = useRef<TerminalOneShotModifiers>(EMPTY_TERMINAL_ONE_SHOT_MODIFIERS)
   const suppressedTerminalNativeEditRef = useRef<SuppressedTerminalNativeEdit | null>(null)
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   const [terminalFrameHeight, setTerminalFrameHeight] = useState(0)
@@ -619,6 +643,7 @@ export default function RemoteTerminalScreen() {
   const [stopping, setStopping] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(true)
   const [terminalTextScale, setTerminalTextScale] = useState(1)
+  const [autoScrollDisabled, setAutoScrollDisabled] = useState(autoScrollDisabledRef.current)
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
   const [historyNotice, setHistoryNotice] = useState<string | null>(null)
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false)
@@ -642,15 +667,16 @@ export default function RemoteTerminalScreen() {
     }, TERMINAL_HISTORY_NOTICE_MS)
     return () => clearTimeout(timer)
   }, [historyNotice])
-  const currentTabMode: TabDeleteMode | null = groupWindowTabs.length > 1
-    ? 'group'
-    : windowPanes.length > 1
-      ? 'pane'
-      : null
+  const currentTabMode: TabDeleteMode | null =
+    groupWindowTabs.length > 1 ? 'group' : windowPanes.length > 1 ? 'pane' : null
 
   activeHandleRef.current = terminalHandle
   activeSessionTabTypeRef.current = 'terminal'
   liveInputTerminalHandlesRef.current = liveInputTerminalHandles
+
+  useEffect(() => {
+    setAutoScrollDisabled(autoScrollDisabledRef.current)
+  }, [autoScrollDisabledRef, terminalHandle])
 
   const setLiveInputCapture = useCallback((text: string) => {
     liveInputCaptureRef.current = text
@@ -777,20 +803,23 @@ export default function RemoteTerminalScreen() {
     }
   }, [flushDiagnosticsPersistence, scheduleDiagnosticsPersistence])
 
-  const appendLog = useCallback((entry: ConnectionLogEntry) => {
-    logsRef.current = [...logsRef.current, entry].slice(-40)
-    setLogs(logsRef.current)
-    appendDiagnostic(
-      'network',
-      'connection-log',
-      {
-        level: entry.level,
-        message: entry.message,
-        detail: entry.detail ?? null
-      },
-      entry.ts
-    )
-  }, [appendDiagnostic])
+  const appendLog = useCallback(
+    (entry: ConnectionLogEntry) => {
+      logsRef.current = [...logsRef.current, entry].slice(-40)
+      setLogs(logsRef.current)
+      appendDiagnostic(
+        'network',
+        'connection-log',
+        {
+          level: entry.level,
+          message: entry.message,
+          detail: entry.detail ?? null
+        },
+        entry.ts
+      )
+    },
+    [appendDiagnostic]
+  )
 
   const enterTabDeleteMode = useCallback((mode: TabDeleteMode) => {
     tabDeleteModeRef.current = mode
@@ -878,6 +907,10 @@ export default function RemoteTerminalScreen() {
       runtime.resyncingRef.current = false
       runtime.loadingOlderHistoryRef.current = false
       runtime.terminalHistoryPrefetchPromiseRef.current = null
+      runtime.initialHistoryHydrationPromiseRef.current = null
+      runtime.initialHistoryStagesRef.current = 0
+      runtime.initialHistoryActivatedBytesRef.current = 0
+      runtime.terminalHistoryMetricsRef.current = null
       runtime.terminalIncrementSyncInFlightRef.current = false
       runtime.terminalRenderPausedRef.current = false
       runtime.terminalRenderedSeqRef.current = 0
@@ -968,7 +1001,10 @@ export default function RemoteTerminalScreen() {
         )
         setCurrentGroupId(currentGroup?.groupId ?? null)
         setGroupWindowTabs(currentGroup?.windows ?? [])
-        return currentWindow?.panes.find((pane) => pane.paneId === paneId && pane.kind === 'terminal') ?? null
+        return (
+          currentWindow?.panes.find((pane) => pane.paneId === paneId && pane.kind === 'terminal') ??
+          null
+        )
       } catch {
         if (
           runIdRef.current === expectedRunId &&
@@ -1005,6 +1041,10 @@ export default function RemoteTerminalScreen() {
       }
       terminalHistoryGenerationRef.current += 1
       terminalHistoryPrefetchPromiseRef.current = null
+      initialHistoryHydrationPromiseRef.current = null
+      initialHistoryStagesRef.current = 0
+      initialHistoryActivatedBytesRef.current = 0
+      terminalHistoryMetricsRef.current = null
       replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)
       resetRemoteTerminalHistoryPrefetchState(
         terminalHistoryPrefetchRef.current,
@@ -1050,10 +1090,7 @@ export default function RemoteTerminalScreen() {
       )
       terminalInitializedRef.current = true
       await terminalRef.current?.awaitReady()
-      terminalRenderedSeqRef.current = Math.max(
-        terminalRenderedSeqRef.current,
-        snapshot.lastSeq
-      )
+      terminalRenderedSeqRef.current = Math.max(terminalRenderedSeqRef.current, snapshot.lastSeq)
       if (
         runIdRef.current !== runId ||
         clientRef.current !== client ||
@@ -1236,96 +1273,102 @@ export default function RemoteTerminalScreen() {
     ]
   )
 
-  const prefetchOlderTerminalHistory = useCallback((): Promise<void> => {
-    const existing = terminalHistoryPrefetchPromiseRef.current
-    if (existing) {
-      return existing
-    }
-    const client = clientRef.current
-    if (!client) {
-      return Promise.resolve()
-    }
-    const runId = runIdRef.current
-    const historyGeneration = terminalHistoryGenerationRef.current
-    let request: Promise<void>
-    request = (async () => {
-      const prefetch = terminalHistoryPrefetchRef.current
-      const requestedBeforeSeq = prefetch.nextBeforeSeq
-      let fetchedPages = 0
-      let fetchedChunks = 0
-      let fetchedChars = 0
-      let returnedFirstSeq = 0
-      let returnedLastSeq = 0
-      let latestSeq = terminalHistoryRef.current.lastSeq
-      let result = 'cache-full'
-      try {
-        while (canPrefetchRemoteTerminalHistory(prefetch, TERMINAL_HISTORY_PREFETCH_BYTES)) {
-          const beforeSeq = prefetch.nextBeforeSeq
-          const history = await requestTerminalHistory(client, windowId, paneId, {
-            beforeSeq,
-            limitBytes: TERMINAL_HISTORY_PAGE_BYTES,
-            limitChunks: TERMINAL_HISTORY_PAGE_CHUNKS
-          })
-          if (
-            runIdRef.current !== runId ||
-            clientRef.current !== client ||
-            terminalHistoryGenerationRef.current !== historyGeneration
-          ) {
-            result = 'stale'
-            return
-          }
-          const returnedChars = history.chunks.reduce((total, chunk) => total + chunk.length, 0)
-          fetchedPages += history.chunks.length > 0 ? 1 : 0
-          fetchedChunks += history.chunks.length
-          fetchedChars += returnedChars
-          if (history.firstSeq > 0) {
-            returnedFirstSeq =
-              returnedFirstSeq > 0
-                ? Math.min(returnedFirstSeq, history.firstSeq)
-                : history.firstSeq
-          }
-          returnedLastSeq = Math.max(returnedLastSeq, history.lastSeq)
-          latestSeq = history.latestSeq
-          if (!cacheRemoteTerminalHistoryPage(prefetch, history)) {
-            result = history.chunks.length > 0 ? 'invalid-page' : 'history-end'
-            if (history.chunks.length > 0) {
-              prefetch.hasMoreBefore = false
-              throw new Error('invalid_terminal_history_page')
+  const prefetchOlderTerminalHistory = useCallback(
+    (maxCachedBytes = TERMINAL_HISTORY_PREFETCH_BYTES): Promise<void> => {
+      const existing = terminalHistoryPrefetchPromiseRef.current
+      if (existing) {
+        return existing
+      }
+      const client = clientRef.current
+      if (!client) {
+        return Promise.resolve()
+      }
+      const runId = runIdRef.current
+      const historyGeneration = terminalHistoryGenerationRef.current
+      let request: Promise<void>
+      request = (async () => {
+        const prefetch = terminalHistoryPrefetchRef.current
+        const requestedBeforeSeq = prefetch.nextBeforeSeq
+        let fetchedPages = 0
+        let fetchedChunks = 0
+        let fetchedChars = 0
+        let returnedFirstSeq = 0
+        let returnedLastSeq = 0
+        let latestSeq = terminalHistoryRef.current.lastSeq
+        let result = 'cache-full'
+        try {
+          while (canPrefetchRemoteTerminalHistory(prefetch, maxCachedBytes)) {
+            const beforeSeq = prefetch.nextBeforeSeq
+            const history = await requestTerminalHistory(client, windowId, paneId, {
+              beforeSeq,
+              limitBytes: TERMINAL_HISTORY_PAGE_BYTES,
+              limitChunks: TERMINAL_HISTORY_PAGE_CHUNKS
+            })
+            if (
+              runIdRef.current !== runId ||
+              clientRef.current !== client ||
+              terminalHistoryGenerationRef.current !== historyGeneration
+            ) {
+              result = 'stale'
+              return
             }
-            return
+            const returnedChars = history.chunks.reduce((total, chunk) => total + chunk.length, 0)
+            fetchedPages += history.chunks.length > 0 ? 1 : 0
+            fetchedChunks += history.chunks.length
+            fetchedChars += returnedChars
+            if (history.firstSeq > 0) {
+              returnedFirstSeq =
+                returnedFirstSeq > 0
+                  ? Math.min(returnedFirstSeq, history.firstSeq)
+                  : history.firstSeq
+            }
+            returnedLastSeq = Math.max(returnedLastSeq, history.lastSeq)
+            latestSeq = history.latestSeq
+            if (!cacheRemoteTerminalHistoryPage(prefetch, history)) {
+              result = history.chunks.length > 0 ? 'invalid-page' : 'history-end'
+              if (history.chunks.length > 0) {
+                prefetch.hasMoreBefore = false
+                throw new Error('invalid_terminal_history_page')
+              }
+              return
+            }
           }
+        } finally {
+          appendDiagnostic('mobile', 'history-prefetch-batch', {
+            handle: terminalHandle,
+            result,
+            requestedBeforeSeq,
+            returnedFirstSeq,
+            returnedLastSeq,
+            fetchedPages,
+            fetchedChunks,
+            fetchedChars,
+            cachedPages: prefetch.pages.length,
+            cachedBytes: prefetch.cachedBytes,
+            nextBeforeSeq: prefetch.nextBeforeSeq,
+            pcRetainedFirstSeq: latestSeq > 0 ? prefetch.evictedBeforeSeq + 1 : 0,
+            pcRetainedLastSeq: latestSeq,
+            hasMoreBefore: prefetch.hasMoreBefore,
+            gap: prefetch.gap,
+            evictedBeforeSeq: prefetch.evictedBeforeSeq
+          })
         }
-      } finally {
-        appendDiagnostic('mobile', 'history-prefetch-batch', {
-          handle: terminalHandle,
-          result,
-          requestedBeforeSeq,
-          returnedFirstSeq,
-          returnedLastSeq,
-          fetchedPages,
-          fetchedChunks,
-          fetchedChars,
-          cachedPages: prefetch.pages.length,
-          cachedBytes: prefetch.cachedBytes,
-          nextBeforeSeq: prefetch.nextBeforeSeq,
-          pcRetainedFirstSeq: latestSeq > 0 ? prefetch.evictedBeforeSeq + 1 : 0,
-          pcRetainedLastSeq: latestSeq,
-          hasMoreBefore: prefetch.hasMoreBefore,
-          gap: prefetch.gap,
-          evictedBeforeSeq: prefetch.evictedBeforeSeq
-        })
-      }
-    })().finally(() => {
-      if (terminalHistoryPrefetchPromiseRef.current === request) {
-        terminalHistoryPrefetchPromiseRef.current = null
-      }
-    })
-    terminalHistoryPrefetchPromiseRef.current = request
-    return request
-  }, [appendDiagnostic, paneId, terminalHandle, windowId])
+      })().finally(() => {
+        if (terminalHistoryPrefetchPromiseRef.current === request) {
+          terminalHistoryPrefetchPromiseRef.current = null
+        }
+      })
+      terminalHistoryPrefetchPromiseRef.current = request
+      return request
+    },
+    [appendDiagnostic, paneId, terminalHandle, windowId]
+  )
 
   const activatePrefetchedTerminalHistory = useCallback(
-    async (): Promise<boolean | null> => {
+    async (
+      trigger: 'initial' | 'history-top',
+      maxPages = 1
+    ): Promise<{ activated: boolean; activatedBytes: number } | null> => {
       const client = clientRef.current
       if (!client || loadingOlderHistoryRef.current || resyncingRef.current) {
         return null
@@ -1336,20 +1379,20 @@ export default function RemoteTerminalScreen() {
       const hadCachedPages = prefetch.pages.length > 0
       appendDiagnostic('mobile', 'history-activation-start', {
         handle: terminalHandle,
-        trigger: 'history-top',
+        trigger,
         cachedPages: prefetch.pages.length,
         cachedBytes: prefetch.cachedBytes,
         nextBeforeSeq: prefetch.nextBeforeSeq,
         hasMoreBefore: prefetch.hasMoreBefore
       })
       loadingOlderHistoryRef.current = true
-      if (activeHandleRef.current === terminalHandle) {
-        setLoadingOlderHistory(!hadCachedPages)
+      if (trigger === 'history-top' && activeHandleRef.current === terminalHandle) {
+        setLoadingOlderHistory(true)
         setHistoryNotice(null)
       }
       try {
         if (!hadCachedPages && prefetch.hasMoreBefore) {
-          await prefetchOlderTerminalHistory()
+          await prefetchOlderTerminalHistory(TERMINAL_HISTORY_PAGE_BYTES)
         }
         if (
           runIdRef.current !== runId ||
@@ -1359,7 +1402,12 @@ export default function RemoteTerminalScreen() {
           return null
         }
 
-        const prefetched = takePrefetchedRemoteTerminalHistory(prefetch)
+        const prefetched = takePrefetchedRemoteTerminalHistory(prefetch, { maxPages })
+        const activatedBytes = prefetched.pages.reduce(
+          (pageTotal, page) =>
+            pageTotal + page.chunks.reduce((chunkTotal, chunk) => chunkTotal + chunk.length, 0),
+          0
+        )
         terminalHistoryRef.current.hasMoreBefore = prefetched.hasMoreBefore
         terminalHistoryRef.current.gap ||= prefetched.gap
         terminalHistoryRef.current.evictedBeforeSeq = Math.max(
@@ -1369,7 +1417,7 @@ export default function RemoteTerminalScreen() {
         if (prefetched.pages.length === 0) {
           appendDiagnostic('mobile', 'history-activation-result', {
             handle: terminalHandle,
-            trigger: 'history-top',
+            trigger,
             result: 'no-pages',
             historyFirstSeq: terminalHistoryRef.current.firstSeq,
             historyLastSeq: terminalHistoryRef.current.lastSeq,
@@ -1377,10 +1425,14 @@ export default function RemoteTerminalScreen() {
             gap: terminalHistoryRef.current.gap,
             evictedBeforeSeq: terminalHistoryRef.current.evictedBeforeSeq
           })
-          if (!prefetched.hasMoreBefore && activeHandleRef.current === terminalHandle) {
+          if (
+            trigger === 'history-top' &&
+            !prefetched.hasMoreBefore &&
+            activeHandleRef.current === terminalHandle
+          ) {
             setHistoryNotice(terminalHistoryBoundaryMessage(terminalHistoryRef.current, t))
           }
-          return false
+          return { activated: false, activatedBytes: 0 }
         }
 
         let prependedCount = 0
@@ -1394,7 +1446,7 @@ export default function RemoteTerminalScreen() {
         if (prependedCount === 0) {
           appendDiagnostic('mobile', 'history-activation-result', {
             handle: terminalHandle,
-            trigger: 'history-top',
+            trigger,
             result: 'overlap-only',
             pages: prefetched.pages.length,
             historyFirstSeq: terminalHistoryRef.current.firstSeq,
@@ -1403,10 +1455,14 @@ export default function RemoteTerminalScreen() {
             gap: terminalHistoryRef.current.gap,
             evictedBeforeSeq: terminalHistoryRef.current.evictedBeforeSeq
           })
-          if (!prefetched.hasMoreBefore && activeHandleRef.current === terminalHandle) {
+          if (
+            trigger === 'history-top' &&
+            !prefetched.hasMoreBefore &&
+            activeHandleRef.current === terminalHandle
+          ) {
             setHistoryNotice(terminalHistoryBoundaryMessage(terminalHistoryRef.current, t))
           }
-          return false
+          return { activated: false, activatedBytes }
         }
 
         const viewport = viewportRef.current
@@ -1421,7 +1477,7 @@ export default function RemoteTerminalScreen() {
         await terminalRef.current?.awaitReady()
         appendDiagnostic('mobile', 'history-activation-result', {
           handle: terminalHandle,
-          trigger: 'history-top',
+          trigger,
           result: 'activated',
           pages: prefetched.pages.length,
           prependedChunks: prependedCount,
@@ -1439,7 +1495,7 @@ export default function RemoteTerminalScreen() {
         ) {
           void prefetchOlderTerminalHistory().catch(() => {})
         }
-        return true
+        return { activated: true, activatedBytes }
       } finally {
         if (runIdRef.current === runId && clientRef.current === client) {
           loadingOlderHistoryRef.current = false
@@ -1451,6 +1507,88 @@ export default function RemoteTerminalScreen() {
     },
     [appendDiagnostic, buildTerminalInitialData, prefetchOlderTerminalHistory, t, terminalHandle]
   )
+
+  const hydrateInitialTerminalHistory = useCallback((): Promise<void> => {
+    const existing = initialHistoryHydrationPromiseRef.current
+    if (existing) {
+      return existing
+    }
+    const client = clientRef.current
+    if (!client) {
+      return Promise.resolve()
+    }
+    const runId = runIdRef.current
+    const historyGeneration = terminalHistoryGenerationRef.current
+    let request: Promise<void>
+    request = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, INITIAL_TERMINAL_HISTORY_DELAY_MS))
+      while (
+        runIdRef.current === runId &&
+        clientRef.current === client &&
+        terminalHistoryGenerationRef.current === historyGeneration &&
+        !terminalRenderPausedRef.current &&
+        activeHandleRef.current === terminalHandle
+      ) {
+        const prefetch = terminalHistoryPrefetchRef.current
+        const hasMoreBefore = prefetch.pages.length > 0 || prefetch.hasMoreBefore
+        if (
+          !shouldLoadInitialTerminalHistory({
+            metrics: terminalHistoryMetricsRef.current,
+            stages: initialHistoryStagesRef.current,
+            activatedBytes: initialHistoryActivatedBytesRef.current,
+            hasMoreBefore
+          })
+        ) {
+          break
+        }
+        const result = await activatePrefetchedTerminalHistory('initial', 1)
+        if (!result) {
+          break
+        }
+        initialHistoryStagesRef.current += 1
+        initialHistoryActivatedBytesRef.current += result.activatedBytes
+        if (!result.activated) {
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, INITIAL_TERMINAL_HISTORY_DELAY_MS))
+      }
+      appendDiagnostic('mobile', 'initial-history-hydration', {
+        handle: terminalHandle,
+        stages: initialHistoryStagesRef.current,
+        activatedBytes: initialHistoryActivatedBytesRef.current,
+        scrollbackRows: terminalHistoryMetricsRef.current?.scrollbackRows ?? 0,
+        nonEmptyScrollbackRows: terminalHistoryMetricsRef.current?.nonEmptyScrollbackRows ?? 0
+      })
+    })().finally(() => {
+      if (initialHistoryHydrationPromiseRef.current === request) {
+        initialHistoryHydrationPromiseRef.current = null
+      }
+    })
+    initialHistoryHydrationPromiseRef.current = request
+    return request
+  }, [
+    activatePrefetchedTerminalHistory,
+    appendDiagnostic,
+    initialHistoryActivatedBytesRef,
+    initialHistoryHydrationPromiseRef,
+    initialHistoryStagesRef,
+    terminalHandle,
+    terminalHistoryMetricsRef
+  ])
+
+  const resumeInitialHistoryHydration = useCallback(async (): Promise<void> => {
+    const pending = initialHistoryHydrationPromiseRef.current
+    if (pending) {
+      try {
+        await pending
+      } catch {}
+    }
+    if (terminalRenderPausedRef.current) {
+      return
+    }
+    await hydrateInitialTerminalHistory()
+  }, [hydrateInitialTerminalHistory, initialHistoryHydrationPromiseRef, terminalRenderPausedRef])
+  resumeInitialHistoryHydrationRef.current = resumeInitialHistoryHydration
 
   const syncTerminalIncrement = useCallback(async () => {
     const client = clientRef.current
@@ -1472,7 +1610,7 @@ export default function RemoteTerminalScreen() {
         return false
       }
       setTerminalRunning(true)
-      void prefetchOlderTerminalHistory().catch(() => {})
+      void hydrateInitialTerminalHistory().catch(() => {})
       return true
     }
     try {
@@ -1511,10 +1649,7 @@ export default function RemoteTerminalScreen() {
           }
           return
         }
-        const appended = appendRemoteTerminalHistoryIncrement(
-          terminalHistoryRef.current,
-          history
-        )
+        const appended = appendRemoteTerminalHistoryIncrement(terminalHistoryRef.current, history)
         if (appended.overflowed) {
           if (resyncingRef.current) {
             return
@@ -1575,7 +1710,7 @@ export default function RemoteTerminalScreen() {
   }, [
     loading,
     paneId,
-    prefetchOlderTerminalHistory,
+    hydrateInitialTerminalHistory,
     startTerminalSubscription,
     stopTerminalSubscription,
     t,
@@ -1614,10 +1749,7 @@ export default function RemoteTerminalScreen() {
       ) {
         return
       }
-      const appended = appendRemoteTerminalHistoryIncrement(
-        terminalHistoryRef.current,
-        history
-      )
+      const appended = appendRemoteTerminalHistoryIncrement(terminalHistoryRef.current, history)
       terminalPendingOverflowedRef.current ||= appended.overflowed
       updateTerminalSubscriptionCursor()
       const decision = decideRemoteTerminalForegroundRecovery({
@@ -1635,6 +1767,10 @@ export default function RemoteTerminalScreen() {
         resetRemoteTerminalHistoryState(terminalHistoryRef.current)
         resetRemoteTerminalHistoryPrefetchState(terminalHistoryPrefetchRef.current)
         terminalHistoryPrefetchPromiseRef.current = null
+        initialHistoryHydrationPromiseRef.current = null
+        initialHistoryStagesRef.current = 0
+        initialHistoryActivatedBytesRef.current = 0
+        terminalHistoryMetricsRef.current = null
         terminalInitializedRef.current = false
         terminalPendingOverflowedRef.current = false
         terminalRenderPausedRef.current = false
@@ -1643,7 +1779,7 @@ export default function RemoteTerminalScreen() {
           return
         }
         terminalRenderedSeqRef.current = terminalHistoryRef.current.lastSeq
-        void prefetchOlderTerminalHistory().catch(() => {})
+        void hydrateInitialTerminalHistory().catch(() => {})
       } else if (decision === 'coalesced-write') {
         const viewport = viewportRef.current
         terminalRef.current?.init(
@@ -1682,7 +1818,7 @@ export default function RemoteTerminalScreen() {
     connectionState,
     loading,
     paneId,
-    prefetchOlderTerminalHistory,
+    hydrateInitialTerminalHistory,
     startTerminalSubscription,
     t,
     updateTerminalSubscriptionCursor,
@@ -1714,7 +1850,7 @@ export default function RemoteTerminalScreen() {
         if (activeHandleRef.current === terminalHandle) {
           setTerminalRunning(true)
         }
-        void prefetchOlderTerminalHistory().catch(() => {})
+        void hydrateInitialTerminalHistory().catch(() => {})
       } catch (err) {
         if (
           runIdRef.current === runId &&
@@ -1732,7 +1868,7 @@ export default function RemoteTerminalScreen() {
         }
       }
     },
-    [prefetchOlderTerminalHistory, startTerminalSubscription, t, terminalHandle]
+    [hydrateInitialTerminalHistory, startTerminalSubscription, t, terminalHandle]
   )
 
   const syncPaneStatus = useCallback(async () => {
@@ -1770,7 +1906,10 @@ export default function RemoteTerminalScreen() {
         }
         return
       }
-      if (!terminalRunning || (previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey)) {
+      if (
+        !terminalRunning ||
+        (previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey)
+      ) {
         await reloadCurrentTerminalStream(client)
       }
     } finally {
@@ -1790,11 +1929,7 @@ export default function RemoteTerminalScreen() {
 
   const openTerminal = useCallback(async () => {
     const runId = runIdRef.current
-    if (
-      terminalInitializedRef.current &&
-      unsubscribeRef.current &&
-      clientRef.current
-    ) {
+    if (terminalInitializedRef.current && unsubscribeRef.current && clientRef.current) {
       setLoading(false)
       setError(null)
       setTerminalRunning(true)
@@ -1806,7 +1941,7 @@ export default function RemoteTerminalScreen() {
         foregroundRecoveryRequestedRef.current = true
         void recoverTerminalAfterForegroundRef.current?.()
       }
-      void prefetchOlderTerminalHistory().catch(() => {})
+      void hydrateInitialTerminalHistory().catch(() => {})
       return
     }
     setLoading(true)
@@ -1875,7 +2010,7 @@ export default function RemoteTerminalScreen() {
       if (activeHandleRef.current === terminalHandle) {
         setLoading(false)
       }
-      void prefetchOlderTerminalHistory().catch(() => {})
+      void hydrateInitialTerminalHistory().catch(() => {})
     } catch (err) {
       if (runIdRef.current !== runId) {
         return
@@ -1890,7 +2025,7 @@ export default function RemoteTerminalScreen() {
     appendDiagnostic,
     hostId,
     loadWindowPaneTabs,
-    prefetchOlderTerminalHistory,
+    hydrateInitialTerminalHistory,
     refitTerminalToPhone,
     sessionRuntime,
     startTerminalSubscription,
@@ -1939,7 +2074,10 @@ export default function RemoteTerminalScreen() {
             ? sessionRuntimesRef.current.get(activeHandleRef.current)
             : null
           runtime?.terminalRef.current?.restoreForeground()
-          void runtime?.recoverTerminalAfterForegroundRef.current?.()
+          void (async () => {
+            await runtime?.recoverTerminalAfterForegroundRef.current?.()
+            await runtime?.resumeInitialHistoryHydrationRef.current?.()
+          })().catch(() => {})
         }, 150)
       })
       return () => {
@@ -2026,6 +2164,10 @@ export default function RemoteTerminalScreen() {
         resetRemoteTerminalHistoryState(terminalHistoryRef.current)
         resetRemoteTerminalHistoryPrefetchState(terminalHistoryPrefetchRef.current)
         terminalHistoryPrefetchPromiseRef.current = null
+        initialHistoryHydrationPromiseRef.current = null
+        initialHistoryStagesRef.current = 0
+        initialHistoryActivatedBytesRef.current = 0
+        terminalHistoryMetricsRef.current = null
         terminalHistoryRef.current.lastSeq = result.lastSeq
         terminalHistoryRef.current.firstSeq = result.lastSeq + 1
         terminalRenderedSeqRef.current = result.lastSeq
@@ -2098,6 +2240,7 @@ export default function RemoteTerminalScreen() {
           evicted.terminalSubscribeParamsRef.current = null
           evicted.terminalInitializedRef.current = false
           evicted.terminalWebReadyRef.current = false
+          evicted.resumeInitialHistoryHydrationRef.current = null
         }
       }
       setResidentTerminalHandles(residency.handles)
@@ -2143,7 +2286,8 @@ export default function RemoteTerminalScreen() {
         if (runIdRef.current !== expectedRunId || clientRef.current !== client) {
           return
         }
-        targetPane = startResult.pane ??
+        targetPane =
+          startResult.pane ??
           startResult.window.panes.find((pane) => pane.paneId === targetPane.paneId) ??
           targetPane
       }
@@ -2163,6 +2307,7 @@ export default function RemoteTerminalScreen() {
       runtime.terminalHistoryGenerationRef.current += 1
       runtime.unsubscribeRef.current?.()
       runtime.unsubscribeRef.current = null
+      runtime.resumeInitialHistoryHydrationRef.current = null
       sessionRuntimesRef.current.delete(handle)
     }
     setResidentTerminalHandles((handles) => handles.filter((item) => item !== handle))
@@ -2421,7 +2566,7 @@ export default function RemoteTerminalScreen() {
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => {
       const nextHeight = Math.max(0, event.nativeEvent.layout.height)
-      setTerminalFrameHeight((current) => current === nextHeight ? current : nextHeight)
+      setTerminalFrameHeight((current) => (current === nextHeight ? current : nextHeight))
       refitTerminalToPhone()
     },
     [refitTerminalToPhone]
@@ -2550,6 +2695,13 @@ export default function RemoteTerminalScreen() {
   )
   const handleAccessoryKeyRef = useRef(handleAccessoryKey)
   handleAccessoryKeyRef.current = handleAccessoryKey
+
+  const toggleTerminalAutoScroll = useCallback(() => {
+    const nextDisabled = !autoScrollDisabledRef.current
+    autoScrollDisabledRef.current = nextDisabled
+    setAutoScrollDisabled(nextDisabled)
+    terminalRef.current?.setAutoScrollDisabled(nextDisabled)
+  }, [autoScrollDisabledRef, terminalRef])
 
   const createAccessoryKeyInput = useCallback(
     (key: Parameters<typeof createTerminalLiveAccessoryInput>[0]) => {
@@ -2704,14 +2856,24 @@ export default function RemoteTerminalScreen() {
     [appendDiagnostic]
   )
 
+  const handleTerminalHistoryMetrics = useCallback(
+    (targetHandle: string, metrics: TerminalHistoryMetrics) => {
+      const runtime = sessionRuntimesRef.current.get(targetHandle)
+      if (runtime) {
+        runtime.terminalHistoryMetricsRef.current = metrics
+      }
+    },
+    []
+  )
+
   const handleHistoryTopReached = useCallback(() => {
     const client = clientRef.current
-    if (
-      !client ||
-      loading ||
-      resyncingRef.current ||
-      loadingOlderHistoryRef.current
-    ) {
+    if (!client || loading || resyncingRef.current) {
+      return
+    }
+    if (loadingOlderHistoryRef.current) {
+      setLoadingOlderHistory(true)
+      setHistoryNotice(null)
       return
     }
     const prefetch = terminalHistoryPrefetchRef.current
@@ -2726,7 +2888,7 @@ export default function RemoteTerminalScreen() {
       return
     }
     const runId = runIdRef.current
-    void activatePrefetchedTerminalHistory().catch((err) => {
+    void activatePrefetchedTerminalHistory('history-top', 1).catch((err) => {
       if (runIdRef.current === runId && clientRef.current === client) {
         appendDiagnostic('mobile', 'history-activation-error', {
           handle: terminalHandle,
@@ -2739,15 +2901,13 @@ export default function RemoteTerminalScreen() {
   }, [activatePrefetchedTerminalHistory, appendDiagnostic, loading, t, terminalHandle])
   handleHistoryTopReachedRef.current = handleHistoryTopReached
 
-  const setTerminalWebViewRef = useCallback(
-    (handle: string, ref: TerminalWebViewHandle | null) => {
-      const runtime = sessionRuntimesRef.current.get(handle)
-      if (runtime) {
-        runtime.terminalRef.current = ref
-      }
-    },
-    []
-  )
+  const setTerminalWebViewRef = useCallback((handle: string, ref: TerminalWebViewHandle | null) => {
+    const runtime = sessionRuntimesRef.current.get(handle)
+    if (runtime) {
+      runtime.terminalRef.current = ref
+      ref?.setAutoScrollDisabled(runtime.autoScrollDisabledRef.current)
+    }
+  }, [])
 
   const handleResidentTerminalWebReady = useCallback(
     (handle: string) => {
@@ -2755,6 +2915,7 @@ export default function RemoteTerminalScreen() {
       if (!runtime) {
         return
       }
+      runtime.terminalRef.current?.setAutoScrollDisabled(runtime.autoScrollDisabledRef.current)
       if (handle === activeHandleRef.current) {
         handleTerminalWebReady()
         return
@@ -2913,20 +3074,14 @@ export default function RemoteTerminalScreen() {
                 <Bug size={18} color={colors.textPrimary} />
               </Pressable>
               <Pressable
-                style={[
-                  styles.navIconButton,
-                  deletingTabKey !== null && styles.iconButtonDisabled
-                ]}
+                style={[styles.navIconButton, deletingTabKey !== null && styles.iconButtonDisabled]}
                 disabled={deletingTabKey !== null}
                 onPress={() => void openTerminal()}
               >
                 <RotateCw size={18} color={colors.textPrimary} />
               </Pressable>
               <Pressable
-                style={[
-                  styles.navIconButton,
-                  deletingTabKey !== null && styles.iconButtonDisabled
-                ]}
+                style={[styles.navIconButton, deletingTabKey !== null && styles.iconButtonDisabled]}
                 disabled={deletingTabKey !== null}
                 onPress={() => void handleClear()}
               >
@@ -2957,263 +3112,345 @@ export default function RemoteTerminalScreen() {
         onClose={closeDiagnostics}
       />
       <View style={styles.container}>
-
-      {showGroupWindowTabs ? (
-        <View style={styles.paneTabs}>
-          <View style={styles.paneTabsRow}>
-            <ScrollView
-              style={styles.paneTabScroller}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.paneTabContent}
-            >
-              {groupWindowTabs.map((window) => {
-                const active = window.windowId === windowId
-                const pane = getActiveTerminalPane(window.panes, window.activePaneId)
-                const paneKey = pane ? `${pane.windowId}:${pane.paneId}` : window.windowId
-                const deleteKey = `group:${window.windowId}`
-                const starting = startingTabPaneKey === paneKey
-                const disabled = !pane || (!active && !pane.running && !isStartableTerminalPane(pane))
-                return (
-                  <ManagedTerminalTab
-                    key={window.windowId}
-                    label={starting ? t('common.starting') : window.name}
-                    statusColor={pane ? terminalPaneStatusColor(pane) : colors.borderSubtle}
-                    active={active}
-                    normalDisabled={disabled}
-                    starting={starting}
-                    editing={tabDeleteMode === 'group'}
-                    deleting={deletingTabKey === deleteKey}
-                    deletionInFlight={deletingTabKey !== null}
-                    deleteAccessibilityLabel={t('terminal.removeGroupWindowAction')}
-                    onPress={() => handleManagedTabPress(() => void handleGroupWindowTabPress(window))}
-                    onLongPress={() => handleTabLongPress('group')}
-                    onDelete={() => confirmGroupWindowRemoval(window)}
-                  />
-                )
-              })}
-            </ScrollView>
-            <Pressable
-              style={({ pressed }) => [
-                styles.paneTabManageButton,
-                pressed && !deletingTabKey && styles.paneTabPressed,
-                deletingTabKey && styles.iconButtonDisabled
-              ]}
-              disabled={deletingTabKey !== null}
-              onPress={() => {
-                if (tabDeleteMode === 'group') {
-                  exitTabDeleteMode()
-                } else {
-                  enterTabDeleteMode('group')
+        {showGroupWindowTabs ? (
+          <View style={styles.paneTabs}>
+            <View style={styles.paneTabsRow}>
+              <ScrollView
+                style={styles.paneTabScroller}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.paneTabContent}
+              >
+                {groupWindowTabs.map((window) => {
+                  const active = window.windowId === windowId
+                  const pane = getActiveTerminalPane(window.panes, window.activePaneId)
+                  const paneKey = pane ? `${pane.windowId}:${pane.paneId}` : window.windowId
+                  const deleteKey = `group:${window.windowId}`
+                  const starting = startingTabPaneKey === paneKey
+                  const disabled =
+                    !pane || (!active && !pane.running && !isStartableTerminalPane(pane))
+                  return (
+                    <ManagedTerminalTab
+                      key={window.windowId}
+                      label={starting ? t('common.starting') : window.name}
+                      statusColor={pane ? terminalPaneStatusColor(pane) : colors.borderSubtle}
+                      active={active}
+                      normalDisabled={disabled}
+                      starting={starting}
+                      editing={tabDeleteMode === 'group'}
+                      deleting={deletingTabKey === deleteKey}
+                      deletionInFlight={deletingTabKey !== null}
+                      deleteAccessibilityLabel={t('terminal.removeGroupWindowAction')}
+                      onPress={() =>
+                        handleManagedTabPress(() => void handleGroupWindowTabPress(window))
+                      }
+                      onLongPress={() => handleTabLongPress('group')}
+                      onDelete={() => confirmGroupWindowRemoval(window)}
+                    />
+                  )
+                })}
+              </ScrollView>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.paneTabManageButton,
+                  pressed && !deletingTabKey && styles.paneTabPressed,
+                  deletingTabKey && styles.iconButtonDisabled
+                ]}
+                disabled={deletingTabKey !== null}
+                onPress={() => {
+                  if (tabDeleteMode === 'group') {
+                    exitTabDeleteMode()
+                  } else {
+                    enterTabDeleteMode('group')
+                  }
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  tabDeleteMode === 'group'
+                    ? t('terminal.finishManagingTabs')
+                    : t('terminal.manageTabs')
                 }
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={
-                tabDeleteMode === 'group'
-                  ? t('terminal.finishManagingTabs')
-                  : t('terminal.manageTabs')
-              }
-            >
-              {tabDeleteMode === 'group' ? (
-                <>
-                  <Check size={16} color={colors.textPrimary} strokeWidth={2.5} />
-                  <Text style={styles.paneTabManageText}>{t('common.done')}</Text>
-                </>
-              ) : (
-                <Pencil size={16} color={colors.textSecondary} />
-              )}
-            </Pressable>
+              >
+                {tabDeleteMode === 'group' ? (
+                  <>
+                    <Check size={16} color={colors.textPrimary} strokeWidth={2.5} />
+                    <Text style={styles.paneTabManageText}>{t('common.done')}</Text>
+                  </>
+                ) : (
+                  <Pencil size={16} color={colors.textSecondary} />
+                )}
+              </Pressable>
+            </View>
           </View>
-        </View>
-      ) : windowPanes.length > 1 ? (
-        <View style={styles.paneTabs}>
-          <View style={styles.paneTabsRow}>
-            <ScrollView
-              style={styles.paneTabScroller}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.paneTabContent}
-            >
-              {windowPanes.map((pane, index) => {
-                const active = pane.paneId === paneId
-                const paneKey = `${pane.windowId}:${pane.paneId}`
-                const deleteKey = `pane:${pane.windowId}:${pane.paneId}`
-                const starting = startingTabPaneKey === paneKey
-                const disabled = !active && !pane.running && !isStartableTerminalPane(pane)
-                return (
-                  <ManagedTerminalTab
-                    key={paneKey}
-                    label={
-                      starting
-                        ? t('common.starting')
-                        : terminalPaneLabel(pane, t) || `${t('overview.pane')} ${index + 1}`
-                    }
-                    statusColor={terminalPaneStatusColor(pane)}
-                    active={active}
-                    normalDisabled={disabled}
-                    starting={starting}
-                    editing={tabDeleteMode === 'pane'}
-                    deleting={deletingTabKey === deleteKey}
-                    deletionInFlight={deletingTabKey !== null}
-                    deleteAccessibilityLabel={t('terminal.deletePaneAction')}
-                    onPress={() => handleManagedTabPress(() => void handlePaneTabPress(pane))}
-                    onLongPress={() => handleTabLongPress('pane')}
-                    onDelete={() => confirmPaneTabDeletion(pane)}
-                  />
-                )
-              })}
-            </ScrollView>
-            <Pressable
-              style={({ pressed }) => [
-                styles.paneTabManageButton,
-                pressed && !deletingTabKey && styles.paneTabPressed,
-                deletingTabKey && styles.iconButtonDisabled
-              ]}
-              disabled={deletingTabKey !== null}
-              onPress={() => {
-                if (tabDeleteMode === 'pane') {
-                  exitTabDeleteMode()
-                } else {
-                  enterTabDeleteMode('pane')
+        ) : windowPanes.length > 1 ? (
+          <View style={styles.paneTabs}>
+            <View style={styles.paneTabsRow}>
+              <ScrollView
+                style={styles.paneTabScroller}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.paneTabContent}
+              >
+                {windowPanes.map((pane, index) => {
+                  const active = pane.paneId === paneId
+                  const paneKey = `${pane.windowId}:${pane.paneId}`
+                  const deleteKey = `pane:${pane.windowId}:${pane.paneId}`
+                  const starting = startingTabPaneKey === paneKey
+                  const disabled = !active && !pane.running && !isStartableTerminalPane(pane)
+                  return (
+                    <ManagedTerminalTab
+                      key={paneKey}
+                      label={
+                        starting
+                          ? t('common.starting')
+                          : terminalPaneLabel(pane, t) || `${t('overview.pane')} ${index + 1}`
+                      }
+                      statusColor={terminalPaneStatusColor(pane)}
+                      active={active}
+                      normalDisabled={disabled}
+                      starting={starting}
+                      editing={tabDeleteMode === 'pane'}
+                      deleting={deletingTabKey === deleteKey}
+                      deletionInFlight={deletingTabKey !== null}
+                      deleteAccessibilityLabel={t('terminal.deletePaneAction')}
+                      onPress={() => handleManagedTabPress(() => void handlePaneTabPress(pane))}
+                      onLongPress={() => handleTabLongPress('pane')}
+                      onDelete={() => confirmPaneTabDeletion(pane)}
+                    />
+                  )
+                })}
+              </ScrollView>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.paneTabManageButton,
+                  pressed && !deletingTabKey && styles.paneTabPressed,
+                  deletingTabKey && styles.iconButtonDisabled
+                ]}
+                disabled={deletingTabKey !== null}
+                onPress={() => {
+                  if (tabDeleteMode === 'pane') {
+                    exitTabDeleteMode()
+                  } else {
+                    enterTabDeleteMode('pane')
+                  }
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  tabDeleteMode === 'pane'
+                    ? t('terminal.finishManagingTabs')
+                    : t('terminal.manageTabs')
                 }
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={
-                tabDeleteMode === 'pane'
-                  ? t('terminal.finishManagingTabs')
-                  : t('terminal.manageTabs')
-              }
-            >
-              {tabDeleteMode === 'pane' ? (
-                <>
-                  <Check size={16} color={colors.textPrimary} strokeWidth={2.5} />
-                  <Text style={styles.paneTabManageText}>{t('common.done')}</Text>
-                </>
-              ) : (
-                <Pencil size={16} color={colors.textSecondary} />
-              )}
-            </Pressable>
+              >
+                {tabDeleteMode === 'pane' ? (
+                  <>
+                    <Check size={16} color={colors.textPrimary} strokeWidth={2.5} />
+                    <Text style={styles.paneTabManageText}>{t('common.done')}</Text>
+                  </>
+                ) : (
+                  <Pencil size={16} color={colors.textSecondary} />
+                )}
+              </Pressable>
+            </View>
           </View>
+        ) : null}
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        <View style={styles.terminalFrame} onLayout={handleLayout}>
+          <View
+            style={[styles.terminalSurface, { transform: [{ translateY: -terminalKeyboardLift }] }]}
+          >
+            {residentTerminalHandles.map((handle) => (
+              <TerminalPaneView
+                key={handle}
+                handle={handle}
+                active={handle === terminalHandle}
+                keyboardLift={0}
+                terminalTheme={terminalTheme}
+                textScale={terminalTextScale}
+                textScaleMode="mobile-reflow"
+                liveInputText={handle === terminalHandle ? liveInputCapture : ''}
+                onRef={setTerminalWebViewRef}
+                onWebReady={handleResidentTerminalWebReady}
+                onSelectionMode={() => {}}
+                onSelectionCopy={handleSelectionCopy}
+                onSelectionEvicted={() => {}}
+                onModesChanged={() => {}}
+                onKeyboardAvoidanceMetrics={(targetHandle, metrics) => {
+                  if (targetHandle === activeHandleRef.current) {
+                    handleKeyboardAvoidanceMetrics(metrics)
+                  }
+                }}
+                onHistoryMetrics={handleTerminalHistoryMetrics}
+                onHaptic={() => {}}
+                onTerminalInput={(targetHandle, bytes) => {
+                  if (targetHandle === activeHandleRef.current) {
+                    handleTerminalInput(bytes)
+                  }
+                }}
+                onTerminalTap={(targetHandle) => {
+                  if (targetHandle === activeHandleRef.current) {
+                    focusLiveInput()
+                  }
+                }}
+                onFileTap={() => {}}
+                onOpenUrl={() => {}}
+                onTextScaleChange={handleTextScaleChange}
+                onEngineError={(targetHandle, message) => {
+                  if (targetHandle === activeHandleRef.current) {
+                    setError(message)
+                  }
+                }}
+                onHistoryTopReached={(targetHandle) => {
+                  if (targetHandle === activeHandleRef.current) {
+                    handleHistoryTopReachedRef.current?.()
+                  }
+                }}
+                onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}
+                onDiagnostic={handleTerminalWebViewDiagnostic}
+              />
+            ))}
+          </View>
+          {loadingOlderHistory || historyNotice ? (
+            <View style={styles.historyBanner}>
+              {loadingOlderHistory ? (
+                <ActivityIndicator size="small" color={colors.textSecondary} />
+              ) : null}
+              <Text style={styles.historyBannerText}>
+                {loadingOlderHistory ? t('terminal.loadingOlderHistory') : historyNotice}
+              </Text>
+            </View>
+          ) : null}
+          {loading ? (
+            <View style={styles.loadingOverlay}>
+              <ActivityIndicator color={colors.textSecondary} />
+              <Text style={styles.loadingText}>{t('terminal.loading')}</Text>
+            </View>
+          ) : null}
         </View>
-      ) : null}
 
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        {logs.length > 0 && error ? (
+          <View style={styles.logPreview}>
+            <Text style={styles.logText}>{logs[logs.length - 1]?.message}</Text>
+          </View>
+        ) : null}
 
-      <View style={styles.terminalFrame} onLayout={handleLayout}>
         <View
           style={[
-            styles.terminalSurface,
-            { transform: [{ translateY: -terminalKeyboardLift }] }
+            styles.commandDock,
+            { paddingBottom: insets.bottom, transform: [{ translateY: -keyboardLift }] }
           ]}
         >
-          {residentTerminalHandles.map((handle) => (
-            <TerminalPaneView
-              key={handle}
-              handle={handle}
-              active={handle === terminalHandle}
-              keyboardLift={0}
-              terminalTheme={terminalTheme}
-              textScale={terminalTextScale}
-              textScaleMode="mobile-reflow"
-              liveInputText={handle === terminalHandle ? liveInputCapture : ''}
-              onRef={setTerminalWebViewRef}
-              onWebReady={handleResidentTerminalWebReady}
-              onSelectionMode={() => {}}
-              onSelectionCopy={handleSelectionCopy}
-              onSelectionEvicted={() => {}}
-              onModesChanged={() => {}}
-              onKeyboardAvoidanceMetrics={(targetHandle, metrics) => {
-                if (targetHandle === activeHandleRef.current) {
-                  handleKeyboardAvoidanceMetrics(metrics)
-                }
-              }}
-              onHaptic={() => {}}
-              onTerminalInput={(targetHandle, bytes) => {
-                if (targetHandle === activeHandleRef.current) {
-                  handleTerminalInput(bytes)
-                }
-              }}
-              onTerminalTap={(targetHandle) => {
-                if (targetHandle === activeHandleRef.current) {
-                  focusLiveInput()
-                }
-              }}
-              onFileTap={() => {}}
-              onOpenUrl={() => {}}
-              onTextScaleChange={handleTextScaleChange}
-              onEngineError={(targetHandle, message) => {
-                if (targetHandle === activeHandleRef.current) {
-                  setError(message)
-                }
-              }}
-              onHistoryTopReached={(targetHandle) => {
-                if (targetHandle === activeHandleRef.current) {
-                  handleHistoryTopReachedRef.current?.()
-                }
-              }}
-              onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}
-              onDiagnostic={handleTerminalWebViewDiagnostic}
-            />
-          ))}
-        </View>
-        {loadingOlderHistory || historyNotice ? (
-          <View style={styles.historyBanner}>
-            {loadingOlderHistory ? <ActivityIndicator size="small" color={colors.textSecondary} /> : null}
-            <Text style={styles.historyBannerText}>
-              {loadingOlderHistory ? t('terminal.loadingOlderHistory') : historyNotice}
-            </Text>
-          </View>
-        ) : null}
-        {loading ? (
-          <View style={styles.loadingOverlay}>
-            <ActivityIndicator color={colors.textSecondary} />
-            <Text style={styles.loadingText}>{t('terminal.loading')}</Text>
-          </View>
-        ) : null}
-      </View>
-
-      {logs.length > 0 && error ? (
-        <View style={styles.logPreview}>
-          <Text style={styles.logText}>{logs[logs.length - 1]?.message}</Text>
-        </View>
-      ) : null}
-
-      <View
-        style={[
-          styles.commandDock,
-          { paddingBottom: insets.bottom, transform: [{ translateY: -keyboardLift }] }
-        ]}
-      >
-        <View style={styles.accessoryBar}>
-          <ScrollView
-            horizontal
-            pagingEnabled
-            bounces={false}
-            decelerationRate="fast"
-            disableIntervalMomentum
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.accessoryPages}
-            keyboardShouldPersistTaps="always"
-            onScrollBeginDrag={stopAccessoryRepeat}
-          >
-            {accessoryPages.map((page, pageIndex) => (
-              <View
-                key={`accessory-page-${pageIndex}`}
-                style={[styles.accessoryPage, { width: accessoryPageWidth }]}
-              >
-                {Array.from({ length: 2 }, (_, rowIndex) => (
-                  <View key={`accessory-row-${rowIndex}`} style={styles.accessoryRow}>
-                    {page
-                      .slice(
-                        rowIndex * TERMINAL_ACCESSORY_PAGE_COLUMNS,
-                        (rowIndex + 1) * TERMINAL_ACCESSORY_PAGE_COLUMNS
-                      )
-                      .map((slot, columnIndex) => {
-                        const slotKey = `${rowIndex}-${columnIndex}`
-                        if (!slot) {
-                          return <View key={slotKey} style={styles.accessoryKeyPlaceholder} />
-                        }
-                        if (slot.type === 'paste') {
+          <View style={styles.accessoryBar}>
+            <ScrollView
+              horizontal
+              pagingEnabled
+              bounces={false}
+              decelerationRate="fast"
+              disableIntervalMomentum
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.accessoryPages}
+              keyboardShouldPersistTaps="always"
+              onScrollBeginDrag={stopAccessoryRepeat}
+            >
+              {accessoryPages.map((page, pageIndex) => (
+                <View
+                  key={`accessory-page-${pageIndex}`}
+                  style={[styles.accessoryPage, { width: accessoryPageWidth }]}
+                >
+                  {Array.from({ length: 2 }, (_, rowIndex) => (
+                    <View key={`accessory-row-${rowIndex}`} style={styles.accessoryRow}>
+                      {page
+                        .slice(
+                          rowIndex * TERMINAL_ACCESSORY_PAGE_COLUMNS,
+                          (rowIndex + 1) * TERMINAL_ACCESSORY_PAGE_COLUMNS
+                        )
+                        .map((slot, columnIndex) => {
+                          const slotKey = `${rowIndex}-${columnIndex}`
+                          if (!slot) {
+                            return <View key={slotKey} style={styles.accessoryKeyPlaceholder} />
+                          }
+                          if (slot.type === 'paste') {
+                            return (
+                              <Pressable
+                                key={slot.id}
+                                style={({ pressed }) => [
+                                  styles.accessoryKey,
+                                  pressed && styles.accessoryKeyPressed,
+                                  !canSend && styles.accessoryKeyDisabled
+                                ]}
+                                disabled={!canSend}
+                                onPress={() => void handlePaste()}
+                                accessibilityLabel={t('terminal.pasteAccessibility')}
+                              >
+                                <Text
+                                  numberOfLines={1}
+                                  adjustsFontSizeToFit
+                                  minimumFontScale={0.75}
+                                  style={[
+                                    styles.accessoryKeyText,
+                                    !canSend && styles.accessoryKeyTextDisabled
+                                  ]}
+                                >
+                                  {t('terminal.paste')}
+                                </Text>
+                              </Pressable>
+                            )
+                          }
+                          if (slot.type === 'scroll') {
+                            return (
+                              <Pressable
+                                key={slot.id}
+                                style={({ pressed }) => [
+                                  styles.accessoryKey,
+                                  autoScrollDisabled && styles.accessoryScrollLocked,
+                                  pressed && styles.accessoryKeyPressed
+                                ]}
+                                onPress={toggleTerminalAutoScroll}
+                                accessibilityRole="button"
+                                accessibilityLabel={
+                                  autoScrollDisabled
+                                    ? t('terminal.followLatestOutput')
+                                    : t('terminal.lockHistoryViewport')
+                                }
+                                accessibilityState={{ selected: autoScrollDisabled }}
+                              >
+                                <Text numberOfLines={1} style={styles.accessoryKeyText}>
+                                  {'⇳'}
+                                </Text>
+                              </Pressable>
+                            )
+                          }
+                          if (slot.type === 'modifier') {
+                            const active = oneShotModifiers[slot.modifier]
+                            return (
+                              <Pressable
+                                key={slot.id}
+                                style={({ pressed }) => [
+                                  styles.accessoryKey,
+                                  active && styles.accessoryModifierActive,
+                                  pressed && styles.accessoryKeyPressed,
+                                  !canSend && styles.accessoryKeyDisabled
+                                ]}
+                                disabled={!canSend}
+                                onPress={() => toggleOneShotModifier(slot.modifier)}
+                                accessibilityLabel={slot.accessibilityLabel}
+                                accessibilityRole="button"
+                                accessibilityState={{ selected: active, disabled: !canSend }}
+                              >
+                                <Text
+                                  numberOfLines={1}
+                                  style={[
+                                    styles.accessoryKeyText,
+                                    !canSend && styles.accessoryKeyTextDisabled
+                                  ]}
+                                >
+                                  {slot.label}
+                                </Text>
+                              </Pressable>
+                            )
+                          }
+                          const key = slot.key
                           return (
                             <Pressable
                               key={slot.id}
@@ -3223,8 +3460,28 @@ export default function RemoteTerminalScreen() {
                                 !canSend && styles.accessoryKeyDisabled
                               ]}
                               disabled={!canSend}
-                              onPress={() => void handlePaste()}
-                              accessibilityLabel={t('terminal.pasteAccessibility')}
+                              onPressIn={() => {
+                                if (!key.repeatable) {
+                                  return
+                                }
+                                const input = createAccessoryKeyInput(key)
+                                void handleAccessoryKey(input)
+                                startAccessoryRepeat(input)
+                              }}
+                              onPressOut={() => {
+                                if (key.repeatable) {
+                                  stopAccessoryRepeat()
+                                }
+                              }}
+                              onPress={() => {
+                                if (key.repeatable) {
+                                  return
+                                }
+                                void handleAccessoryKey(createAccessoryKeyInput(key))
+                              }}
+                              accessibilityLabel={
+                                key.accessibilityLabel ?? t('terminal.sendKey', { key: key.label })
+                              }
                             >
                               <Text
                                 numberOfLines={1}
@@ -3235,115 +3492,39 @@ export default function RemoteTerminalScreen() {
                                   !canSend && styles.accessoryKeyTextDisabled
                                 ]}
                               >
-                                {t('terminal.paste')}
+                                {key.label}
                               </Text>
                             </Pressable>
                           )
-                        }
-                        if (slot.type === 'modifier') {
-                          const active = oneShotModifiers[slot.modifier]
-                          return (
-                            <Pressable
-                              key={slot.id}
-                              style={({ pressed }) => [
-                                styles.accessoryKey,
-                                active && styles.accessoryModifierActive,
-                                pressed && styles.accessoryKeyPressed,
-                                !canSend && styles.accessoryKeyDisabled
-                              ]}
-                              disabled={!canSend}
-                              onPress={() => toggleOneShotModifier(slot.modifier)}
-                              accessibilityLabel={slot.accessibilityLabel}
-                              accessibilityRole="button"
-                              accessibilityState={{ selected: active, disabled: !canSend }}
-                            >
-                              <Text
-                                numberOfLines={1}
-                                style={[
-                                  styles.accessoryKeyText,
-                                  !canSend && styles.accessoryKeyTextDisabled
-                                ]}
-                              >
-                                {slot.label}
-                              </Text>
-                            </Pressable>
-                          )
-                        }
-                        const key = slot.key
-                        return (
-                          <Pressable
-                            key={slot.id}
-                            style={({ pressed }) => [
-                              styles.accessoryKey,
-                              pressed && styles.accessoryKeyPressed,
-                              !canSend && styles.accessoryKeyDisabled
-                            ]}
-                            disabled={!canSend}
-                            onPressIn={() => {
-                              if (!key.repeatable) {
-                                return
-                              }
-                              const input = createAccessoryKeyInput(key)
-                              void handleAccessoryKey(input)
-                              startAccessoryRepeat(input)
-                            }}
-                            onPressOut={() => {
-                              if (key.repeatable) {
-                                stopAccessoryRepeat()
-                              }
-                            }}
-                            onPress={() => {
-                              if (key.repeatable) {
-                                return
-                              }
-                              void handleAccessoryKey(createAccessoryKeyInput(key))
-                            }}
-                            accessibilityLabel={
-                              key.accessibilityLabel ?? t('terminal.sendKey', { key: key.label })
-                            }
-                          >
-                            <Text
-                              numberOfLines={1}
-                              adjustsFontSizeToFit
-                              minimumFontScale={0.75}
-                              style={[
-                                styles.accessoryKeyText,
-                                !canSend && styles.accessoryKeyTextDisabled
-                              ]}
-                            >
-                              {key.label}
-                            </Text>
-                          </Pressable>
-                        )
-                      })}
-                  </View>
-                ))}
-              </View>
-            ))}
-          </ScrollView>
-        </View>
+                        })}
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </ScrollView>
+          </View>
 
-        <TextInput
-          ref={liveInputRef}
-          style={styles.liveInputCapture}
-          value={liveInputCapture}
-          onChangeText={handleLiveInputChangeWithModifiers}
-          onKeyPress={handleLiveInputKeyPressWithModifiers}
-          onSubmitEditing={handleLiveInputSubmitWithModifiers}
-          placeholder=""
-          showSoftInputOnFocus
-          autoCapitalize="none"
-          autoCorrect={false}
-          spellCheck={false}
-          smartInsertDelete={false}
-          autoComplete="off"
-          keyboardType={getTerminalLiveInputKeyboardType(Platform.OS)}
-          returnKeyType="default"
-          blurOnSubmit={false}
-          editable={canSend}
-          importantForAutofill="no"
-        />
-      </View>
+          <TextInput
+            ref={liveInputRef}
+            style={styles.liveInputCapture}
+            value={liveInputCapture}
+            onChangeText={handleLiveInputChangeWithModifiers}
+            onKeyPress={handleLiveInputKeyPressWithModifiers}
+            onSubmitEditing={handleLiveInputSubmitWithModifiers}
+            placeholder=""
+            showSoftInputOnFocus
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            smartInsertDelete={false}
+            autoComplete="off"
+            keyboardType={getTerminalLiveInputKeyboardType(Platform.OS)}
+            returnKeyType="default"
+            blurOnSubmit={false}
+            editable={canSend}
+            importantForAutofill="no"
+          />
+        </View>
       </View>
     </>
   )
@@ -3566,6 +3747,9 @@ const styles = StyleSheet.create({
     opacity: 0.65
   },
   accessoryModifierActive: {
+    backgroundColor: colors.statusRed
+  },
+  accessoryScrollLocked: {
     backgroundColor: colors.statusRed
   },
   accessoryKeyDisabled: {

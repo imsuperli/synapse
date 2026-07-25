@@ -32,6 +32,54 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   var mobileSourceRevision = 0;
   var mobileLiveInputText = '';
   var mobileSnapshotProjectionPlan = null;
+  var mobileSnapshotRefreshDeferredForInteraction = false;
+  var mobileAdaptiveRefreshDeferredForInteraction = false;
+
+  function mobileViewportInteractionActive() {
+    return !!(
+      surfaceTouchActive ||
+      (typeof ts !== 'undefined' && ts && (ts.isPinching || ts.momentumId !== null))
+    );
+  }
+
+  function deferMobileProjectionRefreshForInteraction(reason) {
+    if (
+      mobileSnapshotRefreshTimer !== null ||
+      mobileSnapshotBuildInFlight ||
+      mobileSnapshotPendingReason
+    ) {
+      mobileSnapshotRefreshDeferredForInteraction = true;
+      mobileSnapshotPendingReason =
+        mobileSnapshotPendingReason || reason || 'viewport-interaction';
+    }
+    if (mobileRefreshTimer !== null) {
+      mobileAdaptiveRefreshDeferredForInteraction = true;
+    }
+    clearMobileRefreshTimer();
+    clearMobileSnapshotRefreshTimer();
+  }
+
+  function resumeMobileProjectionRefreshAfterInteraction() {
+    if (mobileViewportInteractionActive() || !isMobileReflowTextScale()) return;
+    if (
+      mobileSnapshotRefreshDeferredForInteraction ||
+      mobileSnapshotPendingReason ||
+      (!mobileSourceCanUseAdaptiveLayout() && mobileProjectionDirty)
+    ) {
+      mobileSnapshotRefreshDeferredForInteraction = false;
+      mobileAdaptiveRefreshDeferredForInteraction = false;
+      scheduleMobileSnapshotProjection(mobileSnapshotPendingReason || 'viewport-interaction-end');
+      return;
+    }
+    if (
+      mobileAdaptiveRefreshDeferredForInteraction ||
+      mobileProjectionDirty ||
+      mobileRefreshForceReplay
+    ) {
+      mobileAdaptiveRefreshDeferredForInteraction = false;
+      requestMobileProjectionRefresh('viewport-interaction-end', mobileRefreshForceReplay);
+    }
+  }
 
   function isMobileReflowTextScale() {
     return textScaleMode === 'mobile-reflow';
@@ -88,6 +136,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     mobileSnapshotBuildOldLayout = '';
     mobileSourceRevision = 0;
     mobileSnapshotProjectionPlan = null;
+    mobileSnapshotRefreshDeferredForInteraction = false;
+    mobileAdaptiveRefreshDeferredForInteraction = false;
     clearMobileRefreshTimer();
     clearMobileSnapshotRefreshTimer();
   }
@@ -1160,6 +1210,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       ready = true;
       everReady = true;
       attachTermObservers();
+      emitHistoryMetrics();
       notify({ type: 'ready', cols: term.cols, rows: term.rows });
       emitDiagnostic('terminal-ready', metadata);
       pumpMobileWrites();
@@ -1297,6 +1348,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   function scheduleMobileSnapshotProjection(reason) {
     if (!isMobileReflowTextScale() || !canBuildMobileSnapshotProjection()) return false;
     mobileSnapshotPendingReason = reason || mobileSnapshotPendingReason || 'source-update';
+    if (mobileViewportInteractionActive()) return true;
     if (mobileSnapshotBuildInFlight || mobileSnapshotRefreshTimer !== null) return true;
     mobileSnapshotRefreshTimer = setTimeout(function() {
       mobileSnapshotRefreshTimer = null;
@@ -1311,7 +1363,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       mobileSnapshotBuildInFlight ||
       !canBuildMobileSnapshotProjection() ||
       !term ||
-      !surface
+      !surface ||
+      mobileViewportInteractionActive()
     ) {
       return;
     }
@@ -1388,7 +1441,24 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
               );
               return;
             }
+            if (mobileViewportInteractionActive()) {
+              mobileSnapshotPendingReason = reason || 'viewport-interaction';
+              discardMobileSnapshotReplacement(
+                token,
+                gen,
+                nextTerm,
+                nextSurface,
+                oldTerm,
+                oldSurface,
+                oldLayout,
+                null
+              );
+              return;
+            }
             try {
+              var latestViewportY = oldTerm && oldTerm.buffer && oldTerm.buffer.active
+                ? Math.max(0, oldTerm.buffer.active.viewportY || 0)
+                : 0;
               disposeTermObservers();
               term = nextTerm;
               surface = nextSurface;
@@ -1396,7 +1466,11 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
               initRows = dimensions.rows;
               initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols, nextTerm);
               mobileSourceTerm.options.scrollback = 30000;
-              restoreMobileProjectionScroll(nextTerm, scrollAnchorRows);
+              if (autoScrollDisabled) {
+                try { nextTerm.scrollToLine(latestViewportY); } catch (e) {}
+              } else {
+                try { nextTerm.scrollToBottom(); } catch (e) {}
+              }
               initialOscLinkRowOffset = Math.max(
                 0,
                 mobileProjectedContentRows - (nextTerm.buffer.normal.length || 0)
@@ -1658,6 +1732,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   function requestMobileProjectionRefresh(reason, forceReplay) {
     if (!isMobileReflowTextScale() || mobileRefreshRequested) return;
     mobileRefreshForceReplay = mobileRefreshForceReplay || forceReplay === true;
+    if (mobileViewportInteractionActive()) {
+      markMobileProjectionDirty(reason + '-deferred');
+      return;
+    }
     clearMobileRefreshTimer();
     mobileRefreshTimer = setTimeout(function() {
       mobileRefreshTimer = null;
@@ -1743,6 +1821,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   function handleMobileSourceBatch(data, safe) {
     emitModesIfChanged();
     if (mobileReflowLayout === 'source') {
+      if (!autoScrollDisabled && term) {
+        try { term.scrollToBottom(); } catch (e) {}
+      }
       if (mobileSourceCanUseAdaptiveLayout()) requestMobileProjectionRefresh('source-stable');
       return;
     }
@@ -1769,6 +1850,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     }
     if (safe && !mobileProjectionDirty && !mobileRefreshRequested && term) {
       term.write(data, function() {
+        if (!autoScrollDisabled && term) {
+          try { term.scrollToBottom(); } catch (e) {}
+        }
         if (firstDataPending) {
           firstDataPending = false;
           applyFitScale('first-data');

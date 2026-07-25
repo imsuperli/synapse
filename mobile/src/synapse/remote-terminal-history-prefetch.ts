@@ -55,11 +55,7 @@ export function cacheRemoteTerminalHistoryPage(
     state.hasMoreBefore = false
     return false
   }
-  if (
-    page.firstSeq <= 0 ||
-    page.lastSeq < page.firstSeq ||
-    page.lastSeq >= state.nextBeforeSeq
-  ) {
+  if (page.firstSeq <= 0 || page.lastSeq < page.firstSeq || page.lastSeq >= state.nextBeforeSeq) {
     return false
   }
   state.pages.push(page)
@@ -70,20 +66,43 @@ export function cacheRemoteTerminalHistoryPage(
 }
 
 export function takePrefetchedRemoteTerminalHistory(
-  state: RemoteTerminalHistoryPrefetchState
+  state: RemoteTerminalHistoryPrefetchState,
+  limits: { maxPages?: number; maxBytes?: number } = {}
 ): {
   pages: RemoteTerminalHistoryPage[]
   hasMoreBefore: boolean
   gap: boolean
   evictedBeforeSeq: number
 } {
-  const pages = state.pages
-  state.pages = []
-  state.cachedBytes = 0
+  const maxPages = normalizeTakeLimit(limits.maxPages)
+  const maxBytes = normalizeTakeLimit(limits.maxBytes)
+  const pages: RemoteTerminalHistoryPage[] = []
+  let takenBytes = 0
+  for (const page of state.pages) {
+    if (pages.length >= maxPages) {
+      break
+    }
+    const pageBytes = page.chunks.reduce((total, chunk) => total + chunk.length, 0)
+    if (pages.length > 0 && takenBytes + pageBytes > maxBytes) {
+      break
+    }
+    pages.push(page)
+    takenBytes += pageBytes
+  }
+  state.pages = state.pages.slice(pages.length)
+  state.cachedBytes = Math.max(0, state.cachedBytes - takenBytes)
+  const lastPage = pages.at(-1)
   return {
     pages,
-    hasMoreBefore: state.hasMoreBefore,
+    hasMoreBefore: lastPage ? lastPage.hasMoreBefore === true : state.hasMoreBefore,
     gap: state.gap,
     evictedBeforeSeq: state.evictedBeforeSeq
   }
+}
+
+function normalizeTakeLimit(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return Number.POSITIVE_INFINITY
+  }
+  return Math.max(1, Math.floor(value))
 }

@@ -56,6 +56,7 @@ class FakeTerminal {
   unstable = false;
   cursorGap = false;
   scrollToLineCalls: number[] = [];
+  scrollToBottomCalls = 0;
   __mobileSnapshotCursor: { contentRow: number; col: number } | null = null;
   private writeParsedListeners: Array<() => void> = [];
 
@@ -211,7 +212,10 @@ class FakeTerminal {
   selectAll(): void {}
   select(): void {}
   scrollLines(): void {}
-  scrollToBottom(): void {}
+  scrollToBottom(): void {
+    this.scrollToBottomCalls++;
+    this.buffer.active.viewportY = this.buffer.active.baseY;
+  }
   scrollToLine(line: number): void {
     this.scrollToLineCalls.push(line);
     this.buffer.active.viewportY = line;
@@ -429,6 +433,7 @@ function boot(
     new Function(iifeSource())();
     runtimeBooted = true;
   }
+  sendWebViewMessage({ type: "set-auto-scroll-disabled", disabled: false });
   sendWebViewMessage({
     type: "init",
     cols: viewport.cols,
@@ -459,7 +464,9 @@ describe("terminal WebView mobile reflow", () => {
     const end = XTERM_HTML.indexOf("function updateCursorOverlay()", start);
     const functionSource = XTERM_HTML.slice(start, end);
     // eslint-disable-next-line no-new-func
-    const resolvePosition = new Function(`${functionSource}; return resolveCursorOverlayPosition;`)() as (
+    const resolvePosition = new Function(
+      `${functionSource}; return resolveCursorOverlayPosition;`,
+    )() as (
       buffer: { baseY: number; cursorY: number; viewportY: number; cursorX: number },
       cols: number,
       rows: number,
@@ -469,12 +476,15 @@ describe("terminal WebView mobile reflow", () => {
       projectedRowOffset?: number,
     ) => { x: number; y: number; height: number } | null;
 
-    expect(resolvePosition({ baseY: 0, cursorY: 2, viewportY: 0, cursorX: 4 }, 45, 42, 8, 15))
-      .toEqual({ x: 32, y: 30, height: 15 });
-    expect(resolvePosition({ baseY: 20, cursorY: 2, viewportY: 30, cursorX: 4 }, 45, 42, 8, 15))
-      .toBeNull();
-    expect(resolvePosition({ baseY: 20, cursorY: 0, viewportY: 20, cursorX: 0 }, 45, 42, 8, 15))
-      .toEqual({ x: 0, y: 0, height: 15 });
+    expect(
+      resolvePosition({ baseY: 0, cursorY: 2, viewportY: 0, cursorX: 4 }, 45, 42, 8, 15),
+    ).toEqual({ x: 32, y: 30, height: 15 });
+    expect(
+      resolvePosition({ baseY: 20, cursorY: 2, viewportY: 30, cursorX: 4 }, 45, 42, 8, 15),
+    ).toBeNull();
+    expect(
+      resolvePosition({ baseY: 20, cursorY: 0, viewportY: 20, cursorX: 0 }, 45, 42, 8, 15),
+    ).toEqual({ x: 0, y: 0, height: 15 });
     expect(
       resolvePosition(
         { baseY: 80, cursorY: 20, viewportY: 30, cursorX: 44 },
@@ -489,12 +499,8 @@ describe("terminal WebView mobile reflow", () => {
   });
 
   it("maps the source cursor independently from content on later status rows", () => {
-    const input = projectionLine(
-      Array.from("prompt text").map((chars) => ({ chars })),
-    );
-    const status = projectionLine(
-      Array.from("gpt-5.6-sol xhigh").map((chars) => ({ chars })),
-    );
+    const input = projectionLine(Array.from("prompt text").map((chars) => ({ chars })));
+    const status = projectionLine(Array.from("gpt-5.6-sol xhigh").map((chars) => ({ chars })));
 
     expect(projectSourceCursor(sourceWithCursor([input, status], 0, 6), 8)).toEqual({
       contentRow: 0,
@@ -569,10 +575,7 @@ describe("terminal WebView mobile reflow", () => {
     ]);
 
     expect(
-      projectSourceSnapshotGeometry(
-        sourceWithCursor([...history, prompt, status], 50, 6, 20),
-        8,
-      ),
+      projectSourceSnapshotGeometry(sourceWithCursor([...history, prompt, status], 50, 6, 20), 8),
     ).toEqual({
       cursor: { contentRow: 50, col: 6 },
       contentRows: 52,
@@ -591,10 +594,7 @@ describe("terminal WebView mobile reflow", () => {
     ]);
 
     expect(
-      projectSourceSnapshotGeometry(
-        sourceWithCursor([...history, prompt, status], 50, 6, 20),
-        8,
-      ),
+      projectSourceSnapshotGeometry(sourceWithCursor([...history, prompt, status], 50, 6, 20), 8),
     ).toEqual({
       cursor: { contentRow: 50, col: 6 },
       contentRows: 53,
@@ -844,9 +844,10 @@ describe("terminal WebView mobile reflow", () => {
     expect(snapshot?.options.cursorInactiveStyle).toBe("none");
   });
 
-  it("keeps the old projection visible until a complex live snapshot is complete", async () => {
+  it("keeps a locked history viewport stable until a complex live snapshot is complete", async () => {
     boot("initial\r\n");
     await settle();
+    sendWebViewMessage({ type: "set-auto-scroll-disabled", disabled: true });
     const oldProjection = FakeTerminal.instances[1];
     const oldSurface = oldProjection?.openedSurface;
     oldProjection.normalBuffer.baseY = 100;
@@ -868,10 +869,58 @@ describe("terminal WebView mobile reflow", () => {
     await settle();
 
     expect(pendingProjection?.openedSurface?.style.visibility).toBe("visible");
-    expect(pendingProjection?.scrollToLineCalls).toContain(160);
+    expect(pendingProjection?.scrollToLineCalls).toContain(60);
     expect(oldProjection.disposed).toBe(true);
     expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
     expect(document.querySelectorAll("#terminal-surface")).toHaveLength(1);
+  });
+
+  it("follows the latest output by default after a complex snapshot replacement", async () => {
+    boot("initial\r\n");
+    await settle();
+    const oldProjection = FakeTerminal.instances[1];
+    oldProjection.normalBuffer.baseY = 100;
+    oldProjection.normalBuffer.viewportY = 60;
+    FakeTerminal.nextOpenedWriteBaseY = 200;
+
+    sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
+    await settle(220);
+
+    const replacement = FakeTerminal.instances[2];
+    expect(replacement?.scrollToBottomCalls).toBeGreaterThan(0);
+    expect(replacement?.normalBuffer.viewportY).toBe(200);
+  });
+
+  it("does not replace the visible projection while a touch gesture is active", async () => {
+    boot("initial\r\n");
+    await settle();
+    fireSurfaceTouch("touchstart", [{ x: 180, y: 280 }]);
+
+    sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
+    await settle(180);
+    expect(FakeTerminal.instances).toHaveLength(2);
+
+    fireSurfaceTouch("touchend", []);
+    await settle(240);
+    expect(FakeTerminal.instances).toHaveLength(3);
+  });
+
+  it("resumes a deferred adaptive refresh without switching to a snapshot", async () => {
+    const posted = boot("initial\r\n");
+    await settle();
+
+    sendWebViewMessage({ type: "write", data: "\u001b[2Jstable screen" });
+    fireSurfaceTouch("touchstart", [{ x: 180, y: 280 }]);
+    await settle(180);
+
+    expect(posted.some((message) => message.type === "mobile-reflow-refresh")).toBe(false);
+    expect(FakeTerminal.instances).toHaveLength(2);
+
+    fireSurfaceTouch("touchend", []);
+    await settle(220);
+
+    expect(posted.filter((message) => message.type === "mobile-reflow-refresh")).toHaveLength(1);
+    expect(FakeTerminal.instances).toHaveLength(2);
   });
 
   it("falls back to the source grid when a hidden snapshot write fails", async () => {
