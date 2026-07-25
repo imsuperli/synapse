@@ -147,6 +147,7 @@ type SuppressedTerminalNativeEdit = {
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 30
+const DEFAULT_REMOTE_START_VIEWPORT = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }
 const TERMINAL_INCREMENTAL_SYNC_MS = 1500
 const TERMINAL_PANE_STATUS_SYNC_MS = 3000
 const TERMINAL_HISTORY_PAGE_BYTES = 192 * 1024
@@ -514,6 +515,7 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
     initialHistoryStagesRef: { current: 0 },
     initialHistoryActivatedBytesRef: { current: 0 },
     terminalHistoryMetricsRef: { current: null as TerminalHistoryMetrics | null },
+    terminalKeyboardMetricsRef: { current: null as TerminalKeyboardAvoidanceMetrics | null },
     autoScrollDisabledRef: { current: false },
     terminalInitializedRef: { current: false },
     terminalWebReadyRef: { current: false },
@@ -563,6 +565,7 @@ function disposeRemoteTerminalSessionRuntime(runtime: RemoteTerminalSessionRunti
   runtime.terminalRef.current = null
   runtime.terminalInitializedRef.current = false
   runtime.terminalWebReadyRef.current = false
+  runtime.terminalKeyboardMetricsRef.current = null
   clearRemoteTerminalForegroundRecoveryRetry(runtime)
   resetRemoteTerminalHistoryState(runtime.terminalHistoryRef.current)
   resetRemoteTerminalHistoryPrefetchState(runtime.terminalHistoryPrefetchRef.current)
@@ -941,6 +944,7 @@ export default function RemoteTerminalScreen() {
       runtime.initialHistoryStagesRef.current = 0
       runtime.initialHistoryActivatedBytesRef.current = 0
       runtime.terminalHistoryMetricsRef.current = null
+      runtime.terminalKeyboardMetricsRef.current = null
       runtime.terminalIncrementSyncInFlightRef.current = false
       runtime.terminalRenderPausedRef.current = false
       runtime.terminalRenderedSeqRef.current = 0
@@ -1649,7 +1653,9 @@ export default function RemoteTerminalScreen() {
       if (!snapshot || runIdRef.current !== runId || clientRef.current !== client) {
         return false
       }
-      setTerminalRunning(true)
+      if (activeHandleRef.current === terminalHandle) {
+        setTerminalRunning(true)
+      }
       void hydrateInitialTerminalHistory().catch(() => {})
       return true
     }
@@ -1752,8 +1758,10 @@ export default function RemoteTerminalScreen() {
       if (/terminal not found|terminal_not_found/i.test(message)) {
         stopTerminalSubscription()
         currentPaneRuntimeKeyRef.current = null
-        setTerminalRunning(false)
-        setError(t('terminal.stoppedOnDesktop'))
+        if (activeHandleRef.current === terminalHandle) {
+          setTerminalRunning(false)
+          setError(t('terminal.stoppedOnDesktop'))
+        }
       }
     } finally {
       if (runIdRef.current === runId && clientRef.current === client) {
@@ -1904,8 +1912,10 @@ export default function RemoteTerminalScreen() {
         if (/terminal not found|terminal_not_found/i.test(message)) {
           terminalRenderPausedRef.current = false
           foregroundRecoveryRequestedRef.current = false
-          setTerminalRunning(false)
-          setError(t('terminal.stoppedOnDesktop'))
+          if (activeHandleRef.current === terminalHandle) {
+            setTerminalRunning(false)
+            setError(t('terminal.stoppedOnDesktop'))
+          }
           clearForegroundRecoveryRetry()
         } else {
           terminalRenderPausedRef.current = true
@@ -2061,6 +2071,7 @@ export default function RemoteTerminalScreen() {
     setStopping(false)
     setTerminalRunning(true)
     setTerminalKeyboardMetrics(null)
+    sessionRuntime.terminalKeyboardMetricsRef.current = null
     setLoadingOlderHistory(false)
     setHistoryNotice(null)
     resetRemoteTerminalHistoryState(terminalHistoryRef.current)
@@ -2349,6 +2360,7 @@ export default function RemoteTerminalScreen() {
       setResidentTerminalHandles(residency.handles)
       setLoadingOlderHistory(false)
       setHistoryNotice(null)
+      setTerminalKeyboardMetrics(runtime.terminalKeyboardMetricsRef.current)
       activeHandleRef.current = targetHandle
       setActiveTerminal({ windowId: targetWindowId, paneId: targetPaneId })
     },
@@ -2377,7 +2389,7 @@ export default function RemoteTerminalScreen() {
             client,
             targetPane.windowId,
             targetPane.paneId,
-            viewportRef.current
+            DEFAULT_REMOTE_START_VIEWPORT
           )
         } catch (err) {
           if (runIdRef.current === expectedRunId && clientRef.current === client) {
@@ -2591,7 +2603,7 @@ export default function RemoteTerminalScreen() {
       setStartingTabPaneKey(paneKey)
       setError(null)
       try {
-        await startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)
+        await startRemoteWindow(client, pane.windowId, pane.paneId, DEFAULT_REMOTE_START_VIEWPORT)
         if (runIdRef.current !== runId || clientRef.current !== client) {
           return
         }
@@ -2640,7 +2652,7 @@ export default function RemoteTerminalScreen() {
       setStartingTabPaneKey(paneKey)
       setError(null)
       try {
-        await startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)
+        await startRemoteWindow(client, pane.windowId, pane.paneId, DEFAULT_REMOTE_START_VIEWPORT)
         if (runIdRef.current !== runId || clientRef.current !== client) {
           return
         }
@@ -2672,7 +2684,15 @@ export default function RemoteTerminalScreen() {
   )
 
   const handleKeyboardAvoidanceMetrics = useCallback(
-    (metrics: TerminalKeyboardAvoidanceMetrics) => {
+    (targetHandle: string, metrics: TerminalKeyboardAvoidanceMetrics) => {
+      const runtime = sessionRuntimesRef.current.get(targetHandle)
+      if (!runtime) {
+        return
+      }
+      runtime.terminalKeyboardMetricsRef.current = metrics
+      if (targetHandle !== activeHandleRef.current) {
+        return
+      }
       setTerminalKeyboardMetrics((current) => {
         if (
           current &&
@@ -3380,17 +3400,13 @@ export default function RemoteTerminalScreen() {
                 textScaleMode="mobile-reflow"
                 liveInputText={handle === terminalHandle ? liveInputCapture : ''}
                 onRef={setTerminalWebViewRef}
-                      onWebReady={handleResidentTerminalWebReady}
-                      onPendingWriteOverflow={handlePendingWebWriteOverflow}
+                onWebReady={handleResidentTerminalWebReady}
+                onPendingWriteOverflow={handlePendingWebWriteOverflow}
                 onSelectionMode={() => {}}
                 onSelectionCopy={handleSelectionCopy}
                 onSelectionEvicted={() => {}}
                 onModesChanged={() => {}}
-                onKeyboardAvoidanceMetrics={(targetHandle, metrics) => {
-                  if (targetHandle === activeHandleRef.current) {
-                    handleKeyboardAvoidanceMetrics(metrics)
-                  }
-                }}
+                onKeyboardAvoidanceMetrics={handleKeyboardAvoidanceMetrics}
                 onHistoryMetrics={handleTerminalHistoryMetrics}
                 onHaptic={() => {}}
                 onTerminalInput={(targetHandle, bytes) => {

@@ -180,7 +180,9 @@ describe('Synapse Mobile terminal route wiring', () => {
   it('moves only covered terminal content and restores the full viewport after keyboard hide', () => {
     expect(routeSource).toContain('getTerminalKeyboardAvoidanceLift({')
     expect(routeSource).toContain('metrics: terminalKeyboardMetrics')
-    expect(routeSource).toContain('handleKeyboardAvoidanceMetrics(metrics)')
+    expect(routeSource).toContain('runtime.terminalKeyboardMetricsRef.current = metrics')
+    expect(routeSource).toContain('onKeyboardAvoidanceMetrics={handleKeyboardAvoidanceMetrics}')
+    expect(routeSource).toContain('setTerminalKeyboardMetrics(runtime.terminalKeyboardMetricsRef.current)')
     expect(routeSource).toContain('{ transform: [{ translateY: -terminalKeyboardLift }] }')
     expect(routeSource).not.toContain('terminalKeyboardLift > 0 && { transform:')
     expect(routeSource).toContain('runtime?.terminalRef.current?.revealLiveInput()')
@@ -289,7 +291,7 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('return () => clearTimeout(timer)')
     expect(routeSource).toContain("trigger === 'history-top'")
     expect(routeSource).toContain(
-      'setLoadingOlderHistory(false)\n      setHistoryNotice(null)\n      activeHandleRef.current = targetHandle\n      setActiveTerminal('
+      'setLoadingOlderHistory(false)\n      setHistoryNotice(null)\n      setTerminalKeyboardMetrics(runtime.terminalKeyboardMetricsRef.current)\n      activeHandleRef.current = targetHandle\n      setActiveTerminal('
     )
   })
 
@@ -298,13 +300,28 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('windowPanes.length > 1')
     expect(routeSource).toContain('activateTerminalTarget(pane.windowId, pane.paneId)')
     expect(routeSource).toContain(
-      'startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)'
+      'startRemoteWindow(client, pane.windowId, pane.paneId, DEFAULT_REMOTE_START_VIEWPORT)'
     )
     expect(routeSource).toContain('isStartableTerminalPane(pane)')
     expect(routeSource).not.toContain('isStartableLocalPane')
     expect(routeSource).toContain("t('terminal.sshCredentialsUnavailable')")
     expect(routeSource).not.toContain('pane.focus')
     expect(routeSource).not.toContain('window.activate')
+  })
+
+  it('starts paused panes with a neutral grid and isolates inactive runtime UI updates', () => {
+    expect(routeSource).toContain(
+      'const DEFAULT_REMOTE_START_VIEWPORT = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }'
+    )
+    expect(routeSource).not.toContain(
+      'startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)'
+    )
+    expect(routeSource).toContain(
+      'if (activeHandleRef.current === terminalHandle) {\n        setTerminalRunning(true)'
+    )
+    expect(routeSource).toContain(
+      "if (activeHandleRef.current === terminalHandle) {\n          setTerminalRunning(false)\n          setError(t('terminal.stoppedOnDesktop'))"
+    )
   })
 
   it('keeps recent terminal tabs resident instead of navigating through cold routes', () => {
