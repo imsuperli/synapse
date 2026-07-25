@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from "vitest";
+import { SerializeAddon as XtermSerializeAddon } from "@xterm/addon-serialize";
+import { Terminal as XtermTerminal } from "@xterm/xterm";
 import { XTERM_HTML } from "./terminal-webview-html";
 import { TERMINAL_MOBILE_REFLOW_JS } from "./terminal-webview-mobile-reflow-injected";
 
@@ -352,8 +354,55 @@ function projectSourceSnapshotGeometry(
   return project(source, targetCols, liveInputText);
 }
 
+function projectSourceSnapshotRows(
+  source: Record<string, unknown>,
+  targetCols: number,
+  mutateSourceBeforeGeometry = false,
+): {
+  rows: Array<{ text: string; isWrapped: boolean }>;
+  cursor: { contentRow: number; col: number } | null;
+  links: Array<{ row: number; startCol: number; endCol: number; uri: string }>;
+  contentRows: number;
+} {
+  // eslint-disable-next-line no-new-func
+  const project = new Function(
+    "source",
+    "targetCols",
+    "mutateSourceBeforeGeometry",
+    `${TERMINAL_MOBILE_REFLOW_JS}\n` +
+      "textScaleMode = 'mobile-reflow'; mobileReflowLayout = 'snapshot'; " +
+      "mobileSourceTerm = source; " +
+      "mobileSnapshotProjectionPlan = findMobileCodexSnapshotProjectionPlan(source.buffer.active); " +
+      "mobileSnapshotProjectionModel = createMobileSnapshotProjectionModel(" +
+      "source, mobileSnapshotProjectionPlan); " +
+      "if (mutateSourceBeforeGeometry) { " +
+      "mobileSourceRevision++; source.buffer.active.cursorX = 1; " +
+      "} " +
+      "var target = { options: {} }; " +
+      "var links = collectMobileProjectedOscLinks(targetCols, target); " +
+      "var projectionBuffer = mobileSnapshotProjectionModel.buffer; " +
+      "var rows = []; " +
+      "for (var row = 0; row < projectionBuffer.length; row++) { " +
+      "var line = projectionBuffer.getLine(row); " +
+      "rows.push({ text: line.translateToString(true), isWrapped: line.isWrapped }); " +
+      "} " +
+      "return { rows: rows, cursor: target.__mobileSnapshotCursor || null, " +
+      "links: links, contentRows: mobileProjectedContentRows };",
+  ) as (
+    source: Record<string, unknown>,
+    targetCols: number,
+    mutateSourceBeforeGeometry: boolean,
+  ) => {
+    rows: Array<{ text: string; isWrapped: boolean }>;
+    cursor: { contentRow: number; col: number } | null;
+    links: Array<{ row: number; startCol: number; endCol: number; uri: string }>;
+    contentRows: number;
+  };
+  return project(source, targetCols, mutateSourceBeforeGeometry);
+}
+
 function projectionLine(
-  cells: Array<{ chars: string; width?: number; background?: number }>,
+  cells: Array<{ chars: string; width?: number; background?: number; linkId?: number }>,
   isWrapped = false,
 ): FakeLine {
   return {
@@ -370,8 +419,59 @@ function projectionLine(
       getBgColorMode: () => (cells[col]?.background === undefined ? 0 : 16_777_216),
       getBgColor: () => cells[col]?.background ?? -1,
       isAttributeDefault: () => cells[col]?.background === undefined,
+      extended: { urlId: cells[col]?.linkId ?? 0 },
+    }),
+  };
+}
+
+function projectionBuffer(
+  type: "normal" | "alternate",
+  lines: FakeLine[],
+  cursorRow = 0,
+  cursorCol = 0,
+) {
+  return {
+    type,
+    length: lines.length,
+    baseY: 0,
+    viewportY: 0,
+    cursorX: cursorCol,
+    cursorY: cursorRow,
+    getLine: (row: number) => lines[row],
+    getNullCell: () => ({
+      getWidth: () => 1,
+      getChars: () => "",
+      getBgColorMode: () => 0,
+      getBgColor: () => -1,
+      isAttributeDefault: () => true,
       extended: { urlId: 0 },
     }),
+  };
+}
+
+function sourceWithSnapshotBuffers(
+  normalLines: FakeLine[],
+  alternateLines: FakeLine[],
+  cursorRow: number,
+  cursorCol: number,
+  cols = 20,
+): Record<string, unknown> {
+  const normal = projectionBuffer("normal", normalLines);
+  const alternate = projectionBuffer("alternate", alternateLines, cursorRow, cursorCol);
+  return {
+    cols,
+    rows: alternateLines.length,
+    buffer: { active: alternate, normal, alternate },
+    _core: {
+      _oscLinkService: {
+        getLinkData: (id: number) =>
+          id === 1
+            ? { uri: "https://history.example" }
+            : id === 2
+              ? { uri: "https://current.example" }
+              : null,
+      },
+    },
   };
 }
 
@@ -448,6 +548,9 @@ function boot(
 
 const settle = (milliseconds = 80): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const writeXterm = (terminal: XtermTerminal, data: string): Promise<void> =>
+  new Promise((resolve) => terminal.write(data, resolve));
 
 describe("terminal WebView mobile reflow", () => {
   it("keeps a high-contrast cursor visible in the adaptive projection", () => {
@@ -599,6 +702,164 @@ describe("terminal WebView mobile reflow", () => {
       cursor: { contentRow: 50, col: 6 },
       contentRows: 53,
     });
+  });
+
+  it("keeps normal-buffer history before an active alternate-screen snapshot", () => {
+    const history = ["OLDER-1", "OLDER-2", "RECENT-1", "RECENT-2"].map((text) =>
+      projectionLine(Array.from(text).map((chars) => ({ chars }))),
+    );
+    const current = ["CURRENT", "PROMPT", "STATUS"].map((text) =>
+      projectionLine(Array.from(text).map((chars) => ({ chars }))),
+    );
+
+    const shortProjection = projectSourceSnapshotRows(
+      sourceWithSnapshotBuffers(history.slice(2), current, 1, 6),
+      12,
+    );
+    const loadedProjection = projectSourceSnapshotRows(
+      sourceWithSnapshotBuffers(history, current, 1, 6),
+      12,
+    );
+
+    expect(shortProjection.rows.map((row) => row.text)).toEqual([
+      "RECENT-1",
+      "RECENT-2",
+      "CURRENT",
+      "PROMPT",
+      "STATUS",
+    ]);
+    expect(loadedProjection.rows.map((row) => row.text)).toEqual([
+      "OLDER-1",
+      "OLDER-2",
+      "RECENT-1",
+      "RECENT-2",
+      "CURRENT",
+      "PROMPT",
+      "STATUS",
+    ]);
+    expect(loadedProjection.contentRows).toBeGreaterThan(shortProjection.contentRows);
+  });
+
+  it("compacts a structural alternate-screen blank run without moving cursor or links", () => {
+    const historyLink = projectionLine(
+      Array.from("HISTORY").map((chars) => ({ chars, linkId: 1 })),
+    );
+    const currentLink = projectionLine(
+      Array.from("CURRENT").map((chars) => ({ chars, linkId: 2 })),
+    );
+    const blankRows = Array.from({ length: 24 }, () => projectionLine([]));
+    const prompt = projectionLine(
+      Array.from("PROMPT").map((chars) => ({ chars })),
+      true,
+    );
+    const status = projectionLine(Array.from("STATUS").map((chars) => ({ chars })));
+    const source = sourceWithSnapshotBuffers(
+      [historyLink],
+      [currentLink, ...blankRows, prompt, status],
+      25,
+      6,
+    );
+
+    const projection = projectSourceSnapshotRows(source, 12);
+
+    expect(projection.rows.map((row) => row.text)).toEqual([
+      "HISTORY",
+      "CURRENT",
+      "",
+      "PROMPT",
+      "STATUS",
+    ]);
+    expect(projection.cursor).toEqual({ contentRow: 3, col: 6 });
+    expect(projection.contentRows).toBe(5);
+    expect(projection.rows[3]?.isWrapped).toBe(false);
+    expect(projection.links).toEqual([
+      { row: 0, startCol: 0, endCol: 7, uri: "https://history.example" },
+      { row: 1, startCol: 0, endCol: 7, uri: "https://current.example" },
+    ]);
+  });
+
+  it("keeps cursor geometry paired with a serialized frame while source output advances", () => {
+    const source = sourceWithSnapshotBuffers(
+      [projectionLine(Array.from("HISTORY").map((chars) => ({ chars })))],
+      [projectionLine(Array.from("PROMPT").map((chars) => ({ chars })))],
+      0,
+      6,
+    );
+
+    expect(projectSourceSnapshotRows(source, 12, true).cursor).toEqual({
+      contentRow: 1,
+      col: 6,
+    });
+  });
+
+  it("serializes the composed projection through the pinned xterm addon", async () => {
+    const source = new XtermTerminal({ cols: 20, rows: 10, scrollback: 100 });
+    const serializeAddon = new XtermSerializeAddon();
+    const target = new XtermTerminal({ cols: 12, rows: 6, scrollback: 100 });
+    source.loadAddon(serializeAddon);
+    const serializeInternals = serializeAddon as unknown as {
+      _serializeBufferByRange(
+        terminal: XtermTerminal,
+        buffer: unknown,
+        range: { start: number; end: number },
+        excludeFinalCursorPosition: boolean,
+      ): string;
+    };
+    const originalSerializeRange = serializeInternals._serializeBufferByRange.bind(serializeAddon);
+    const serializedRanges: Array<{ start: number; end: number }> = [];
+    serializeInternals._serializeBufferByRange = (terminal, buffer, range, excludeCursor) => {
+      serializedRanges.push(range);
+      return originalSerializeRange(terminal, buffer, range, excludeCursor);
+    };
+
+    try {
+      await writeXterm(
+        source,
+        "\u001b[31mOLDER-1\u001b[0m\r\nOLDER-2\r\n" +
+          "\u001b[?1049h\u001b[2J\u001b[H" +
+          "CURRENT\u001b[8;1HPROMPT\u001b[9;1HSTATUS\u001b[8;7H",
+      );
+      // eslint-disable-next-line no-new-func
+      const serializeProjection = new Function(
+        "source",
+        "serializeAddon",
+        `${TERMINAL_MOBILE_REFLOW_JS}\n` +
+          "textScaleMode = 'mobile-reflow'; mobileReflowLayout = 'snapshot'; " +
+          "trackedMouseTrackingMode = 'none'; " +
+          "mobileSourceTerm = source; mobileSourceSerializeAddon = serializeAddon; " +
+          "var first = serializeMobileSnapshotProjection(); " +
+          "var cached = serializeMobileSnapshotProjection(); " +
+          "mobileNormalBufferRevision++; " +
+          "var invalidated = serializeMobileSnapshotProjection(); " +
+          "return [first, cached, invalidated];",
+      ) as (source: XtermTerminal, serializeAddon: XtermSerializeAddon) => [string, string, string];
+
+      const [firstProjection, cachedProjection, invalidatedProjection] = serializeProjection(
+        source,
+        serializeAddon,
+      );
+      expect(cachedProjection).toBe(firstProjection);
+      expect(invalidatedProjection).toBe(firstProjection);
+      expect(serializedRanges).toEqual([
+        { start: 0, end: 1 },
+        { start: 2, end: 5 },
+        { start: 2, end: 5 },
+        { start: 0, end: 1 },
+        { start: 2, end: 5 },
+      ]);
+      await writeXterm(target, cachedProjection);
+
+      expect(
+        Array.from(
+          { length: target.buffer.normal.length },
+          (_, row) => target.buffer.normal.getLine(row)?.translateToString(true) ?? "",
+        ),
+      ).toEqual(["OLDER-1", "OLDER-2", "CURRENT", "", "PROMPT", "STATUS"]);
+      expect(target.buffer.normal.getLine(2)?.getCell(0)?.isAttributeDefault()).toBe(true);
+    } finally {
+      target.dispose();
+      source.dispose();
+    }
   });
 
   beforeEach(() => {

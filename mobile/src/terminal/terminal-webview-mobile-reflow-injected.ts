@@ -32,6 +32,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   var mobileSourceRevision = 0;
   var mobileLiveInputText = '';
   var mobileSnapshotProjectionPlan = null;
+  var mobileSnapshotProjectionModel = null;
+  var mobileSnapshotNormalSerializationCache = null;
+  var mobileSnapshotNormalGeometryCache = null;
+  var mobileNormalBufferRevision = 0;
   var mobileSnapshotRefreshDeferredForInteraction = false;
   var mobileAdaptiveRefreshDeferredForInteraction = false;
 
@@ -136,6 +140,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     mobileSnapshotBuildOldLayout = '';
     mobileSourceRevision = 0;
     mobileSnapshotProjectionPlan = null;
+    mobileSnapshotProjectionModel = null;
+    mobileSnapshotNormalSerializationCache = null;
+    mobileSnapshotNormalGeometryCache = null;
+    mobileNormalBufferRevision = 0;
     mobileSnapshotRefreshDeferredForInteraction = false;
     mobileAdaptiveRefreshDeferredForInteraction = false;
     clearMobileRefreshTimer();
@@ -643,28 +651,182 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     };
   }
 
-  function mobileSnapshotProjectionBuffer(buffer, plan) {
-    if (!plan) return buffer;
-    // SerializeAddon reads this facade; the canonical source lines are never
-    // mutated. Continuations lose Codex's layout columns and advertise a soft
-    // boundary; word wraps retain one blank when Codex consumed a separator.
+  function mobileSnapshotProjectionLineWithWrap(line, isWrapped) {
+    if (!line || line.isWrapped === isWrapped) return line;
     return {
-      type: buffer.type,
-      length: buffer.length,
-      baseY: buffer.baseY,
-      viewportY: buffer.viewportY,
-      cursorX: Math.max(
-        0,
-        (buffer.cursorX || 0) - mobileSnapshotRowSkip(
-          plan,
+      isWrapped: isWrapped,
+      length: typeof line.length === 'number' ? line.length : mobileSourceTerm.cols,
+      getCell: function(col, reusableCell) {
+        return line.getCell(col, reusableCell);
+      },
+      translateToString: function(trimRight, startCol, endCol) {
+        return line.translateToString(trimRight, startCol, endCol);
+      }
+    };
+  }
+
+  function mobileSnapshotLastProjectionRow(buffer, includeCursor) {
+    if (!buffer || buffer.length <= 0) return -1;
+    var lastRow = includeCursor
+      ? Math.min(
+          buffer.length - 1,
           (buffer.baseY || 0) + (buffer.cursorY || 0)
         )
-      ),
-      cursorY: buffer.cursorY,
-      getNullCell: function() { return buffer.getNullCell(); },
-      getLine: function(row) {
-        return mobileSnapshotProjectionLine(buffer, buffer.getLine(row), row, plan);
+      : -1;
+    for (var row = buffer.length - 1; row > lastRow; row--) {
+      if (mobileSourceLineContentEnd(buffer.getLine(row)) > 0) return row;
+    }
+    return lastRow;
+  }
+
+  // Flatten loaded normal history and the current alternate screen through one
+  // row facade so serialization, links, and the independent cursor cannot drift.
+  function createMobileSnapshotProjectionModel(source, plan) {
+    if (!source || !source.buffer || !source.buffer.active) return null;
+    var activeBuffer = source.buffer.active;
+    var normalBuffer = source.buffer.normal;
+    var projectionRows = [];
+    var cursorSourceRow = (activeBuffer.baseY || 0) + (activeBuffer.cursorY || 0);
+    var cursorProjectionRow = -1;
+    var cursorProjectionCol = Math.max(
+      0,
+      (activeBuffer.cursorX || 0) - mobileSnapshotRowSkip(plan, cursorSourceRow)
+    );
+    var blankRunThreshold = Math.max(
+      6,
+      Math.min(12, Math.floor(Math.max(1, source.rows || 1) / 4))
+    );
+
+    function appendProjectionRow(buffer, row, rowPlan, forceBreak) {
+      var line = mobileSnapshotProjectionLine(
+        buffer,
+        buffer.getLine(row),
+        row,
+        rowPlan
+      );
+      if (!line) return;
+      if (forceBreak) line = mobileSnapshotProjectionLineWithWrap(line, false);
+      projectionRows.push(line);
+      if (buffer === activeBuffer && row === cursorSourceRow) {
+        cursorProjectionRow = projectionRows.length - 1;
       }
+    }
+
+    function appendBuffer(buffer, lastRow, rowPlan, compactBlankRuns, forceFirstBreak) {
+      if (!buffer || lastRow < 0) return;
+      var pendingBlankRows = [];
+      var appendedAny = false;
+      var forceNextRowBreak = false;
+
+      function flushBlankRows(hasFollowingContent) {
+        if (pendingBlankRows.length === 0) return;
+        var shouldCompact =
+          compactBlankRuns && pendingBlankRows.length >= blankRunThreshold;
+        if (shouldCompact) {
+          if (projectionRows.length > 0 && hasFollowingContent) {
+            appendProjectionRow(
+              buffer,
+              pendingBlankRows[0],
+              rowPlan,
+              forceFirstBreak && !appendedAny
+            );
+            appendedAny = true;
+            forceNextRowBreak = true;
+          }
+        } else {
+          for (var blankIndex = 0; blankIndex < pendingBlankRows.length; blankIndex++) {
+            appendProjectionRow(
+              buffer,
+              pendingBlankRows[blankIndex],
+              rowPlan,
+              forceFirstBreak && !appendedAny
+            );
+            appendedAny = true;
+          }
+        }
+        pendingBlankRows = [];
+      }
+
+      for (var row = 0; row <= lastRow; row++) {
+        var line = mobileSnapshotProjectionLine(
+          buffer,
+          buffer.getLine(row),
+          row,
+          rowPlan
+        );
+        var isCursorRow = buffer === activeBuffer && row === cursorSourceRow;
+        if (
+          compactBlankRuns &&
+          !isCursorRow &&
+          mobileSourceLineContentEnd(line) === 0
+        ) {
+          pendingBlankRows.push(row);
+          continue;
+        }
+        flushBlankRows(true);
+        appendProjectionRow(
+          buffer,
+          row,
+          rowPlan,
+          (forceFirstBreak && !appendedAny) || forceNextRowBreak
+        );
+        appendedAny = true;
+        forceNextRowBreak = false;
+      }
+      flushBlankRows(false);
+    }
+
+    if (
+      activeBuffer.type === 'alternate' &&
+      normalBuffer &&
+      normalBuffer !== activeBuffer
+    ) {
+      appendBuffer(
+        normalBuffer,
+        mobileSnapshotLastProjectionRow(normalBuffer, false),
+        null,
+        false,
+        false
+      );
+    }
+    var normalRowCount = projectionRows.length;
+    appendBuffer(
+      activeBuffer,
+      mobileSnapshotLastProjectionRow(activeBuffer, true),
+      plan,
+      activeBuffer.type === 'alternate',
+      projectionRows.length > 0
+    );
+
+    if (projectionRows.length === 0) {
+      var fallbackLine = activeBuffer.getLine(0);
+      if (fallbackLine) {
+        projectionRows.push(fallbackLine);
+        cursorProjectionRow = cursorSourceRow === 0 ? 0 : -1;
+      }
+    }
+
+    var cursorY = cursorProjectionRow < 0
+      ? 0
+      : Math.min(Math.max(0, (source.rows || 1) - 1), cursorProjectionRow);
+    var baseY = cursorProjectionRow < 0 ? 0 : cursorProjectionRow - cursorY;
+    var projectionBuffer = {
+      type: 'normal',
+      length: projectionRows.length,
+      baseY: baseY,
+      viewportY: baseY,
+      cursorX: cursorProjectionCol,
+      cursorY: cursorY,
+      getNullCell: function() { return activeBuffer.getNullCell(); },
+      getLine: function(row) { return projectionRows[row]; }
+    };
+    return {
+      sourceRevision: mobileSourceRevision,
+      buffer: projectionBuffer,
+      cursorRow: cursorProjectionRow,
+      cursorCol: cursorProjectionCol,
+      normalBuffer: activeBuffer.type === 'alternate' ? normalBuffer : null,
+      normalRowCount: normalRowCount
     };
   }
 
@@ -732,12 +894,56 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     // or the final desktop cursor move into the phone-width projection.
     var plan = findMobileCodexSnapshotProjectionPlan(buffer);
     mobileSnapshotProjectionPlan = plan;
-    var serialized = mobileSourceSerializeAddon._serializeBufferByRange(
-      source,
-      mobileSnapshotProjectionBuffer(buffer, plan),
-      { start: 0, end: buffer.length - 1 },
-      true
-    );
+    mobileSnapshotProjectionModel = createMobileSnapshotProjectionModel(source, plan);
+    if (!mobileSnapshotProjectionModel || mobileSnapshotProjectionModel.buffer.length <= 0) {
+      return '';
+    }
+    var projectionBuffer = mobileSnapshotProjectionModel.buffer;
+    var normalRowCount = mobileSnapshotProjectionModel.normalRowCount || 0;
+    var serialized;
+    if (normalRowCount > 0 && normalRowCount < projectionBuffer.length) {
+      var normalCache = mobileSnapshotNormalSerializationCache;
+      var normalSerialized;
+      if (
+        normalCache &&
+        normalCache.source === source &&
+        normalCache.buffer === mobileSnapshotProjectionModel.normalBuffer &&
+        normalCache.rowCount === normalRowCount &&
+        normalCache.normalRevision === mobileNormalBufferRevision
+      ) {
+        normalSerialized = normalCache.serialized;
+      } else {
+        normalSerialized = mobileSourceSerializeAddon._serializeBufferByRange(
+          source,
+          projectionBuffer,
+          { start: 0, end: normalRowCount - 1 },
+          true
+        );
+        mobileSnapshotNormalSerializationCache = {
+          source: source,
+          buffer: mobileSnapshotProjectionModel.normalBuffer,
+          rowCount: normalRowCount,
+          normalRevision: mobileNormalBufferRevision,
+          serialized: normalSerialized
+        };
+      }
+      var alternateSerialized = mobileSourceSerializeAddon._serializeBufferByRange(
+        source,
+        projectionBuffer,
+        { start: normalRowCount, end: projectionBuffer.length - 1 },
+        true
+      );
+      // Each range serializer assumes default starting attributes. Reset at
+      // the buffer boundary so cached history cannot leak style into the TUI.
+      serialized = normalSerialized + '\x1b[0m\r\n' + alternateSerialized;
+    } else {
+      serialized = mobileSourceSerializeAddon._serializeBufferByRange(
+        source,
+        projectionBuffer,
+        { start: 0, end: projectionBuffer.length - 1 },
+        true
+      );
+    }
     return makeMobileSerializedProjectionReflowSafe(serialized);
   }
 
@@ -890,9 +1096,21 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var service = mobileSourceOscLinkService();
     mobileProjectedContentRows = 0;
     if (!source || targetCols <= 0) return [];
-    var buffer = isMobileReflowSnapshotLayout()
-      ? source.buffer.active
-      : source.buffer.normal;
+    // Keep geometry tied to the model that produced the serialized frame. The
+    // source can advance while a hidden replacement terminal is still parsing.
+    var snapshotModel = isMobileReflowSnapshotLayout()
+      ? mobileSnapshotProjectionModel
+      : null;
+    if (isMobileReflowSnapshotLayout() && !snapshotModel) {
+      var currentPlan = mobileSnapshotProjectionPlan &&
+        mobileSnapshotProjectionPlan.sourceRevision === mobileSourceRevision
+        ? mobileSnapshotProjectionPlan
+        : findMobileCodexSnapshotProjectionPlan(source.buffer.active);
+      snapshotModel = createMobileSnapshotProjectionModel(source, currentPlan);
+      mobileSnapshotProjectionPlan = currentPlan;
+      mobileSnapshotProjectionModel = snapshotModel;
+    }
+    var buffer = snapshotModel ? snapshotModel.buffer : source.buffer.normal;
     var links = [];
     var targetRow = 0;
     var targetCol = 0;
@@ -900,7 +1118,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var projectedCursor = null;
     var projectedBgMode = 0;
     var projectedBgColor = -1;
-    var projectionPlan = isMobileReflowSnapshotLayout() &&
+    var projectionPlan = isMobileReflowSnapshotLayout() && !snapshotModel &&
       mobileSnapshotProjectionPlan &&
       mobileSnapshotProjectionPlan.sourceRevision === mobileSourceRevision
       ? mobileSnapshotProjectionPlan
@@ -943,21 +1161,71 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       return changed;
     }
 
-    var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
-    var lastSourceRow = Math.min(buffer.length - 1, cursorRow);
-    for (var candidateRow = buffer.length - 1; candidateRow > lastSourceRow; candidateRow--) {
-      var candidateLine = mobileSnapshotProjectionLine(
-        buffer,
-        buffer.getLine(candidateRow),
-        candidateRow,
-        projectionPlan
-      );
-      if (mobileSourceLineContentEnd(candidateLine) > 0) {
-        lastSourceRow = candidateRow;
-        break;
+    var firstSourceRow = 0;
+    var normalRowCount = snapshotModel ? snapshotModel.normalRowCount || 0 : 0;
+    var normalGeometryCache = mobileSnapshotNormalGeometryCache;
+    if (
+      snapshotModel &&
+      normalRowCount > 0 &&
+      normalGeometryCache &&
+      normalGeometryCache.source === source &&
+      normalGeometryCache.buffer === snapshotModel.normalBuffer &&
+      normalGeometryCache.rowCount === normalRowCount &&
+      normalGeometryCache.normalRevision === mobileNormalBufferRevision &&
+      normalGeometryCache.targetCols === targetCols
+    ) {
+      links = normalGeometryCache.links.slice();
+      targetRow = normalGeometryCache.targetRow;
+      targetCol = normalGeometryCache.targetCol;
+      firstSourceRow = normalRowCount;
+    }
+
+    var cursorRow = snapshotModel
+      ? snapshotModel.cursorRow
+      : (buffer.baseY || 0) + (buffer.cursorY || 0);
+    var cursorCol = snapshotModel
+      ? snapshotModel.cursorCol
+      : buffer.cursorX || 0;
+    var lastSourceRow = snapshotModel
+      ? buffer.length - 1
+      : Math.min(buffer.length - 1, cursorRow);
+    if (!snapshotModel) {
+      for (var candidateRow = buffer.length - 1; candidateRow > lastSourceRow; candidateRow--) {
+        var candidateLine = mobileSnapshotProjectionLine(
+          buffer,
+          buffer.getLine(candidateRow),
+          candidateRow,
+          projectionPlan
+        );
+        if (mobileSourceLineContentEnd(candidateLine) > 0) {
+          lastSourceRow = candidateRow;
+          break;
+        }
       }
     }
-    for (var row = 0; row <= lastSourceRow; row++) {
+    for (var row = firstSourceRow; row <= lastSourceRow; row++) {
+      if (
+        snapshotModel &&
+        normalRowCount > 0 &&
+        firstSourceRow === 0 &&
+        row === normalRowCount
+      ) {
+        closeActive();
+        mobileSnapshotNormalGeometryCache = {
+          source: source,
+          buffer: snapshotModel.normalBuffer,
+          rowCount: normalRowCount,
+          normalRevision: mobileNormalBufferRevision,
+          targetCols: targetCols,
+          links: links.slice(),
+          targetRow: targetRow,
+          targetCol: targetCol
+        };
+        // Serialization inserts SGR 0 between the independently serialized
+        // normal and alternate ranges.
+        projectedBgMode = 0;
+        projectedBgColor = -1;
+      }
       var line = mobileSnapshotProjectionLine(
         buffer,
         buffer.getLine(row),
@@ -973,10 +1241,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       if (cursorTargetTerm && row === cursorRow) {
         projectedCursor = mobileProjectedCursorWithinLine(
           line,
-          Math.max(
-            0,
-            (buffer.cursorX || 0) - mobileSnapshotRowSkip(projectionPlan, row)
-          ),
+          Math.max(0, cursorCol - mobileSnapshotRowSkip(projectionPlan, row)),
           targetRow,
           targetCol,
           targetCols
@@ -1887,10 +2152,17 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var data = parts.join('');
     var source = mobileSourceTerm;
     var generation = terminalGeneration;
+    var normalBufferMayChange =
+      source.buffer.active.type !== 'alternate' ||
+      /(?:\x1b\[|\x9b)\?(?:[0-9]+;)*(?:47|1047|1049)(?:;[0-9]+)*l/.test(data) ||
+      data.indexOf('\x1bc') !== -1;
     mobileWritesDraining = true;
     source.write(data, function() {
       if (generation !== terminalGeneration || source !== mobileSourceTerm) return;
       ensureTerminalCursorVisible(source);
+      if (normalBufferMayChange || source.buffer.active.type !== 'alternate') {
+        mobileNormalBufferRevision++;
+      }
       mobileSourceRevision++;
       mobileWritesDraining = false;
       handleMobileSourceBatch(data, safe);
