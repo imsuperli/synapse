@@ -204,7 +204,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
 
   function createMobileSourceTerminal(cols, rows) {
     var source = createMobileTerminal(cols, rows, 1, 30000);
-    installMobileTerminalScrollbackPreservation(source);
+    installMobileTerminalScrollbackPreservation(source, function() { return autoScrollDisabled; });
     loadMobileUnicodeAddon(source);
     if (window.SerializeAddon && window.SerializeAddon.SerializeAddon) {
       try {
@@ -220,7 +220,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   function createMobileProjectionTerminal(cols, rows, targetSurface) {
     var projection = createMobileTerminal(cols, rows, currentTextScale, 30000);
     projection.open(targetSurface || surface);
-    installMobileTerminalScrollbackPreservation(projection);
+    installMobileTerminalScrollbackPreservation(projection, function() { return autoScrollDisabled; });
     loadMobileWebglAddon(projection);
     loadMobileUnicodeAddon(projection);
     return projection;
@@ -1730,7 +1730,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
               mobileReflowLayout = 'snapshot';
               initRows = dimensions.rows;
               initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols, nextTerm);
-              mobileSourceTerm.options.scrollback = 30000;
+              if (!autoScrollDisabled) mobileSourceTerm.options.scrollback = 30000;
               if (autoScrollDisabled) {
                 try { nextTerm.scrollToLine(latestViewportY); } catch (e) {}
               } else {

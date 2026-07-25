@@ -1,5 +1,5 @@
 export const TERMINAL_SCROLLBACK_PRESERVATION_JS = String.raw`
-  function installMobileTerminalScrollbackPreservation(terminal) {
+  function installMobileTerminalScrollbackPreservation(terminal, isReadingHistory) {
     var core = terminal && terminal._core;
     var bufferService = core && core._bufferService;
     var inputHandler = core && core._inputHandler;
@@ -8,7 +8,30 @@ export const TERMINAL_SCROLLBACK_PRESERVATION_JS = String.raw`
       return { dispose: function() {} };
     }
 
-    return terminal.parser.registerCsiHandler({ final: 'S' }, function(params) {
+    var configuredScrollback = terminal.options.scrollback || 1000;
+    var readingScrollback = Math.max(configuredScrollback, Math.min(100000, configuredScrollback * 4));
+    var originalScroll = bufferService.scroll;
+    var guardedScroll = function(eraseAttr, isWrapped) {
+      var buffer = bufferService.buffer;
+      var currentScrollback = terminal.options.scrollback || configuredScrollback;
+      var reading = typeof isReadingHistory === 'function' && isReadingHistory() === true;
+      if (terminal.buffer.active.type === 'normal') {
+        if (!reading && currentScrollback > configuredScrollback) {
+          terminal.options.scrollback = configuredScrollback;
+        } else if (
+          reading &&
+          buffer.lines &&
+          buffer.lines.isFull &&
+          currentScrollback < readingScrollback
+        ) {
+          terminal.options.scrollback = readingScrollback;
+        }
+      }
+      originalScroll.call(bufferService, eraseAttr, isWrapped);
+    };
+    bufferService.scroll = guardedScroll;
+
+    var csiDisposable = terminal.parser.registerCsiHandler({ final: 'S' }, function(params) {
       var buffer = bufferService.buffer;
       if (terminal.buffer.active.type !== 'normal' || buffer.scrollTop !== 0) {
         return false;
@@ -36,5 +59,13 @@ export const TERMINAL_SCROLLBACK_PRESERVATION_JS = String.raw`
       }
       return true;
     });
+    return {
+      dispose: function() {
+        csiDisposable.dispose();
+        if (bufferService.scroll === guardedScroll) {
+          bufferService.scroll = originalScroll;
+        }
+      }
+    };
   }
 `

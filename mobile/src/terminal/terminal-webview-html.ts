@@ -1084,7 +1084,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     term.open(surface);
     // Codex scrolls a top-anchored region with CSI S. xterm's default handler
     // deletes those rows instead of adding them to the normal scrollback.
-    installMobileTerminalScrollbackPreservation(term);
+    installMobileTerminalScrollbackPreservation(term, function() { return autoScrollDisabled; });
     if (window.WebglAddon && window.WebglAddon.WebglAddon) {
       try { var webglAddon = new window.WebglAddon.WebglAddon(); term.loadAddon(webglAddon); if (webglAddon.onContextLoss) webglAddon.onContextLoss(function() { try { webglAddon && webglAddon.dispose && webglAddon.dispose(); } catch (e) {} }); } catch (e) {}
     }

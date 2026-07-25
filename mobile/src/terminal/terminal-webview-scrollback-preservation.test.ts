@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { XTERM_HTML } from './terminal-webview-html'
 import { TERMINAL_SCROLLBACK_PRESERVATION_JS } from './terminal-webview-scrollback-preservation-injected'
 
-type ScrollbackInstaller = (terminal: Terminal) => { dispose(): void }
+type ScrollbackInstaller = (
+  terminal: Terminal,
+  isReadingHistory?: () => boolean
+) => { dispose(): void }
 
 function createInstaller(): ScrollbackInstaller {
   return new Function(
@@ -24,7 +27,9 @@ function readNormalBufferLines(terminal: Terminal): string[] {
 
 describe('mobile terminal scrollback preservation', () => {
   it('installs the preservation handler in every WebView terminal instance', () => {
-    expect(XTERM_HTML).toContain('installMobileTerminalScrollbackPreservation(term);')
+    expect(XTERM_HTML).toContain(
+      'installMobileTerminalScrollbackPreservation(term, function() { return autoScrollDisabled; });'
+    )
   })
 
   it('keeps rows removed by Codex top-anchored region scrolling', async () => {
@@ -64,6 +69,34 @@ describe('mobile terminal scrollback preservation', () => {
 
       expect(terminal.buffer.normal.length).toBe(normalLengthBefore)
       expect(terminal.buffer.active.type).toBe('alternate')
+    } finally {
+      disposable.dispose()
+      terminal.dispose()
+    }
+  })
+
+  it('adds bounded headroom before xterm trims rows being read', async () => {
+    const terminal = new Terminal({ cols: 20, rows: 5, scrollback: 5 })
+    let reading = true
+    const disposable = createInstaller()(terminal, () => reading)
+
+    try {
+      await writeTerminal(
+        terminal,
+        Array.from({ length: 12 }, (_, index) => `ROW-${index}\r\n`).join('')
+      )
+      terminal.scrollToTop()
+      const topBefore = terminal.buffer.normal.getLine(0)?.translateToString(true)
+
+      await writeTerminal(terminal, 'LIVE\r\n')
+
+      expect(terminal.options.scrollback).toBe(20)
+      expect(terminal.buffer.normal.getLine(0)?.translateToString(true)).toBe(topBefore)
+
+      reading = false
+      terminal.scrollToBottom()
+      await writeTerminal(terminal, 'FOLLOW\r\n')
+      expect(terminal.options.scrollback).toBe(5)
     } finally {
       disposable.dispose()
       terminal.dispose()
