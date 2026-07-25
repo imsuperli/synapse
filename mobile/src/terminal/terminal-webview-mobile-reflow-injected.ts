@@ -1557,6 +1557,78 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     } catch (e) {}
   }
 
+  function mobileViewportAnchorLineText(buffer, row) {
+    try {
+      var line = buffer && buffer.getLine ? buffer.getLine(row) : null;
+      if (!line || !line.translateToString) return '';
+      var text = line.translateToString(true) || '';
+      return text ? text.slice(0, 512) : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function captureMobileViewportContentAnchor(targetTerm) {
+    var buffer = targetTerm && targetTerm.buffer && targetTerm.buffer.active;
+    if (!buffer) return null;
+    var viewportY = Math.max(0, buffer.viewportY || 0);
+    var baseY = Math.max(0, buffer.baseY || 0);
+    var rows = Math.max(1, targetTerm.rows || 1);
+    var maxRow = Math.min(buffer.length || 0, viewportY + rows);
+    for (var row = viewportY; row < maxRow; row++) {
+      var text = mobileViewportAnchorLineText(buffer, row);
+      if (text) {
+        return {
+          text: text,
+          rowOffset: row - viewportY,
+          absoluteViewportY: viewportY,
+          rowsFromBottom: Math.max(0, baseY - viewportY)
+        };
+      }
+    }
+    return {
+      text: '',
+      rowOffset: 0,
+      absoluteViewportY: viewportY,
+      rowsFromBottom: Math.max(0, baseY - viewportY)
+    };
+  }
+
+  function findMobileViewportAnchorRow(buffer, anchor, expectedRow) {
+    if (!anchor || !anchor.text || !buffer || !buffer.getLine) return -1;
+    var length = Math.max(0, buffer.length || 0);
+    if (length <= 0) return -1;
+    var center = Math.max(0, Math.min(length - 1, Math.floor(expectedRow)));
+    var maxRadius = Math.min(length - 1, 12000);
+    for (var radius = 0; radius <= maxRadius; radius++) {
+      var before = center - radius;
+      if (before >= 0 && mobileViewportAnchorLineText(buffer, before) === anchor.text) {
+        return before;
+      }
+      var after = center + radius;
+      if (radius > 0 && after < length && mobileViewportAnchorLineText(buffer, after) === anchor.text) {
+        return after;
+      }
+    }
+    return -1;
+  }
+
+  function restoreMobileViewportContentAnchor(targetTerm, anchor) {
+    if (!targetTerm || !targetTerm.buffer || !targetTerm.buffer.active || !anchor) return;
+    var buffer = targetTerm.buffer.active;
+    var baseY = Math.max(0, buffer.baseY || 0);
+    var fallbackY = typeof anchor.rowsFromBottom === 'number'
+      ? baseY - anchor.rowsFromBottom
+      : anchor.absoluteViewportY;
+    var expectedAnchorRow = fallbackY + (anchor.rowOffset || 0);
+    var matchedRow = findMobileViewportAnchorRow(buffer, anchor, expectedAnchorRow);
+    var viewportY = matchedRow >= 0
+      ? matchedRow - (anchor.rowOffset || 0)
+      : fallbackY;
+    if (!isFinite(viewportY)) viewportY = anchor.absoluteViewportY || 0;
+    try { targetTerm.scrollToLine(Math.max(0, Math.min(baseY, Math.floor(viewportY)))); } catch (e) {}
+  }
+
   function discardMobileSnapshotReplacement(
     token,
     gen,
@@ -1651,7 +1723,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var oldSurface = surface;
     var oldLayout = mobileReflowLayout;
     mobileSnapshotBuildOldLayout = oldLayout;
-    var scrollAnchorRows = mobileProjectionScrollAnchor(oldTerm);
+    var viewportContentAnchor = autoScrollDisabled
+      ? captureMobileViewportContentAnchor(oldTerm)
+      : null;
     var dimensions = null;
     var nextSurface = null;
     var nextTerm = null;
@@ -1721,9 +1795,6 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
               return;
             }
             try {
-              var latestViewportY = oldTerm && oldTerm.buffer && oldTerm.buffer.active
-                ? Math.max(0, oldTerm.buffer.active.viewportY || 0)
-                : 0;
               disposeTermObservers();
               term = nextTerm;
               surface = nextSurface;
@@ -1732,7 +1803,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
               initialOscLinks = collectMobileProjectedOscLinks(dimensions.cols, nextTerm);
               if (!autoScrollDisabled) mobileSourceTerm.options.scrollback = 30000;
               if (autoScrollDisabled) {
-                try { nextTerm.scrollToLine(latestViewportY); } catch (e) {}
+                restoreMobileViewportContentAnchor(nextTerm, viewportContentAnchor);
               } else {
                 try { nextTerm.scrollToBottom(); } catch (e) {}
               }

@@ -39,6 +39,8 @@ class FakeTerminal {
   static deferredOpenedWrites: Array<() => void> = [];
   static nextOpenedWriteBaseY: number | null = null;
   static afterNextOpenedWriteCallback: (() => void) | null = null;
+  static nextOpenedLineTexts: Map<number, string> | null = null;
+  static nextOpenedBufferLength: number | null = null;
 
   static releaseDeferredOpenedWrites(): void {
     const pending = FakeTerminal.deferredOpenedWrites;
@@ -60,6 +62,7 @@ class FakeTerminal {
   scrollToLineCalls: number[] = [];
   scrollToBottomCalls = 0;
   __mobileSnapshotCursor: { contentRow: number; col: number } | null = null;
+  lineTexts = new Map<number, string>();
   private writeParsedListeners: Array<() => void> = [];
 
   private readonly stableLine: FakeLine = {
@@ -86,7 +89,21 @@ class FakeTerminal {
     viewportY: 0,
     cursorX: 0,
     cursorY: 0,
-    getLine: (_row: number) => (this.unstable ? this.unstableLine : this.stableLine),
+    getLine: (row: number) => {
+      const text = this.lineTexts.get(row);
+      if (text !== undefined) {
+        return {
+          isWrapped: false,
+          translateToString: () => text,
+          getCell: (col = 0) => ({
+            getWidth: () => 1,
+            getChars: () => text.charAt(col),
+            extended: { urlId: 0 },
+          }),
+        };
+      }
+      return this.unstable ? this.unstableLine : this.stableLine;
+    },
   };
 
   readonly alternateBuffer = {
@@ -131,6 +148,14 @@ class FakeTerminal {
       scrollWidth: this.cols * cellWidth,
       scrollHeight: this.rows * cellHeight,
     };
+    if (FakeTerminal.nextOpenedLineTexts) {
+      this.lineTexts = new Map(FakeTerminal.nextOpenedLineTexts);
+      FakeTerminal.nextOpenedLineTexts = null;
+    }
+    if (FakeTerminal.nextOpenedBufferLength !== null) {
+      this.normalBuffer.length = FakeTerminal.nextOpenedBufferLength;
+      FakeTerminal.nextOpenedBufferLength = null;
+    }
   }
 
   write(data: string, callback?: () => void): void {
@@ -870,6 +895,8 @@ describe("terminal WebView mobile reflow", () => {
     FakeTerminal.deferredOpenedWrites = [];
     FakeTerminal.nextOpenedWriteBaseY = null;
     FakeTerminal.afterNextOpenedWriteCallback = null;
+    FakeTerminal.nextOpenedLineTexts = null;
+    FakeTerminal.nextOpenedBufferLength = null;
     FakeSerializeAddon.throwNextRange = false;
   });
 
@@ -1130,7 +1157,7 @@ describe("terminal WebView mobile reflow", () => {
     await settle();
 
     expect(pendingProjection?.openedSurface?.style.visibility).toBe("visible");
-    expect(pendingProjection?.scrollToLineCalls).toContain(60);
+    expect(pendingProjection?.scrollToLineCalls).toContain(160);
     expect(oldProjection.disposed).toBe(true);
     expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
     expect(document.querySelectorAll("#terminal-surface")).toHaveLength(1);
@@ -1150,6 +1177,26 @@ describe("terminal WebView mobile reflow", () => {
     const replacement = FakeTerminal.instances[2];
     expect(replacement?.scrollToBottomCalls).toBeGreaterThan(0);
     expect(replacement?.normalBuffer.viewportY).toBe(200);
+  });
+
+  it("restores the same visible content after snapshot rows shift", async () => {
+    boot("initial\r\n");
+    await settle();
+    sendWebViewMessage({ type: "set-auto-scroll-disabled", disabled: true });
+    const oldProjection = FakeTerminal.instances[1];
+    oldProjection.normalBuffer.baseY = 100;
+    oldProjection.normalBuffer.viewportY = 60;
+    oldProjection.normalBuffer.length = 101;
+    oldProjection.lineTexts.set(62, "UNIQUE-VISIBLE-ANCHOR");
+    FakeTerminal.nextOpenedWriteBaseY = 200;
+    FakeTerminal.nextOpenedBufferLength = 201;
+    FakeTerminal.nextOpenedLineTexts = new Map([[125, "UNIQUE-VISIBLE-ANCHOR"]]);
+
+    sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
+    await settle(220);
+
+    const replacement = FakeTerminal.instances[2];
+    expect(replacement?.scrollToLineCalls).toContain(123);
   });
 
   it("does not replace the visible projection while a touch gesture is active", async () => {
