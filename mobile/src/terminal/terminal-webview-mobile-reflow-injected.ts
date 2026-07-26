@@ -355,6 +355,18 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return 0;
   }
 
+  function mobileSourceLineHasVisibleContent(line) {
+    if (!line || !mobileSourceTerm) return false;
+    for (var col = 0; col < mobileSourceTerm.cols; col++) {
+      var cell = line.getCell(col);
+      if (!cell || cell.getWidth() === 0) continue;
+      var chars = cell.getChars ? cell.getChars() : '';
+      if (chars && chars.trim().length > 0) return true;
+      if (mobileCellOscLinkId(cell)) return true;
+    }
+    return false;
+  }
+
   function mobileSourceLineTextEnd(line, startCol) {
     if (!line || !mobileSourceTerm) return startCol;
     for (var col = mobileSourceTerm.cols - 1; col >= startCol; col--) {
@@ -674,7 +686,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
         )
       : -1;
     for (var row = buffer.length - 1; row > lastRow; row--) {
-      if (mobileSourceLineContentEnd(buffer.getLine(row)) > 0) return row;
+      if (mobileSourceLineHasVisibleContent(buffer.getLine(row))) return row;
     }
     return lastRow;
   }
@@ -758,7 +770,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
         if (
           compactBlankRuns &&
           !isCursorRow &&
-          mobileSourceLineContentEnd(line) === 0
+          !mobileSourceLineHasVisibleContent(line)
         ) {
           pendingBlankRows.push(row);
           continue;

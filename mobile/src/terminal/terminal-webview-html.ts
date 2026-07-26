@@ -1907,11 +1907,11 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   }
 
   function shouldRouteScrollToTerminalInput() {
-    // Explicit history-reading mode owns the projected scrollback even when
-    // the desktop application is still using its alternate screen.
-    return !autoScrollDisabled && (
-      isWheelMouseTrackingMode(getMouseTrackingMode()) || isAlternateBufferActive()
-    );
+    if (autoScrollDisabled) return false;
+    if (isWheelMouseTrackingMode(getMouseTrackingMode())) return true;
+    if (!isAlternateBufferActive()) return false;
+    // Projected snapshots own local history; exact-grid fallbacks route to TUI.
+    return !isMobileReflowProjectionLayout();
   }
 
   function buildMouseWheelScrollInput(lines, clientX, clientY) {

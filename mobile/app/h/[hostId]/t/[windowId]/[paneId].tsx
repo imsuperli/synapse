@@ -3541,7 +3541,13 @@ export default function RemoteTerminalScreen() {
                                 }
                                 accessibilityState={{ selected: autoScrollDisabled }}
                               >
-                                <Text numberOfLines={1} style={styles.accessoryKeyText}>
+                                <Text
+                                  numberOfLines={1}
+                                  style={[
+                                    styles.accessoryKeyText,
+                                    autoScrollDisabled && styles.accessoryScrollLockedText
+                                  ]}
+                                >
                                   {'⇳'}
                                 </Text>
                               </Pressable>
@@ -3876,7 +3882,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.statusRed
   },
   accessoryScrollLocked: {
-    backgroundColor: colors.statusRed
+    borderRadius: radii.button,
+    backgroundColor: colors.textSecondary
+  },
+  accessoryScrollLockedText: {
+    color: colors.terminalBg
   },
   accessoryKeyDisabled: {
     opacity: 0.35

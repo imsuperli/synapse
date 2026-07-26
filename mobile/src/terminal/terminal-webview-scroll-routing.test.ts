@@ -40,9 +40,14 @@ describe('TerminalWebView scroll routing', () => {
     expect(nextViewportY).toBe(118)
   })
 
-  it('routes alternate-screen and mouse-aware scroll before smooth normal scroll while live', () => {
-    expect(source).toContain(
-      'return !autoScrollDisabled && (\n      isWheelMouseTrackingMode(getMouseTrackingMode()) || isAlternateBufferActive()'
+  it('routes mouse-aware scroll before smooth normal scroll while live', () => {
+    const routingDecision = sliceBetween(
+      'function shouldRouteScrollToTerminalInput()',
+      'function buildMouseWheelScrollInput'
+    )
+    expect(routingDecision).toContain('if (autoScrollDisabled) return false;')
+    expect(routingDecision).toContain(
+      'if (isWheelMouseTrackingMode(getMouseTrackingMode())) return true;'
     )
 
     const touchMoveBlock = sliceBetween(
@@ -61,12 +66,12 @@ describe('TerminalWebView scroll routing', () => {
     expect(momentumBlock).toContain('routeScrollLines(lines, ts.lastX, ts.lastY);')
   })
 
-  it('gives explicit history-reading mode ownership before alternate-screen TUI routing', () => {
+  it('gives explicit history-reading mode ownership before TUI routing', () => {
     const routingDecision = sliceBetween(
       'function shouldRouteScrollToTerminalInput()',
       'function buildMouseWheelScrollInput'
     )
-    expect(routingDecision).toContain('!autoScrollDisabled')
+    expect(routingDecision).toContain('if (autoScrollDisabled) return false;')
 
     const routeBlock = sliceBetween(
       'function routeScrollLines(lines, clientX, clientY)',
@@ -79,6 +84,15 @@ describe('TerminalWebView scroll routing', () => {
     expect(alternateIndex).toBeGreaterThanOrEqual(0)
     expect(historyIndex).toBe(-1)
     expect(inputIndex).toBeGreaterThan(alternateIndex)
+  })
+
+  it('keeps projected mobile snapshots on local history scroll by default', () => {
+    const routingDecision = sliceBetween(
+      'function shouldRouteScrollToTerminalInput()',
+      'function buildMouseWheelScrollInput'
+    )
+    expect(routingDecision).toContain('if (!isAlternateBufferActive()) return false;')
+    expect(routingDecision).toContain('return !isMobileReflowProjectionLayout();')
   })
 
   it('does not rubber-band normal scroll at scrollback edges', () => {

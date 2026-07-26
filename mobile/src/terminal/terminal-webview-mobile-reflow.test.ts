@@ -803,6 +803,47 @@ describe("terminal WebView mobile reflow", () => {
     ]);
   });
 
+  it("compacts styled alternate-screen blank runs that contain no visible text", () => {
+    const history = projectionLine(Array.from("HISTORY").map((chars) => ({ chars })));
+    const current = projectionLine(Array.from("CURRENT").map((chars) => ({ chars })));
+    const styledBlankRows = Array.from({ length: 24 }, () =>
+      projectionLine(Array.from({ length: 20 }, () => ({ chars: "", background: 236 }))),
+    );
+    const prompt = projectionLine(Array.from("PROMPT").map((chars) => ({ chars })));
+    const source = sourceWithSnapshotBuffers(
+      [history],
+      [current, ...styledBlankRows, prompt],
+      25,
+      6,
+    );
+
+    const projection = projectSourceSnapshotRows(source, 12);
+
+    expect(projection.rows.map((row) => row.text)).toEqual([
+      "HISTORY",
+      "CURRENT",
+      "",
+      "PROMPT",
+    ]);
+    expect(projection.cursor).toEqual({ contentRow: 3, col: 6 });
+    expect(projection.contentRows).toBe(4);
+  });
+
+  it("drops trailing styled alternate-screen blank rows after the cursor", () => {
+    const history = projectionLine(Array.from("HISTORY").map((chars) => ({ chars })));
+    const prompt = projectionLine(Array.from("PROMPT").map((chars) => ({ chars })));
+    const styledBlankRows = Array.from({ length: 24 }, () =>
+      projectionLine(Array.from({ length: 20 }, () => ({ chars: "", background: 236 }))),
+    );
+    const source = sourceWithSnapshotBuffers([history], [prompt, ...styledBlankRows], 0, 6);
+
+    const projection = projectSourceSnapshotRows(source, 12);
+
+    expect(projection.rows.map((row) => row.text)).toEqual(["HISTORY", "PROMPT"]);
+    expect(projection.cursor).toEqual({ contentRow: 1, col: 6 });
+    expect(projection.contentRows).toBe(2);
+  });
+
   it("keeps cursor geometry paired with a serialized frame while source output advances", () => {
     const source = sourceWithSnapshotBuffers(
       [projectionLine(Array.from("HISTORY").map((chars) => ({ chars })))],
