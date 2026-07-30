@@ -42,6 +42,7 @@ import * as fs from 'fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
+import { createTerminalResizeControl } from '../../../shared/terminal-resize-control';
 
 function getPtyModule() {
   return ptyTestHarness.nodePty;
@@ -765,6 +766,60 @@ describe('ProcessManager', () => {
           evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
+    it('records resize controls in sequence and prefixes paged replay with its effective grid', async () => {
+      const ptyModule = getPtyModule();
+      let dataListener: ((data: string) => void) | undefined;
+      const ptyProcess = makeMockPtyProcess(4390);
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...ptyProcess,
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListener = handler;
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        const handle = await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-resize-history',
+          paneId: 'pane-resize-history',
+          initialCols: 80,
+          initialRows: 30,
+        });
+        const published: string[] = [];
+        processManager.subscribePtyData(handle.pid, (data) => published.push(data));
+
+        dataListener?.('before-resize');
+        processManager.resizePty(handle.pid, 120, 40);
+        dataListener?.('after-resize');
+
+        const resize120 = createTerminalResizeControl(120, 40);
+        expect(processManager.getPtyHistory('win-resize-history', 'pane-resize-history').chunks)
+          .toEqual(['before-resize', resize120, 'after-resize']);
+        expect(processManager.getPtyReplayChunks('win-resize-history', 'pane-resize-history').join(''))
+          .toBe(
+            createTerminalResizeControl(80, 30) +
+              'before-resize' +
+              resize120 +
+              'after-resize',
+          );
+        const pageStartingAtResize = processManager.getPtyHistoryEntriesSince(
+          'win-resize-history',
+          'pane-resize-history',
+          1,
+        ).entries;
+        expect(processManager.decoratePtyHistoryEntriesForReplay(
+          'win-resize-history',
+          'pane-resize-history',
+          pageStartingAtResize,
+        )[0]?.data).toBe(createTerminalResizeControl(80, 30) + resize120);
+        expect(published).toContain(resize120);
       } finally {
         spawnSpy.mockRestore();
       }

@@ -41,6 +41,7 @@ import {
   consumeTerminalOscColorQueries,
   type TerminalOscColorQueryReplyColors,
 } from '../../shared/terminal-osc-color-query';
+import { createTerminalResizeControl } from '../../shared/terminal-resize-control';
 
 type PaneHistoryEntry = {
   seq: number;
@@ -59,6 +60,12 @@ type PaneHistoryBuffer = {
   lastSeq: number;
   evictedBeforeSeq: number;
   keyboardState: TrackedKeyboardProtocolState;
+};
+
+type PaneResizeTimelineEntry = {
+  seq: number;
+  cols: number;
+  rows: number;
 };
 
 type PaneHistoryEntriesResult = {
@@ -107,6 +114,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   private ptyDataSubscribers: Map<number, Set<(chunk: PtyOutputChunk) => void>>;
   private terminalOscColorQueryPending: Map<number, string>;
   private paneHistoryBuffers: Map<string, PaneHistoryBuffer>;
+  private paneResizeTimelines: Map<string, PaneResizeTimelineEntry[]>;
   private terminalScreenSnapshots: Map<string, TerminalScreenSnapshot>;
   private paneIndex: Map<string, number>; // "windowId:paneId" 鈫?pid 绱㈠紩锛岀敤浜?O(1) 鏌ユ壘
   private sessionIndex: Map<string, string>; // "windowId:paneId" -> sessionId
@@ -144,6 +152,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.ptyDataSubscribers = new Map();
     this.terminalOscColorQueryPending = new Map();
     this.paneHistoryBuffers = new Map();
+    this.paneResizeTimelines = new Map();
     this.terminalScreenSnapshots = new Map();
     this.paneIndex = new Map();
     this.sessionIndex = new Map();
@@ -795,9 +804,28 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     const pty = this.ptys.get(pid);
     if (pty) {
       try {
+        const previousCols = processInfo.terminalCols;
+        const previousRows = processInfo.terminalRows;
         pty.resize(cols, rows);
         processInfo.terminalCols = cols;
         processInfo.terminalRows = rows;
+        if (cols !== previousCols || rows !== previousRows) {
+          const marker = createTerminalResizeControl(cols, rows);
+          const seq = this.appendPaneHistory(processInfo.windowId, processInfo.paneId, marker);
+          if (seq !== undefined && processInfo.paneId) {
+            const key = this.getPaneKey(processInfo.windowId, processInfo.paneId);
+            const timeline = this.paneResizeTimelines.get(key) ?? [];
+            timeline.push({ seq, cols, rows });
+            this.paneResizeTimelines.set(key, timeline);
+            const subscribers = this.ptyDataSubscribers.get(pid);
+            if (subscribers) {
+              const chunk = { data: marker, seq };
+              for (const subscriber of subscribers) {
+                subscriber(chunk);
+              }
+            }
+          }
+        }
       } catch (error) {
         // Window teardown can race with a final resize after the PTY has exited.
         if (this.isExitedPtyResizeError(error)) {
@@ -904,6 +932,14 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       evictedBeforeSeq: history.evictedBeforeSeq,
       keyboardState: cloneKeyboardProtocolState(history.keyboardState),
     };
+  }
+
+  getPtyReplayChunks(windowIdOrPaneId: string, paneId?: string): string[] {
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
+    return history
+      ? this.decoratePtyHistoryEntriesForReplay(windowIdOrPaneId, paneId, history.entries)
+          .map((entry) => entry.data)
+      : [];
   }
 
   getPtyHistoryEntriesSince(
@@ -1032,6 +1068,49 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     history.totalLength = 0;
     history.evictedBeforeSeq = Math.max(history.evictedBeforeSeq, history.lastSeq);
     history.nextSeq = Math.max(history.nextSeq, history.lastSeq + 1);
+    const dimensions = paneId
+      ? this.getPaneTerminalDimensions(windowIdOrPaneId, paneId)
+      : this.getPaneTerminalDimensions(windowIdOrPaneId);
+    if (dimensions.cols && dimensions.rows) {
+      this.paneResizeTimelines.set(
+        this.getPaneHistoryKey(windowIdOrPaneId, paneId),
+        [{ seq: history.lastSeq, cols: dimensions.cols, rows: dimensions.rows }],
+      );
+    }
+  }
+
+  decoratePtyHistoryEntriesForReplay(
+    windowIdOrPaneId: string,
+    paneId: string | undefined,
+    entries: ReadonlyArray<{ seq: number; data: string }>,
+  ): Array<{ seq: number; data: string }> {
+    if (entries.length === 0) {
+      return [];
+    }
+    const key = this.getPaneHistoryKey(windowIdOrPaneId, paneId);
+    const timeline = this.paneResizeTimelines.get(key) ?? [];
+    const firstSeq = entries[0]!.seq;
+    let effective: PaneResizeTimelineEntry | undefined;
+    for (const event of timeline) {
+      if (event.seq >= firstSeq) {
+        break;
+      }
+      effective = event;
+    }
+    if (!effective) {
+      const dimensions = paneId
+        ? this.getPaneTerminalDimensions(windowIdOrPaneId, paneId)
+        : this.getPaneTerminalDimensions(windowIdOrPaneId);
+      if (!dimensions.cols || !dimensions.rows) {
+        return entries.map((entry) => ({ ...entry }));
+      }
+      effective = { seq: 0, cols: dimensions.cols, rows: dimensions.rows };
+    }
+    const prefix = createTerminalResizeControl(effective.cols, effective.rows);
+    return entries.map((entry, index) => ({
+      ...entry,
+      data: index === 0 ? `${prefix}${entry.data}` : entry.data,
+    }));
   }
 
   getLatestPaneOutputSeq(paneId: string): number;
@@ -1930,6 +2009,11 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       this.paneHistoryBuffers.delete(oldKey);
       this.paneHistoryBuffers.set(newKey, history);
     }
+    const resizeTimeline = this.paneResizeTimelines.get(oldKey);
+    if (resizeTimeline && oldKey !== newKey) {
+      this.paneResizeTimelines.delete(oldKey);
+      this.paneResizeTimelines.set(newKey, resizeTimeline);
+    }
     const screenSnapshot = this.terminalScreenSnapshots.get(oldKey);
     if (screenSnapshot && oldKey !== newKey) {
       this.terminalScreenSnapshots.delete(oldKey);
@@ -1944,6 +2028,11 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       if (legacyHistory) {
         this.paneHistoryBuffers.delete(paneId);
         this.paneHistoryBuffers.set(newPaneId, legacyHistory);
+      }
+      const legacyResizeTimeline = this.paneResizeTimelines.get(paneId);
+      if (legacyResizeTimeline) {
+        this.paneResizeTimelines.delete(paneId);
+        this.paneResizeTimelines.set(newPaneId, legacyResizeTimeline);
       }
       const legacyScreenSnapshot = this.terminalScreenSnapshots.get(paneId);
       if (legacyScreenSnapshot) {
@@ -1991,7 +2080,9 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.ptys.delete(pid);
     if (processInfo.paneId) {
       this.paneHistoryBuffers.delete(this.getPaneKey(processInfo.windowId, processInfo.paneId));
+      this.paneResizeTimelines.delete(this.getPaneKey(processInfo.windowId, processInfo.paneId));
       this.paneHistoryBuffers.delete(processInfo.paneId);
+      this.paneResizeTimelines.delete(processInfo.paneId);
       this.clearTerminalScreenSnapshot(processInfo.windowId, processInfo.paneId);
     }
 
@@ -2015,6 +2106,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     }
 
     this.paneHistoryBuffers.delete(paneId);
+    this.paneResizeTimelines.delete(paneId);
     this.clearTerminalScreenSnapshot(windowId, paneId);
     this.paneHistoryBuffers.set(this.getPaneKey(windowId, paneId), {
       entries: [],
@@ -2024,6 +2116,16 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       evictedBeforeSeq: 0,
       keyboardState: createDefaultKeyboardProtocolState(),
     });
+    const dimensions = windowId
+      ? this.getPaneTerminalDimensions(windowId, paneId)
+      : this.getPaneTerminalDimensions(paneId);
+    if (dimensions.cols && dimensions.rows) {
+      this.paneResizeTimelines.set(this.getPaneKey(windowId, paneId), [{
+        seq: 0,
+        cols: dimensions.cols,
+        rows: dimensions.rows,
+      }]);
+    }
   }
 
   getPaneTerminalDimensions(paneId: string): { cols?: number; rows?: number };
@@ -2080,6 +2182,22 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       history.evictedBeforeSeq = Math.max(history.evictedBeforeSeq, removed.seq);
     }
 
+    const timeline = this.paneResizeTimelines.get(historyKey);
+    if (timeline && history.entries.length > 0) {
+      const firstSeq = history.entries[0]!.seq;
+      let keepFrom = 0;
+      for (let index = 0; index < timeline.length; index += 1) {
+        if (timeline[index]!.seq < firstSeq) {
+          keepFrom = index;
+        } else {
+          break;
+        }
+      }
+      if (keepFrom > 0) {
+        this.paneResizeTimelines.set(historyKey, timeline.slice(keepFrom));
+      }
+    }
+
     this.paneHistoryBuffers.set(historyKey, history);
     return seq;
   }
@@ -2102,6 +2220,18 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     }
 
     return undefined;
+  }
+
+  private getPaneHistoryKey(windowIdOrPaneId: string, paneId?: string): string {
+    if (paneId) {
+      return this.getPaneKey(windowIdOrPaneId, paneId);
+    }
+    for (const processInfo of this.processes.values()) {
+      if (processInfo.paneId === windowIdOrPaneId && processInfo.status !== ProcessStatus.Exited) {
+        return this.getPaneKey(processInfo.windowId, processInfo.paneId);
+      }
+    }
+    return this.getPaneKey(undefined, windowIdOrPaneId);
   }
 
   private scheduleProcessCleanup(pid: number): void {

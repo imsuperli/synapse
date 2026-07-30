@@ -90,10 +90,14 @@ export class RemoteTerminalController {
     if (typeof options.sinceSeq === 'number') {
       const history = this.processManager.getPtyHistoryEntriesSince(windowId, paneId, options.sinceSeq);
       const cursorAhead = options.sinceSeq > history.lastSeq;
-      const entries = limitHistoryEntriesForward(history.entries, {
-        limitBytes: options.limitBytes,
-        limitChunks: options.limitChunks,
-      });
+      const entries = this.decorateEntriesForReplay(
+        windowId,
+        paneId,
+        limitHistoryEntriesForward(history.entries, {
+          limitBytes: options.limitBytes,
+          limitChunks: options.limitChunks,
+        }),
+      );
       const lastSeq = entries.at(-1)?.seq ?? history.lastSeq;
       return {
         windowId,
@@ -124,10 +128,15 @@ export class RemoteTerminalController {
           limitChunks: options.limitChunks,
         },
       );
+      const replayEntries = this.decorateEntriesForReplay(
+        windowId,
+        paneId,
+        history.entries,
+      );
       return {
         windowId,
         paneId,
-        chunks: history.entries.map((entry) => entry.data),
+        chunks: replayEntries.map((entry) => entry.data),
         firstSeq: history.firstSeq,
         lastSeq: history.lastSeq,
         latestSeq: this.processManager.getLatestPaneOutputSeq(windowId, paneId),
@@ -143,7 +152,7 @@ export class RemoteTerminalController {
     return {
       windowId,
       paneId,
-      chunks: history.chunks,
+      chunks: this.getReplayChunks(windowId, paneId, history.chunks),
       firstSeq: history.firstSeq,
       lastSeq: history.lastSeq,
       latestSeq: history.lastSeq,
@@ -320,8 +329,13 @@ export class RemoteTerminalController {
       },
     );
     const screenSnapshot = this.processManager.getTerminalScreenSnapshot(windowId, paneId);
-    const snapshotLastSeq = history.entries.at(-1)?.seq ?? latestSeqBeforeHistory;
-    let serialized = history.entries.map((entry) => entry.data).join('');
+    const replayEntries = this.decorateEntriesForReplay(
+      windowId,
+      paneId,
+      history.entries,
+    );
+    const snapshotLastSeq = replayEntries.at(-1)?.seq ?? latestSeqBeforeHistory;
+    let serialized = replayEntries.map((entry) => entry.data).join('');
     let screenSnapshotOffset: number | undefined;
     let screenSnapshotLength: number | undefined;
     if (
@@ -336,7 +350,7 @@ export class RemoteTerminalController {
         Math.min(snapshotLastSeq, screenSnapshot.outputSeq),
       );
       let insertOffset = 0;
-      for (const entry of history.entries) {
+      for (const entry of replayEntries) {
         if (entry.seq > snapshotSeq) {
           break;
         }
@@ -379,10 +393,14 @@ export class RemoteTerminalController {
         requestedSinceSeq: sinceSeq,
       };
     }
-    const entries = limitHistoryEntriesForward(history.entries, {
+    const entries = this.decorateEntriesForReplay(
+      windowId,
+      paneId,
+      limitHistoryEntriesForward(history.entries, {
       limitBytes: TERMINAL_STREAM_INCREMENT_BYTES,
       limitChunks: TERMINAL_STREAM_INCREMENT_CHUNKS,
-    });
+      }),
+    );
     const lastSeq = entries.at(-1)?.seq ?? sinceSeq;
     return {
       serialized: entries.map((entry) => entry.data).join(''),
@@ -396,6 +414,28 @@ export class RemoteTerminalController {
       requestedSinceSeq: sinceSeq,
       hasMoreAfter: lastSeq < history.lastSeq,
     };
+  }
+
+  private decorateEntriesForReplay(
+    windowId: string,
+    paneId: string,
+    entries: ReadonlyArray<{ seq: number; data: string }>,
+  ): Array<{ seq: number; data: string }> {
+    const decorate = (this.processManager as ProcessManager & {
+      decoratePtyHistoryEntriesForReplay?: ProcessManager['decoratePtyHistoryEntriesForReplay'];
+    }).decoratePtyHistoryEntriesForReplay;
+    return typeof decorate === 'function'
+      ? decorate.call(this.processManager, windowId, paneId, entries)
+      : entries.map((entry) => ({ ...entry }));
+  }
+
+  private getReplayChunks(windowId: string, paneId: string, fallback: string[]): string[] {
+    const getReplay = (this.processManager as ProcessManager & {
+      getPtyReplayChunks?: ProcessManager['getPtyReplayChunks'];
+    }).getPtyReplayChunks;
+    return typeof getReplay === 'function'
+      ? getReplay.call(this.processManager, windowId, paneId)
+      : fallback;
   }
 }
 

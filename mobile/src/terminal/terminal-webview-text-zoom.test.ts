@@ -19,7 +19,7 @@ function extractStatusDotNormalizer() {
   const declarationStart = terminalHtmlSource.indexOf('  var CLAUDE_STATUS_DOT =')
   const declarationEnd = terminalHtmlSource.indexOf('  var PRIVATE_MODE_SCAN_TAIL_LIMIT')
   const functionStart = terminalHtmlSource.indexOf('  function isStatusDotPresentationSelector')
-  const functionEnd = terminalHtmlSource.indexOf('\n\n  function enqueueWrite', functionStart)
+  const functionEnd = terminalHtmlSource.indexOf('\n\n  ${TERMINAL_RESIZE_CONTROL_JS}', functionStart)
   expect(declarationStart).toBeGreaterThanOrEqual(0)
   expect(declarationEnd).toBeGreaterThan(declarationStart)
   expect(functionStart).toBeGreaterThan(declarationEnd)
@@ -91,7 +91,9 @@ describe('TerminalWebView text zoom', () => {
     expect(terminalHtmlSource).toContain(
       'data.replace(CLAUDE_STATUS_DOT_PATTERN, CLAUDE_STATUS_DOT + TEXT_PRESENTATION_SELECTOR)'
     )
-    expect(terminalHtmlSource).toContain('writeQueue.push(normalizeStatusDotPresentation(data))')
+    expect(terminalHtmlSource).toContain(
+      'splitTerminalResizeWriteOperations(normalizeStatusDotPresentation(data))'
+    )
   })
 
   it('normalizes Claude status dots idempotently across write chunks', () => {
@@ -152,14 +154,14 @@ describe('TerminalWebView text zoom', () => {
     expect(replay).toBeGreaterThan(unicode)
   })
 
-  it('uses the bundled WebGL-capable xterm stack and platform-safe font fallbacks', () => {
+  it('uses the bundled xterm stack without WebGL contexts and keeps platform-safe font fallbacks', () => {
     expect(terminalHtmlSource).not.toContain('cdn.jsdelivr.net')
-    expect(terminalHtmlSource).toContain('window.WebglAddon.WebglAddon')
+    expect(terminalHtmlSource).toContain('XTERM_ENGINE_JS')
     expect(terminalHtmlSource).toContain('function isIOSWebView()')
     expect(terminalHtmlSource).toContain('fontFamily: terminalFontFamily')
     expect(terminalHtmlSource).toContain("fontWeight: '300'")
     expect(terminalHtmlSource).toContain("fontWeightBold: '500'")
-    expect(terminalHtmlSource).toContain('new window.WebglAddon.WebglAddon()')
+    expect(terminalHtmlSource).not.toContain('new window.WebglAddon.WebglAddon()')
   })
 
   const IOS_IPHONE_NAVIGATOR = {

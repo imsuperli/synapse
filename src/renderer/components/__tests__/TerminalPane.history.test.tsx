@@ -553,7 +553,7 @@ describe('TerminalPane history replay', () => {
       seq: 1,
     });
 
-    expect(terminalInstances[0].write).toHaveBeenCalledWith('a');
+    expect(terminalInstances[0].write).toHaveBeenCalledWith('a', expect.any(Function));
     expect(requestAnimationFrameMock).not.toHaveBeenCalled();
   });
 
@@ -624,6 +624,59 @@ describe('TerminalPane history replay', () => {
       }),
     );
     expect(window.electronAPI.ptyWrite).not.toHaveBeenCalled();
+  });
+
+  it('publishes the final alternate frame after the snapshot throttle window', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+    render(
+      <TerminalPane
+        windowId="win-alt-tail"
+        pane={{
+          id: 'pane-alt-tail',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(ptyCallbacks).toHaveLength(1));
+
+    let visibleText = 'first frame';
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'alternate' as const,
+      cursorX: 0,
+      cursorY: 0,
+      getLine: vi.fn((row: number) => ({
+        translateToString: () => (row === 0 ? visibleText : ''),
+      })),
+    });
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockClear();
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt-tail', paneId: 'pane-alt-tail', data: 'first', seq: 1 });
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ outputSeq: 1, data: expect.stringContaining('first frame') }),
+      );
+    });
+
+    visibleText = 'final frame';
+    ptyCallbacks[0]?.({ windowId: 'win-alt-tail', paneId: 'pane-alt-tail', data: 'final', seq: 2 });
+
+    await waitFor(
+      () => {
+        expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenLastCalledWith(
+          expect.objectContaining({ outputSeq: 2, data: expect.stringContaining('final frame') }),
+        );
+      },
+      { timeout: 700 },
+    );
   });
 
   it('clears alternate screen snapshots immediately when the terminal returns to the normal buffer', async () => {
@@ -1434,8 +1487,10 @@ describe('TerminalPane history replay', () => {
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live', paneId: 'pane-osc8-live', data: `${osc8Open}docs`, seq: 1 });
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live', paneId: 'pane-osc8-live', data: '\nplain text', seq: 2 });
 
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`);
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\nplain text`);
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`, expect.any(Function));
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\nplain text`, expect.any(Function));
+    });
   });
 
   it('closes split live OSC 8 links before cursor-positioned redraw output', async () => {
@@ -1469,8 +1524,10 @@ describe('TerminalPane history replay', () => {
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live-cursor', paneId: 'pane-osc8-live-cursor', data: `${osc8Open}docs\u001b[`, seq: 1 });
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live-cursor', paneId: 'pane-osc8-live-cursor', data: '12;1Hplain text', seq: 2 });
 
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`);
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\u001b[12;1Hplain text`);
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`, expect.any(Function));
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\u001b[12;1Hplain text`, expect.any(Function));
+    });
   });
 
   it('applies the pane keyboard state snapshot after replaying stale protocol sequences', async () => {

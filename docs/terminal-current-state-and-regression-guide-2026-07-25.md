@@ -30,6 +30,7 @@
 `ProcessManager` 是可恢复原始 PTY 数据的唯一来源：
 
 - 每个 pane 的输出序号单调递增。
+- 初始网格和每次成功的 PTY resize 与输出使用同一序号时间线；任意分页起点都会补入当时有效的网格。
 - 最多保留 250,000 个输出块或 20,000,000 个字符，任一达到上限就淘汰最旧块。
 - 淘汰位置通过 `evictedBeforeSeq` 传播。
 - 清屏保留序号单调性，只删除可回放内容。
@@ -54,6 +55,7 @@ PC 可见 xterm 的常规 scrollback 是 10,000 行。用户正在上翻时，Co
 - 旧历史预取缓存目标上限为 768 KiB。
 - 首屏延迟 350 ms 后，最多自动激活 3 个 192 KiB 阶段，目标是至少两屏 scrollback。
 - mobile source xterm 和可见 projection xterm 的默认 scrollback 都是 30,000 行；历史阅读且即将 trim 时可临时扩到最高 100,000 行。
+- Android/iOS WebView 使用 xterm DOM renderer。多个驻留和原子替换 surface 不再分别创建 WebGL context。
 - RN 连续 history 与 PC 事实源采用相同硬边界：250,000 个 chunk 或 20,000,000 字符；超限走 compact snapshot，不直接裁断 ANSI 状态。
 - LRU 淘汰会同时销毁 WebView、订阅、预取、runtime 和 raw history。
 
@@ -61,12 +63,14 @@ PC 可见 xterm 的常规 scrollback 是 10,000 行。用户正在上翻时，Co
 
 手机不能按手机列数直接回放 PC 原始 PTY 字节，也不能改变共享 PTY 的尺寸。当前采用双 xterm：
 
-1. source xterm 始终按 PC 的 `cols x rows` 解析 ANSI、光标、滚动区、鼠标模式和 alternate screen。
+1. source xterm 按 PC 记录的 resize 时间线解析 ANSI、光标、滚动区、鼠标模式和 alternate screen，不能用“当前网格”重放全部旧字节。
 2. 普通稳定 normal output 序列化后，投影到手机宽度。
 3. 复杂控制序列或 Codex 动态屏幕使用 snapshot projection。
 4. snapshot projection 当前把已加载 normal history 与当前 alternate content 组成同一个行模型。
 5. 序列化、OSC link 几何和独立 cursor overlay 共用该行模型。
 6. 正在触摸、缩放或惯性滚动时延迟替换投影；隐藏的新 surface 完成解析和 fit 后才原子显示。
+
+alternate screen 只有当前 TUI screen，没有 xterm normal scrollback。实时模式下的滑动必须发给远端 TUI；只有显式历史阅读模式才滚动手机已投影的 normal history。不能把 alternate screen 下方的 normal buffer 空白当成 Codex 内部历史。
 
 这个模型解决的是“同一份 PTY 语义在手机重新排版”，不是把终端降级成纯文本日志。
 
@@ -101,6 +105,12 @@ PC 可见 xterm 的常规 scrollback 是 10,000 行。用户正在上翻时，Co
 | 普通 ResizeObserver / window resize | fit 前捕获可见内容，fit/reflow 后恢复同一内容锚点，再同步 PTY | 有真实重排行为测试覆盖 |
 | PTY 退出 | 立即删除主进程 raw history 和 alternate screen snapshot；renderer 随 pane 状态 reset | 停止后的旧历史不可恢复，这是当前产品语义，不是分页失败 |
 
+### 4.2 本轮全链路结论
+
+- PC 输入由 xterm `onData/onBinary` 直接写 PTY；移动输入由 `terminal.send` 写同一 PTY。两条链路都不插入视觉换行，用户看到的断句来自 TUI 绘制或错误网格回放。
+- 主进程先给输出和 resize 分配 seq，再通知订阅；远端先安装 live callback，再读取 snapshot，并按 seq 去重，没有发现发送或订阅窗口导致的历史丢块。
+- renderer 的 alternate snapshot 原有 250 ms 限流缺少尾沿补发，最后一帧可能长期停留在旧状态；当前定时补发保证稳定后的最终 screen 会保存。
+
 ## 5. 已修复的高优先级问题
 
 这里的“确认”表示源码存在完整可达路径，不是依据现象猜测。尚未在真机复现的条件会单独注明。
@@ -128,6 +138,22 @@ PC 可见 xterm 的常规 scrollback 是 10,000 行。用户正在上翻时，Co
 **证据**：当前 snapshot model 已把 normal history 放在 alternate content 前面；但 `shouldRouteScrollToTerminalInput()` 只要 source xterm 仍是 alternate 就返回 true。此时单指滑动全部转成鼠标滚轮或方向键发给远端 TUI，既不会滚动可见 projection，也不会触发 `history-top`。`autoScrollDisabled` 不参与这个判断，现有测试还明确固化了“alternate scrolling only to the TUI”。
 
 **用户表现**：默认使用 alternate screen 的 Codex 中，即使按下“锁定历史/停止跟随”按钮，也可能无法查看手机已经加载的本地历史；手势反而改变 Codex 自己的滚动状态。
+
+### H4. raw PTY 历史缺失 resize 时间线
+
+**状态**：已修复。初始尺寸和后续 resize 作为有序私有控制记录进入历史、分页和 live stream；PC 与手机都在 xterm 写队列外执行“文本 -> resize -> 文本”。
+
+**证据**：绝对光标定位、清屏和滚动区都依赖产生字节时的网格。旧实现只保存字节和 seq，用当前列数重放不同 PC 宽度下的 Codex 输出，必然改变换行、光标落点和空白区域。真实 xterm 还证明不能在 parser 回调或前一笔 write callback 栈内同步 resize，否则会重复解析相邻文本，因此 resize 必须串行且延后一层 microtask。
+
+**用户表现**：运行中只剩底部几行、上翻大片黑区、历史不完整，以及发送后正文在错误位置换行或插入大段空格。
+
+### H5. 多个移动 xterm surface 竞争 WebGL context
+
+**状态**：已修复。移动端保留内置 xterm 引擎，但 direct、source、projection 和 replacement surface 均不再加载 WebGL addon。
+
+**证据**：最多三个驻留 WebView，每个 WebView 又可能在原子替换期间同时存在 source、旧 projection 和隐藏的新 projection。Android WebView 的 context 丢失会产生未绘制帧，而历史模型本身仍有数据。
+
+**用户表现**：滚动到某些页整屏黑色，继续滚动或重建 surface 后又出现内容。
 
 ## 6. 已修复的中等优先级问题
 
@@ -180,6 +206,20 @@ PC 可见 xterm 的常规 scrollback 是 10,000 行。用户正在上翻时，Co
 手机 source/projection 都固定为 30,000 行。PC 端在用户阅读且 buffer 满时会临时扩大 scrollback，手机端的 `CSI S` installer 只保存 Codex 顶部滚动区域，没有同等的 reading headroom。
 
 当用户已加载接近 30,000 行并停在旧内容处，持续 live output 会开始淘汰顶部行，视口可能逐渐移动或旧内容消失。RN 即使还保留原始数据，重新完整回放仍会再次受 30,000 行上限约束。这是明确容量边界，不能把它误诊为 PC 没返回历史。
+
+### M7. Codex 手机投影保留桌面填充列
+
+**状态**：已修复。拼接视觉行时按最后一个可见 cell 截断带背景的尾部填充；只有活动 composer 下方、包含内部大空白且右侧贴近桌面边界的状态行才压缩对齐空白。
+
+这同时覆盖正文中间出现大段空格和 `tab to queue message ... Context left` 被手机宽度再次折行的问题，并保留普通正文中的真实多空格。
+
+### M8. 长按选词把 cell 列当作字符串下标
+
+**状态**：已修复。选择先建立 xterm cell 到 JS 字符串区间的映射，再用 `Intl.Segmenter` 选择词；中文、全角字符、emoji 和组合字符不再按 UTF-16 下标错位。长按抖动使用 18 px 欧氏距离，等待和选择期间阻止 surface scroll。
+
+### M9. 惯性启动前未结算最后一帧滚动
+
+**状态**：已修复。`touchend` 先同步 flush 待执行的 normal-buffer RAF，再计算 momentum；超过 80 ms 没有新移动则不继承旧速度。terminal re-init 还会取消上一代 momentum 和 pinch/touch 状态，避免旧 RAF 操作新 surface。
 
 ## 7. 已修复的低优先级问题
 
@@ -252,6 +292,8 @@ pane count 变化、paused 恢复和 focus recovery 都通过 `preserveTerminalV
 12. **恢复最终收口**：每次 foreground/reconnect recovery 必须到达 resumed、retry scheduled、terminal gone 或 cancelled 之一。
 13. **输入顺序稳定**：IME 待提交文本必须先于 Enter、Tab、Paste、Ctrl/Alt 组合键到达 PTY。
 14. **容量有来源**：每个 raw history、prefetch、pending write、resident runtime 和 xterm scrollback 都必须有命名预算及边界行为。
+15. **网格时间线完整**：raw PTY 字节不能脱离产生它时的 cols/rows 回放；分页和增量都必须从有效网格开始。
+16. **resize 不得重入 parser**：私有 resize 记录必须在串行写队列中、前一笔 write callback 返回后执行。
 
 ## 10. 仍需补齐的集成与真机回归
 

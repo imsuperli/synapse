@@ -9,6 +9,7 @@ const source =
   readFileSync(new URL('./terminal-webview-url-tap.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-tap-dispatch-injected.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-mobile-reflow-injected.ts', import.meta.url), 'utf8') +
+  readFileSync(new URL('./terminal-webview-selection-word-injected.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-html.ts', import.meta.url), 'utf8')
 
 function sliceBetween(startPattern: string, endPattern: string): string {
@@ -86,13 +87,13 @@ describe('TerminalWebView scroll routing', () => {
     expect(inputIndex).toBeGreaterThan(alternateIndex)
   })
 
-  it('keeps projected mobile snapshots on local history scroll by default', () => {
+  it('routes projected alternate screens to the live TUI by default', () => {
     const routingDecision = sliceBetween(
       'function shouldRouteScrollToTerminalInput()',
       'function buildMouseWheelScrollInput'
     )
-    expect(routingDecision).toContain('if (!isAlternateBufferActive()) return false;')
-    expect(routingDecision).toContain('return !isMobileReflowProjectionLayout();')
+    expect(routingDecision).toContain('return isAlternateBufferActive();')
+    expect(routingDecision).not.toContain('isMobileReflowProjectionLayout')
   })
 
   it('does not rubber-band normal scroll at scrollback edges', () => {
@@ -134,7 +135,10 @@ describe('TerminalWebView scroll routing', () => {
     )
     expect(enqueueBlock).toContain('pendingNormalScrollDeltaY += deltaY;')
     expect(enqueueBlock).toContain('if (normalScrollFrameId !== null) return true;')
-    expect(enqueueBlock).toContain('normalScrollFrameId = requestAnimationFrame(function()')
+    expect(enqueueBlock).toContain(
+      'normalScrollFrameId = requestAnimationFrame(flushPendingNormalBufferScrollDelta)'
+    )
+    expect(enqueueBlock).toContain('function flushPendingNormalBufferScrollDelta()')
     expect(enqueueBlock).toContain('applyNormalBufferScrollDelta(delta)')
 
     const resetBlock = sliceBetween(
@@ -287,6 +291,32 @@ describe('TerminalWebView scroll routing', () => {
     expect(source).toContain('ts.velY * 0.55 + instantVelocity * 0.45')
     expect(source).toContain('var FRICTION = 0.972;')
     expect(source).toContain('var MIN_VEL = 0.012;')
+    const touchEndBlock = sliceBetween(
+      "targetSurface.addEventListener('touchend'",
+      '}, { capture: true, passive: true });'
+    )
+    expect(touchEndBlock.indexOf('flushPendingNormalBufferScrollDelta();')).toBeLessThan(
+      touchEndBlock.indexOf('var vel = ts.velY;')
+    )
+    expect(touchEndBlock).toContain('if (Date.now() - ts.lastTime > 80) vel = 0;')
+  })
+
+  it('keeps long-press jitter out of terminal scrolling', () => {
+    const dispatcherBlock = sliceBetween(
+      'function dispatcherShouldBlockSurface()',
+      "document.addEventListener('touchstart'"
+    )
+    expect(dispatcherBlock).toContain('longPressTimer !== null')
+    expect(dispatcherBlock).toContain("selMode === 'select'")
+    expect(source).toContain('var LONG_PRESS_SLOP = 18;')
+    expect(source).toContain('Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_SLOP')
+  })
+
+  it('maps Unicode word selection through terminal cell widths', () => {
+    const selectionBlock = sliceBetween('function seedWordSelection(', 'function isStartFirst(')
+    expect(selectionBlock).toContain("new Intl.Segmenter(undefined, { granularity: 'word' })")
+    expect(selectionBlock).toContain('cell.getWidth() === 0')
+    expect(selectionBlock).toContain('endCol: cellCol + Math.max(1, cell.getWidth()) - 1')
   })
 
   it('keeps selection edge autoscroll active and extends the dragged endpoint', () => {

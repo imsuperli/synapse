@@ -113,7 +113,11 @@ export function registerPtyHandlers(ctx: HandlerContext) {
         throw new Error('ProcessManager not initialized');
       }
 
-      return successResponse(processManager.getPtyHistory(paneId));
+      const history = processManager.getPtyHistory(paneId);
+      return successResponse({
+        ...history,
+        replayChunks: processManager.getPtyReplayChunks(paneId),
+      });
     } catch (error) {
       return errorResponse(error);
     }

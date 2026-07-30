@@ -1632,6 +1632,7 @@ export interface PtyKeyboardProtocolState {
 
 export interface PtyHistorySnapshot {
   chunks: string[];
+  replayChunks?: string[];
   firstSeq: number;
   lastSeq: number;
   evictedBeforeSeq: number;

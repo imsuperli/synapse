@@ -530,6 +530,15 @@ function sourceWithCursor(
   };
 }
 
+function sourceWithNormalBuffer(lines: FakeLine[], cursorRow: number, cursorCol: number, cols = 20) {
+  const normal = projectionBuffer("normal", lines, cursorRow, cursorCol);
+  return {
+    cols,
+    rows: Math.max(1, lines.length),
+    buffer: { active: normal, normal },
+  };
+}
+
 let runtimeBooted = false;
 let activePostedMessages: PostedMessage[] = [];
 
@@ -574,6 +583,16 @@ function boot(
 const settle = (milliseconds = 80): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+  const intervalMs = 10;
+  const attempts = Math.max(1, Math.ceil(timeoutMs / intervalMs));
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (predicate()) return;
+    await settle(10);
+  }
+  throw new Error("Timed out waiting for terminal state");
+}
+
 const writeXterm = (terminal: XtermTerminal, data: string): Promise<void> =>
   new Promise((resolve) => terminal.write(data, resolve));
 
@@ -585,6 +604,15 @@ describe("terminal WebView mobile reflow", () => {
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorWidth: 3");
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("replace(/\\x1b\\[\\?25l/g, '\\x1b[?25h')");
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("ensureTerminalCursorVisible(source);");
+  });
+
+  it("replays resize records between text without rendering the records", async () => {
+    const resize = "\u001b]777;synapse-resize:120:40\u0007";
+    boot(`before${resize}after`, { cols: 80, rows: 24 });
+    await settle();
+
+    expect(FakeTerminal.instances[0]).toMatchObject({ cols: 120, rows: 40 });
+    expect(FakeTerminal.instances[0]?.allData).toBe("beforeafter");
   });
 
   it("resolves the independent cursor overlay from the visible buffer position", () => {
@@ -842,6 +870,17 @@ describe("terminal WebView mobile reflow", () => {
     expect(projection.rows.map((row) => row.text)).toEqual(["HISTORY", "PROMPT"]);
     expect(projection.cursor).toEqual({ contentRow: 1, col: 6 });
     expect(projection.contentRows).toBe(2);
+  });
+
+  it("compacts structural blank runs in normal history projections", () => {
+    const before = projectionLine(Array.from("BEFORE").map((chars) => ({ chars })));
+    const after = projectionLine(Array.from("AFTER").map((chars) => ({ chars })));
+    const blankRows = Array.from({ length: 12 }, () => projectionLine([]));
+    const source = sourceWithNormalBuffer([before, ...blankRows, after], 13, 5);
+
+    const projection = projectSourceSnapshotRows(source, 12);
+
+    expect(projection.rows.map((row) => row.text)).toEqual(["BEFORE", "", "AFTER"]);
   });
 
   it("keeps cursor geometry paired with a serialized frame while source output advances", () => {
@@ -1104,7 +1143,9 @@ describe("terminal WebView mobile reflow", () => {
     const [source, projection] = FakeTerminal.instances;
 
     sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
-    await settle(220);
+    await waitForCondition(() => (
+      projection?.disposed === true && FakeTerminal.instances[2]?.opened === true
+    ));
 
     const snapshot = FakeTerminal.instances[2];
     expect(source?.opened).toBe(false);
@@ -1127,7 +1168,11 @@ describe("terminal WebView mobile reflow", () => {
     await settle();
 
     sendWebViewMessage({ type: "write", data: "\u001b[?7lno-wrap-output" });
-    await settle(220);
+    await waitForCondition(() => posted.some(
+      (message) => message.type === "diagnostic" &&
+        message.event === "mobile-reflow-layout" &&
+        (message.metrics as { layout?: string } | undefined)?.layout === "snapshot",
+    ));
 
     expect(FakeTerminal.instances[0]?.opened).toBe(false);
     expect(FakeTerminal.instances[2]).toMatchObject({ cols: 45, rows: 42, opened: true });
@@ -1234,7 +1279,7 @@ describe("terminal WebView mobile reflow", () => {
     FakeTerminal.nextOpenedLineTexts = new Map([[125, "UNIQUE-VISIBLE-ANCHOR"]]);
 
     sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
-    await settle(220);
+    await waitForCondition(() => FakeTerminal.instances[2]?.scrollToLineCalls.includes(123) === true);
 
     const replacement = FakeTerminal.instances[2];
     expect(replacement?.scrollToLineCalls).toContain(123);
@@ -1266,7 +1311,9 @@ describe("terminal WebView mobile reflow", () => {
     expect(FakeTerminal.instances).toHaveLength(2);
 
     fireSurfaceTouch("touchend", []);
-    await settle(220);
+    await waitForCondition(() => posted.some(
+      (message) => message.type === "mobile-reflow-refresh",
+    ));
 
     expect(posted.filter((message) => message.type === "mobile-reflow-refresh")).toHaveLength(1);
     expect(FakeTerminal.instances).toHaveLength(2);
@@ -1280,7 +1327,9 @@ describe("terminal WebView mobile reflow", () => {
     FakeTerminal.throwNextOpenedWrite = true;
 
     sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
-    await settle(180);
+    await waitForCondition(() => (
+      FakeTerminal.instances[2]?.disposed === true && oldProjection.disposed === true
+    ));
 
     const failedProjection = FakeTerminal.instances[2];
     expect(failedProjection?.disposed).toBe(true);
@@ -1302,7 +1351,7 @@ describe("terminal WebView mobile reflow", () => {
     };
 
     sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
-    await settle(180);
+    await waitForCondition(() => FakeTerminal.instances[2]?.disposed === true);
 
     expect(FakeTerminal.instances[2]?.disposed).toBe(true);
     expect(oldProjection.disposed).toBe(false);
@@ -1403,7 +1452,7 @@ describe("terminal WebView mobile reflow", () => {
 
   it("rebuilds at larger font metrics after pinch zoom instead of keeping a wide canvas", async () => {
     const posted = boot("a long logical line that can wrap at several phone widths");
-    await settle();
+    await waitForCondition(() => posted.some((message) => message.type === "ready"));
 
     fireSurfaceTouch("touchstart", [
       { x: 130, y: 240 },
@@ -1414,7 +1463,10 @@ describe("terminal WebView mobile reflow", () => {
       { x: 280, y: 240 },
     ]);
     fireSurfaceTouch("touchend", []);
-    await settle(220);
+    await waitForCondition(() => (
+      posted.some((message) => message.type === "font-scale-changed" && message.fontScale === 2) &&
+      posted.some((message) => message.type === "mobile-reflow-refresh")
+    ));
 
     expect(posted.filter((message) => message.type === "mobile-reflow-refresh")).toHaveLength(1);
     expect(posted).toContainEqual({ type: "font-scale-changed", fontScale: 2 });
@@ -1438,7 +1490,7 @@ describe("terminal WebView mobile reflow", () => {
 
   it("measures each snapshot replacement at its target font across repeated pinch zoom", async () => {
     const posted = boot("\u001b[?1049h\u001b[2J\u001b[Hfull screen");
-    await settle();
+    await waitForCondition(() => posted.some((message) => message.type === "ready"));
 
     fireSurfaceTouch("touchstart", [
       { x: 130, y: 240 },
@@ -1449,7 +1501,13 @@ describe("terminal WebView mobile reflow", () => {
       { x: 280, y: 240 },
     ]);
     fireSurfaceTouch("touchend", []);
-    await settle(220);
+    await waitForCondition(() => {
+      const latest = FakeTerminal.instances.at(-1);
+      return latest?.opened === true &&
+        latest.cols === 22 &&
+        latest.options.fontSize === 20 &&
+        latest.openedSurface?.style.transform.includes("scale(1)") === true;
+    });
 
     const enlarged = FakeTerminal.instances.at(-1);
     expect(enlarged).toMatchObject({ cols: 22, rows: 21, opened: true });
@@ -1465,7 +1523,13 @@ describe("terminal WebView mobile reflow", () => {
       { x: 205, y: 240 },
     ]);
     fireSurfaceTouch("touchend", []);
-    await settle(220);
+    await waitForCondition(() => {
+      const latest = FakeTerminal.instances.at(-1);
+      return latest?.opened === true &&
+        latest.cols === 90 &&
+        latest.options.fontSize === 5 &&
+        latest.openedSurface?.style.transform.includes("scale(1)") === true;
+    });
 
     const reduced = FakeTerminal.instances.at(-1);
     expect(reduced).toMatchObject({ cols: 90, rows: 84, opened: true });

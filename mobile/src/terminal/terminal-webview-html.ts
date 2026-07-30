@@ -8,7 +8,9 @@ import { XTERM_ENGINE_CSS, XTERM_ENGINE_JS } from './terminal-webview-engine.gen
 import { TERMINAL_FOREGROUND_RECOVERY_JS } from './terminal-webview-foreground-recovery-injected'
 import { TERMINAL_MOBILE_REFLOW_JS } from './terminal-webview-mobile-reflow-injected'
 import { TERMINAL_REFLOW_JS } from './terminal-webview-reflow-injected'
+import { TERMINAL_RESIZE_CONTROL_JS } from './terminal-webview-resize-control-injected'
 import { TERMINAL_SCROLLBACK_PRESERVATION_JS } from './terminal-webview-scrollback-preservation-injected'
+import { TERMINAL_SELECTION_WORD_JS } from './terminal-webview-selection-word-injected'
 import { TERMINAL_TAP_DISPATCH_JS } from './terminal-webview-tap-dispatch-injected'
 import { URL_TAP_WEBVIEW_JS } from './terminal-webview-url-tap'
 
@@ -932,8 +934,11 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     return normalized;
   }
 
+  ${TERMINAL_RESIZE_CONTROL_JS}
+
   function enqueueWrite(data) {
-    writeQueue.push(normalizeStatusDotPresentation(data));
+    var operations = splitTerminalResizeWriteOperations(normalizeStatusDotPresentation(data));
+    for (var i = 0; i < operations.length; i++) writeQueue.push(operations[i]);
   }
 
   function nextQueuedWrite() {
@@ -980,19 +985,29 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   function pumpWrites(gen) {
     if (!ready || !term || writesDraining || gen !== terminalGeneration) return;
     var next = nextQueuedWrite();
-    if (typeof next !== 'string') {
+    if (!next) {
       var callbacks = afterDrainCallbacks;
       afterDrainCallbacks = [];
       for (var i = 0; i < callbacks.length; i++) callbacks[i]();
       return;
     }
+    if (next.type === 'resize') {
+      term.resize(next.cols, next.rows);
+      pumpWrites(gen);
+      return;
+    }
     writesDraining = true;
     // Why: xterm.write() parses asynchronously. Row adjustment/resizing must
     // wait until replayed SGR attributes have landed in the buffer.
-    term.write(next, function() {
-      if (gen !== terminalGeneration) return;
-      writesDraining = false;
-      pumpWrites(gen);
+    var completed = false;
+    term.write(next.data, function() {
+      if (completed) return;
+      completed = true;
+      Promise.resolve().then(function() {
+        if (gen !== terminalGeneration) return;
+        writesDraining = false;
+        pumpWrites(gen);
+      });
     });
   }
 
@@ -1085,9 +1100,6 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     // Codex scrolls a top-anchored region with CSI S. xterm's default handler
     // deletes those rows instead of adding them to the normal scrollback.
     installMobileTerminalScrollbackPreservation(term, function() { return autoScrollDisabled; });
-    if (window.WebglAddon && window.WebglAddon.WebglAddon) {
-      try { var webglAddon = new window.WebglAddon.WebglAddon(); term.loadAddon(webglAddon); if (webglAddon.onContextLoss) webglAddon.onContextLoss(function() { try { webglAddon && webglAddon.dispose && webglAddon.dispose(); } catch (e) {} }); } catch (e) {}
-    }
     if (window.Unicode11Addon && window.Unicode11Addon.Unicode11Addon) try { term.loadAddon(new window.Unicode11Addon.Unicode11Addon()); term.unicode.activeVersion = '11'; } catch (e) {}
     if (typeof replayData === 'string' && replayData.length > 0) {
       enqueueWrite(replayData);
@@ -1136,6 +1148,14 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   }
 
   function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
+    surfaceTouchActive = false;
+    if (ts && ts.momentumId !== null) {
+      cancelAnimationFrame(ts.momentumId);
+      ts.momentumId = null;
+    }
+    if (ts) {
+      ts.isPinching = false; ts.velY = 0; ts.accumDelta = 0;
+    }
     var nextMode = normalizeTextScaleMode(nextTextScaleMode);
     if (nextMode === 'mobile-reflow') {
       initMobileReflow(
@@ -1471,7 +1491,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   // ============================================================
   var WORD_RE = /[\\p{L}\\p{N}_./:@~+=?&#%-]/u;
   var LONG_PRESS_MS = 500;
-  var LONG_PRESS_SLOP = 10;
+  var LONG_PRESS_SLOP = 18;
   // Why: a tap that opens a link/path must survive small finger jitter. The
   // long-press slop (10px) only cancels the press-to-select timer; reusing it
   // to gate the tap dropped any URL/file tap that wandered >10px — at fit scale
@@ -1909,9 +1929,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   function shouldRouteScrollToTerminalInput() {
     if (autoScrollDisabled) return false;
     if (isWheelMouseTrackingMode(getMouseTrackingMode())) return true;
-    if (!isAlternateBufferActive()) return false;
-    // Projected snapshots own local history; exact-grid fallbacks route to TUI.
-    return !isMobileReflowProjectionLayout();
+    return isAlternateBufferActive();
   }
 
   function buildMouseWheelScrollInput(lines, clientX, clientY) {
@@ -2023,15 +2041,16 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     // Why: dense terminal rows are expensive to repaint. Coalesce touchmove
     // deltas into one xterm row-scroll per frame instead of repainting from
     // the input event stream.
-    normalScrollFrameId = requestAnimationFrame(function() {
-      normalScrollFrameId = null;
-      var delta = pendingNormalScrollDeltaY;
-      pendingNormalScrollDeltaY = 0;
-      if (!applyNormalBufferScrollDelta(delta)) {
-        resetSmoothScrollOffset();
-      }
-    });
+    normalScrollFrameId = requestAnimationFrame(flushPendingNormalBufferScrollDelta);
     return true;
+  }
+
+  function flushPendingNormalBufferScrollDelta() {
+    if (normalScrollFrameId !== null) cancelAnimationFrame(normalScrollFrameId);
+    normalScrollFrameId = null;
+    var delta = pendingNormalScrollDeltaY;
+    pendingNormalScrollDeltaY = 0;
+    if (delta !== 0 && !applyNormalBufferScrollDelta(delta)) resetSmoothScrollOffset();
   }
 
   function resetSmoothScrollOffset() {
@@ -2080,26 +2099,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   ${TERMINAL_PATH_TAP_JS}
   ${URL_TAP_WEBVIEW_JS}
 
-  function seedWordSelection(col, absRow) {
-    var line = getLineText(absRow);
-    if (!line) {
-      sel = { anchor: { col: col, row: absRow }, focus: { col: col, row: absRow }, activeHandle: null };
-      applyXtermSelection();
-      return;
-    }
-    var s = col;
-    var e = col;
-    if (col >= 0 && col < line.length && WORD_RE.test(line[col])) {
-      while (s > 0 && WORD_RE.test(line[s - 1])) s--;
-      while (e < line.length - 1 && WORD_RE.test(line[e + 1])) e++;
-    }
-    sel = {
-      anchor: { col: s, row: absRow },
-      focus: { col: e, row: absRow },
-      activeHandle: null
-    };
-    applyXtermSelection();
-  }
+  ${TERMINAL_SELECTION_WORD_JS}
 
   function isStartFirst(a, b) {
     if (a.row !== b.row) return a.row < b.row;
@@ -2350,7 +2350,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     targetSurface.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); }, true);
 
     targetSurface.addEventListener('touchstart', function(e) {
-      if (dispatcherShouldBlockSurface()) return;
+      if (dispatch.mode === 'select-drag' || selMode === 'select') return;
       surfaceTouchActive = true;
       if (isMobileReflowTextScale()) {
         deferMobileProjectionRefreshForInteraction('touch-active');
@@ -2528,7 +2528,9 @@ ${TERMINAL_MOBILE_REFLOW_JS}
         flushPendingHistoryTopReached();
         historyTopPullDistance = 0;
         emitKeyboardAvoidanceMetrics();
+        flushPendingNormalBufferScrollDelta();
         var vel = ts.velY;
+        if (Date.now() - ts.lastTime > 80) vel = 0;
         var FRICTION = 0.972;
         var MIN_VEL = 0.012;
         function momentumStep() {

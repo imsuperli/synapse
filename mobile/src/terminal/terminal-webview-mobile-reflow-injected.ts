@@ -170,20 +170,13 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   }
 
   function loadMobileWebglAddon(targetTerm) {
-    if (!targetTerm || !window.WebglAddon || !window.WebglAddon.WebglAddon) return;
-    try {
-      var webglAddon = new window.WebglAddon.WebglAddon();
-      targetTerm.loadAddon(webglAddon);
-      if (webglAddon.onContextLoss) {
-        webglAddon.onContextLoss(function() {
-          try { webglAddon && webglAddon.dispose && webglAddon.dispose(); } catch (e) {}
-        });
-      }
-    } catch (e) {}
+    // Android WebView can silently lose WebGL contexts while hidden xterm
+    // surfaces are swapped. The DOM renderer only paints visible rows and is
+    // stable across resident panes and large scrollback buffers.
   }
 
   function createMobileTerminal(cols, rows, fontScale, scrollback) {
-    return new Terminal({
+    var target = new Terminal({
       cols: cols || 80,
       rows: rows || 24,
       theme: terminalTheme,
@@ -200,6 +193,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       convertEol: false,
       allowProposedApi: true
     });
+    return target;
   }
 
   function createMobileSourceTerminal(cols, rows) {
@@ -367,6 +361,20 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return false;
   }
 
+  function mobileBufferHasStructuralBlankRun(buffer) {
+    if (!buffer || !buffer.getLine) return false;
+    var threshold = Math.max(6, Math.min(12, Math.floor(Math.max(1, mobileSourceRows) / 4)));
+    var run = 0;
+    for (var row = 0; row < buffer.length; row++) {
+      if (mobileSourceLineHasVisibleContent(buffer.getLine(row))) {
+        run = 0;
+      } else if (++run >= threshold) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function mobileSourceLineTextEnd(line, startCol) {
     if (!line || !mobileSourceTerm) return startCol;
     for (var col = mobileSourceTerm.cols - 1; col >= startCol; col--) {
@@ -483,6 +491,25 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     return structuralCount / compact.length >= 0.6;
   }
 
+  function mobileCodexRowHasRightAlignedStatus(line) {
+    if (!line || !mobileSourceTerm) return false;
+    var end = mobileSourceLineTextEnd(line, 0);
+    var maxTrailingSlack = Math.max(2, Math.floor(mobileSourceTerm.cols / 12));
+    if (end < mobileSourceTerm.cols - maxTrailingSlack) return false;
+    var seenText = false;
+    var blankRun = 0;
+    for (var col = 0; col < end; col++) {
+      if (mobileSourceCellIsBlank(line, col)) {
+        if (seenText) blankRun++;
+        continue;
+      }
+      if (seenText && blankRun >= 3) return true;
+      seenText = true;
+      blankRun = 0;
+    }
+    return false;
+  }
+
   function mobileCodexHardWrapSkip(previousLine, line) {
     if (
       !previousLine ||
@@ -597,6 +624,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var cursorRow = (buffer.baseY || 0) + (buffer.cursorY || 0);
     var composerPlan = findMobileCodexComposerProjectionPlan(buffer);
     var rowSkips = {};
+    var compactAlignmentRows = {};
     var hasRows = false;
     if (composerPlan) {
       for (
@@ -629,8 +657,18 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
         hasRows = true;
       }
     }
+    for (var statusRow = cursorRow + 1; statusRow < buffer.length; statusRow++) {
+      if (mobileCodexRowHasRightAlignedStatus(buffer.getLine(statusRow))) {
+        compactAlignmentRows[statusRow] = true;
+        hasRows = true;
+      }
+    }
     return hasRows
-      ? { rowSkips: rowSkips, sourceRevision: mobileSourceRevision }
+      ? {
+          rowSkips: rowSkips,
+          compactAlignmentRows: compactAlignmentRows,
+          sourceRevision: mobileSourceRevision
+        }
       : null;
   }
 
@@ -642,23 +680,46 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
 
   function mobileSnapshotProjectionLine(buffer, line, row, plan) {
     var skip = mobileSnapshotRowSkip(plan, row);
-    if (!line || skip === 0) return line;
+    var joinsNext = !!(plan && plan.rowSkips && plan.rowSkips[row + 1]);
+    var compactAlignment = !!(
+      plan && plan.compactAlignmentRows && plan.compactAlignmentRows[row]
+    );
+    if (!line || (skip === 0 && !joinsNext && !compactAlignment)) return line;
     var cols = mobileSourceTerm.cols;
+    var sourceEnd = mobileSourceLineTextEnd(line, skip);
+    var columnMap = [];
+    for (var sourceCol = skip; sourceCol < sourceEnd; sourceCol++) {
+      if (compactAlignment && mobileSourceCellIsBlank(line, sourceCol)) {
+        var blankStart = sourceCol;
+        while (sourceCol + 1 < sourceEnd && mobileSourceCellIsBlank(line, sourceCol + 1)) {
+          sourceCol++;
+        }
+        var blankLength = sourceCol - blankStart + 1;
+        var keepBlanks = blankLength >= 3 ? 1 : blankLength;
+        for (var blank = 0; blank < keepBlanks; blank++) columnMap.push(blankStart + blank);
+      } else {
+        columnMap.push(sourceCol);
+      }
+    }
     return {
-      isWrapped: true,
+      isWrapped: skip > 0 ? true : line.isWrapped,
       length: cols,
       getCell: function(col, reusableCell) {
-        if (col >= 0 && col + skip < cols) {
-          return line.getCell(col + skip, reusableCell);
+        if (col >= 0 && col < columnMap.length) {
+          return line.getCell(columnMap[col], reusableCell);
         }
         return buffer.getNullCell();
       },
       translateToString: function(trimRight, startCol, endCol) {
-        var start = Math.max(0, startCol || 0) + skip;
-        var end = typeof endCol === 'number'
-          ? Math.min(cols, endCol + skip)
-          : cols;
-        return line.translateToString(trimRight, start, end);
+        var start = Math.max(0, startCol || 0);
+        var end = typeof endCol === 'number' ? Math.min(columnMap.length, endCol) : columnMap.length;
+        var text = '';
+        for (var index = start; index < end; index++) {
+          var cell = line.getCell(columnMap[index]);
+          if (!cell || cell.getWidth() === 0) continue;
+          text += cell.getChars() || ' ';
+        }
+        return trimRight ? text.trimEnd() : text;
       }
     };
   }
@@ -797,7 +858,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
         normalBuffer,
         mobileSnapshotLastProjectionRow(normalBuffer, false),
         null,
-        false,
+        true,
         false
       );
     }
@@ -806,7 +867,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       activeBuffer,
       mobileSnapshotLastProjectionRow(activeBuffer, true),
       plan,
-      activeBuffer.type === 'alternate',
+      true,
       projectionRows.length > 0
     );
 
@@ -879,6 +940,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       mobileControlSequenceState === 'ground' &&
       !mobileCarriageReturnPending &&
       !mobileSourceHasCustomScreenState() &&
+      !mobileBufferHasStructuralBlankRun(mobileSourceTerm.buffer.normal) &&
       mobileSourceCursorIsAtContentEnd()
     );
   }
@@ -1995,7 +2057,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     updateMouseModeFromData(replayData);
     activeAltScreenSnapshot = isAltScreenActive(replayData);
 
-    mobileSourceTerm.write(replayData, function() {
+    writeTerminalWithResizeControls(mobileSourceTerm, replayData, function() {
       if (gen !== terminalGeneration || !mobileSourceTerm) return;
       try {
         if (!mobileSourceSerializeAddon || mobileSourceRequiresExactGrid()) {
@@ -2066,6 +2128,9 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       } catch (e) {
         reportEngineError('mobile reflow init failed', e, !everReady);
       }
+    }, function(cols, rows) {
+      mobileSourceCols = cols;
+      mobileSourceRows = rows;
     });
   }
 
@@ -2223,8 +2288,17 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     ) {
       return;
     }
-    var batch = mobileWriteQueue;
-    mobileWriteQueue = [];
+    if (mobileWriteQueue[0].type === 'resize') {
+      var resizeOperation = mobileWriteQueue.shift();
+      resizeMobileSource(resizeOperation.cols, resizeOperation.rows, 'history-resize');
+      mobileSourceRevision++;
+      pumpMobileWrites();
+      return;
+    }
+    var batch = [];
+    while (mobileWriteQueue.length > 0 && mobileWriteQueue[0].type === 'data') {
+      batch.push(mobileWriteQueue.shift());
+    }
     var parts = [];
     var safe = true;
     for (var i = 0; i < batch.length; i++) {
@@ -2239,16 +2313,21 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       /(?:\x1b\[|\x9b)\?(?:[0-9]+;)*(?:47|1047|1049)(?:;[0-9]+)*l/.test(data) ||
       data.indexOf('\x1bc') !== -1;
     mobileWritesDraining = true;
+    var completed = false;
     source.write(data, function() {
-      if (generation !== terminalGeneration || source !== mobileSourceTerm) return;
-      ensureTerminalCursorVisible(source);
-      if (normalBufferMayChange || source.buffer.active.type !== 'alternate') {
-        mobileNormalBufferRevision++;
-      }
-      mobileSourceRevision++;
-      mobileWritesDraining = false;
-      handleMobileSourceBatch(data, safe);
-      pumpMobileWrites();
+      if (completed) return;
+      completed = true;
+      Promise.resolve().then(function() {
+        if (generation !== terminalGeneration || source !== mobileSourceTerm) return;
+        ensureTerminalCursorVisible(source);
+        if (normalBufferMayChange || source.buffer.active.type !== 'alternate') {
+          mobileNormalBufferRevision++;
+        }
+        mobileSourceRevision++;
+        mobileWritesDraining = false;
+        handleMobileSourceBatch(data, safe);
+        pumpMobileWrites();
+      });
     });
   }
 
@@ -2263,15 +2342,24 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       previousControlSequenceState
     );
     mobileCarriageReturnPending = normalized.charAt(normalized.length - 1) === '\r';
-    mobileWriteQueue.push({
-      data: normalized,
-      safe:
-        previousControlSequenceState === 'ground' &&
-        mobileControlSequenceState === 'ground' &&
-        !previousCarriageReturnPending &&
-        !mobileCarriageReturnPending &&
-        isSafeMobileProjectionData(normalized)
-    });
+    var operations = splitTerminalResizeWriteOperations(normalized);
+    for (var i = 0; i < operations.length; i++) {
+      var operation = operations[i];
+      if (operation.type === 'resize') {
+        mobileWriteQueue.push(operation);
+      } else {
+        mobileWriteQueue.push({
+          type: 'data',
+          data: operation.data,
+          safe:
+            previousControlSequenceState === 'ground' &&
+            mobileControlSequenceState === 'ground' &&
+            !previousCarriageReturnPending &&
+            !mobileCarriageReturnPending &&
+            isSafeMobileProjectionData(operation.data)
+        });
+      }
+    }
     pumpMobileWrites();
   }
 

@@ -35,6 +35,7 @@ import {
 } from '../utils/terminalFocus';
 import { createTerminalOsc8Guard, OSC8_HYPERLINK_CLOSE } from '../utils/terminalOsc8Guard';
 import { installTerminalScrollbackPreservation } from '../utils/terminalScrollbackPreservation';
+import { writeTerminalWithResizeControls } from '../utils/terminalResizeControl';
 import { renderMarkdownLike } from './agent/RichText';
 
 const completedReplaySessions = new Set<string>();
@@ -911,6 +912,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const outputBufferLastSeqRef = useRef<number | undefined>(undefined);
   const outputFlushFrameRef = useRef<number | null>(null);
   const screenSnapshotFrameRef = useRef<number | null>(null);
+  const screenSnapshotTrailingTimerRef = useRef<number | null>(null);
   const lastScreenSnapshotSentAtRef = useRef(Number.NEGATIVE_INFINITY);
   const lastScreenSnapshotSignatureRef = useRef('');
   const lastLiveOutputQueuedAtRef = useRef(Number.NEGATIVE_INFINITY);
@@ -1081,6 +1083,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
 
       if (now - lastScreenSnapshotSentAtRef.current < TERMINAL_SCREEN_SNAPSHOT_MIN_INTERVAL_MS) {
+        if (screenSnapshotTrailingTimerRef.current === null) {
+          const delay = Math.max(
+            0,
+            TERMINAL_SCREEN_SNAPSHOT_MIN_INTERVAL_MS - (now - lastScreenSnapshotSentAtRef.current),
+          );
+          screenSnapshotTrailingTimerRef.current = window.setTimeout(() => {
+            screenSnapshotTrailingTimerRef.current = null;
+            scheduleTerminalScreenSnapshot();
+          }, delay);
+        }
         return;
       }
 
@@ -1097,6 +1109,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       lastScreenSnapshotSignatureRef.current = signature;
       lastScreenSnapshotSentAtRef.current = now;
+      if (screenSnapshotTrailingTimerRef.current !== null) {
+        window.clearTimeout(screenSnapshotTrailingTimerRef.current);
+        screenSnapshotTrailingTimerRef.current = null;
+      }
       window.electronAPI.updateTerminalScreenSnapshot(snapshot);
     });
     if (!didRunSynchronously) {
@@ -1852,6 +1868,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         cancelAnimationFrame(screenSnapshotFrameRef.current);
         screenSnapshotFrameRef.current = null;
       }
+      if (screenSnapshotTrailingTimerRef.current !== null) {
+        window.clearTimeout(screenSnapshotTrailingTimerRef.current);
+        screenSnapshotTrailingTimerRef.current = null;
+      }
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
       outputBufferLastSeqRef.current = undefined;
@@ -2142,14 +2162,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           Boolean(lastScreenSnapshotSignatureRef.current),
         );
         if (shouldCaptureSnapshot) {
-          currentTerminal.write(guardedData, () => {
+          writeTerminalWithResizeControls(currentTerminal, guardedData, () => {
             if (outputSeq !== undefined) {
               lastRenderedSeqRef.current = outputSeq;
             }
             scheduleTerminalScreenSnapshot();
           });
         } else {
-          currentTerminal.write(guardedData);
+          writeTerminalWithResizeControls(currentTerminal, guardedData);
         }
         scheduleStaleRenderSurfaceRecovery();
       } else if (outputSeq !== undefined) {
@@ -2244,14 +2264,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       replayOsc8GuardRef.current.reset();
       const guardedData = replayOsc8GuardRef.current.sanitize(data, { closeAtEnd: true });
 
-      currentTerminal.write(OSC8_HYPERLINK_CLOSE, () => {
+      writeTerminalWithResizeControls(currentTerminal, OSC8_HYPERLINK_CLOSE, () => {
         if (!guardedData) {
           lastRenderedSeqRef.current = outputSeq;
           resolve();
           return;
         }
 
-        currentTerminal.write(guardedData, () => {
+        writeTerminalWithResizeControls(currentTerminal, guardedData, () => {
           lastRenderedSeqRef.current = outputSeq;
           if (
             shouldCaptureTerminalScreenSnapshot(
@@ -2327,9 +2347,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         const historySnapshot = extractPtyHistorySnapshot(response);
         replayKeyboardState = historySnapshot.keyboardState;
         lastAppliedSeqRef.current = historySnapshot.lastSeq;
+        const replayChunks = historySnapshot.replayChunks ?? historySnapshot.chunks;
         const replayData = shouldStripReplayProtocolQueries
-          ? stripReplayProtocolQueries(historySnapshot.chunks.join(''))
-          : historySnapshot.chunks.join('');
+          ? stripReplayProtocolQueries(replayChunks.join(''))
+          : replayChunks.join('');
         if (isReplayStillCurrent()) {
           suppressPtyWriteRef.current = true;
           shouldResumePtyWrites = true;
@@ -2647,6 +2668,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (screenSnapshotFrameRef.current !== null) {
         cancelAnimationFrame(screenSnapshotFrameRef.current);
         screenSnapshotFrameRef.current = null;
+      }
+      if (screenSnapshotTrailingTimerRef.current !== null) {
+        window.clearTimeout(screenSnapshotTrailingTimerRef.current);
+        screenSnapshotTrailingTimerRef.current = null;
       }
       isVisibleSurfaceRecoveryPendingRef.current = false;
 

@@ -207,6 +207,62 @@ describe("mobile terminal canonical model projection", () => {
     expect(source.buffer.active.getLine(1)?.isWrapped).toBe(false);
   });
 
+  it("collapses desktop status alignment gaps below the active Codex composer", async () => {
+    const source = new Terminal({ cols: 48, rows: 7, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    await writeTerminal(
+      source,
+      "\u001b[2J\u001b[H› hello" +
+        "\u001b[4;3Htab to queue message            55% Context left" +
+        "\u001b[1;8H",
+    );
+
+    const projection = new Terminal({
+      cols: 20,
+      rows: 12,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, "hello"),
+    );
+
+    expect(logicalLines(projection)).toEqual([
+      "› hello",
+      "  tab to queue message 55% Context left",
+    ]);
+  });
+
+  it("preserves spaces in ordinary rows below the active Codex composer", async () => {
+    const source = new Terminal({ cols: 48, rows: 7, scrollback: 100, allowProposedApi: true });
+    const serializeAddon = new SerializeAddon();
+    source.loadAddon(serializeAddon);
+    await writeTerminal(
+      source,
+      "\u001b[2J\u001b[H› hello" +
+        "\u001b[4;3Hordinary text    keeps spacing" +
+        "\u001b[1;8H",
+    );
+
+    const projection = new Terminal({
+      cols: 20,
+      rows: 12,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    await writeTerminal(
+      projection,
+      serializeSnapshotProjection(source, serializeAddon, "hello"),
+    );
+
+    expect(logicalLines(projection)).toEqual([
+      "› hello",
+      "  ordinary text    keeps spacing",
+    ]);
+  });
+
   it("reflows mixed CJK and narrow cells without retaining Codex continuation indent", async () => {
     const source = new Terminal({ cols: 20, rows: 7, scrollback: 100, allowProposedApi: true });
     const serializeAddon = new SerializeAddon();

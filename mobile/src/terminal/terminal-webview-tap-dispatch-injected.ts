@@ -51,15 +51,17 @@ export const TERMINAL_TAP_DISPATCH_JS = `
 
   function touchSlopExceeded(t) {
     if (!longPressOrigin) return false;
-    var dx = Math.abs(t.clientX - longPressOrigin.x);
-    var dy = Math.abs(t.clientY - longPressOrigin.y);
-    return (dx + dy) > LONG_PRESS_SLOP;
+    var dx = t.clientX - longPressOrigin.x;
+    var dy = t.clientY - longPressOrigin.y;
+    return Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_SLOP;
   }
 
   // Why: existing surface handlers stay attached to surface but we wrap
   // their entry to no-op when the dispatcher latches into select-drag.
   function dispatcherShouldBlockSurface() {
-    return dispatch.mode === 'select-drag';
+    return dispatch.mode === 'select-drag' || (
+      dispatch.mode === 'surface' && (longPressTimer !== null || selMode === 'select')
+    );
   }
 
   document.addEventListener('touchstart', function(e) {
