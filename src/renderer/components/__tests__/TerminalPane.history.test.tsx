@@ -2127,6 +2127,59 @@ describe('TerminalPane history replay', () => {
     expect(terminal.focus).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { label: 'local', backend: 'local' as const },
+    { label: 'SSH', backend: 'ssh' as const },
+  ])('focuses a newly mounted active $label terminal when xterm is ready', async ({ backend }) => {
+    render(
+      <TerminalPane
+        windowId={`win-${backend}`}
+        pane={{
+          id: `pane-${backend}`,
+          cwd: backend === 'ssh' ? '/srv/app' : 'D:\\tmp',
+          command: backend === 'ssh' ? '' : 'pwsh.exe',
+          status: WindowStatus.WaitingForInput,
+          pid: 1234,
+          backend,
+          ...(backend === 'ssh'
+            ? { ssh: { profileId: 'profile-1', remoteCwd: '/srv/app' } }
+            : {}),
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.focus).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does not focus a newly mounted terminal in an inactive pane', async () => {
+    render(
+      <TerminalPane
+        windowId="win-inactive"
+        pane={{
+          id: 'pane-inactive',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.WaitingForInput,
+          pid: 1234,
+          backend: 'local',
+        }}
+        isActive={false}
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances).toHaveLength(1);
+    });
+    expect(terminalInstances[0]?.focus).not.toHaveBeenCalled();
+  });
+
   it('re-focuses xterm on terminal-region mousedown even when the pane is already active', async () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
       success: true,

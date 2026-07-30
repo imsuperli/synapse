@@ -2625,6 +2625,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     scheduleResize();
     const initResizeTimer = window.setTimeout(() => scheduleResize(), 100);
     void replayHistory();
+    const initialFocusFrame = requestAnimationFrame(() => {
+      if (
+        terminalRef.current !== terminal
+        || !isActiveRef.current
+        || !isWindowActiveRef.current
+      ) {
+        return;
+      }
+      focusTerminalInput();
+    });
 
     return () => {
       historyReplayTokenRef.current += 1;
@@ -2646,6 +2656,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       window.clearTimeout(initResizeTimer);
+      cancelAnimationFrame(initialFocusFrame);
 
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
@@ -2696,6 +2707,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     handleTerminalLinkHover,
     handleTerminalLinkLeave,
     hideSelectionAiOverlay,
+    focusTerminalInput,
     preserveTerminalViewportContent,
     rememberTerminalViewportY,
     scheduleTerminalScreenSnapshot,
