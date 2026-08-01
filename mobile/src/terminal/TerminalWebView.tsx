@@ -326,7 +326,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         initialData?: string,
         preserveScroll?: boolean,
         oscLinks?: TerminalOscLinkRange[],
-        preserveFullInitialData?: boolean
+        preserveFullInitialData?: boolean,
+        revealOlderHistory?: boolean
       ) {
         // Why: arm a fresh ready promise BEFORE posting init. The WebView
         // resolves it via the 'ready' notify at the end of its rAF chain.
@@ -354,7 +355,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
           fontScale: textScaleRef.current,
           textScaleMode,
           preserveScroll,
-          preserveFullInitialData
+          preserveFullInitialData,
+          revealOlderHistory
         })
       },
       resize(cols: number, rows: number) {
@@ -409,9 +411,7 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
       restoreKeyboardViewport() {
         postMessage({ type: 'restore-keyboard-viewport' })
       },
-      setAutoScrollDisabled(disabled: boolean) {
-        postMessage({ type: 'set-auto-scroll-disabled', disabled })
-      },
+      scrollToBottom: () => postMessage({ type: 'scroll-to-bottom' }),
       cancelSelect() {
         postMessage({ type: 'cancel-select' })
       },

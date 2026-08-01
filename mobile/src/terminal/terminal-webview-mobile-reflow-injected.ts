@@ -5,6 +5,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   // Local snapshot rebuilds depend on this source buffer. Lowering its limit
   // irreversibly discards history before the replacement projection is built.
   var MOBILE_REFLOW_SOURCE_SCROLLBACK = 30000;
+  var MOBILE_REFLOW_READING_SCROLLBACK = 100000;
   var MOBILE_REFLOW_REFRESH_DELAY_MS = 120;
   var MOBILE_CODEX_HARD_WRAP_MAX_SLACK = 12;
   var mobileSourceTerm = null;
@@ -1564,7 +1565,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     serialized,
     replayLength,
     preserveScroll,
-    preserveFullInitialData
+    preserveFullInitialData,
+    revealRows
   ) {
     var projectionLayout = mobileReflowLayout;
     var attempts = 0;
@@ -1588,16 +1590,20 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
         dimensions.cols,
         projectionLayout === 'snapshot' ? term : null
       );
-      mobileSourceTerm.options.scrollback = projectionLayout === 'adaptive'
-        ? MOBILE_REFLOW_SOURCE_SCROLLBACK
-        : 30000;
+      mobileSourceTerm.options.scrollback = autoScrollDisabled
+        ? MOBILE_REFLOW_READING_SCROLLBACK
+        : MOBILE_REFLOW_SOURCE_SCROLLBACK;
       term.write(serialized, function() {
         if (gen !== terminalGeneration) return;
-        if (scrollAnchorRows > 0 && term.buffer && term.buffer.active) {
+        if (scrollAnchorRows >= 0 && term.buffer && term.buffer.active) {
           try {
-            term.scrollToLine(Math.max(0, (term.buffer.active.baseY || 0) - scrollAnchorRows));
+            term.scrollToLine(
+              Math.max(0, (term.buffer.active.baseY || 0) - scrollAnchorRows - revealRows)
+            );
           } catch (e) {}
         }
+        smartFollowSyncSuspended = false;
+        syncSmartFollowFromViewport();
         initialOscLinkRowOffset = Math.max(
           0,
           mobileProjectedContentRows - (term.buffer.normal.length || 0)
@@ -1959,6 +1965,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     replayLength,
     preserveScroll,
     preserveFullInitialData,
+    scrollAnchorRows,
+    revealRows,
     reason
   ) {
     mobileReflowLayout = 'source';
@@ -1969,6 +1977,15 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     loadMobileWebglAddon(term);
     requestAnimationFrame(function() {
       if (gen !== terminalGeneration) return;
+      if (scrollAnchorRows >= 0 && term.buffer && term.buffer.active) {
+        try {
+          term.scrollToLine(
+            Math.max(0, (term.buffer.active.baseY || 0) - scrollAnchorRows - revealRows)
+          );
+        } catch (e) {}
+      }
+      smartFollowSyncSuspended = false;
+      syncSmartFollowFromViewport();
       captureInitialOscLinkTexts();
       initialOscLinkRowOffset = 0;
       initialOscLinkEvictionReady = true;
@@ -1991,7 +2008,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     nextFontScale,
     preserveScroll,
     nextOscLinks,
-    preserveFullInitialData
+    preserveFullInitialData,
+    revealOlderHistory
   ) {
     textScaleMode = 'mobile-reflow';
     if (typeof nextFontScale === 'number' && nextFontScale > 0) {
@@ -2006,6 +2024,10 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var scrollAnchorRows = previousBuffer
       ? Math.max(0, (previousBuffer.baseY || 0) - (previousBuffer.viewportY || 0))
       : -1;
+    var revealRows = revealOlderHistory === true && oldTerm
+      ? Math.max(1, oldTerm.rows || 1)
+      : 0;
+    smartFollowSyncSuspended = true;
 
     terminalGeneration++;
     var gen = terminalGeneration;
@@ -2068,6 +2090,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
             replayData.length,
             preserveScroll,
             preserveFullInitialData,
+            scrollAnchorRows,
+            revealRows,
             'initial-fallback'
           );
           return;
@@ -2092,6 +2116,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
               replayData.length,
               preserveScroll,
               preserveFullInitialData,
+              scrollAnchorRows,
+              revealRows,
               'snapshot-error'
             );
             return;
@@ -2104,6 +2130,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
               replayData.length,
               preserveScroll,
               preserveFullInitialData,
+              scrollAnchorRows,
+              revealRows,
               'snapshot-unavailable'
             );
             return;
@@ -2123,7 +2151,8 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
           serialized,
           replayData.length,
           preserveScroll,
-          preserveFullInitialData
+          preserveFullInitialData,
+          revealRows
         );
       } catch (e) {
         reportEngineError('mobile reflow init failed', e, !everReady);

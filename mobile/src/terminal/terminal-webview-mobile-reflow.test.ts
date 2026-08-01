@@ -64,6 +64,7 @@ class FakeTerminal {
   __mobileSnapshotCursor: { contentRow: number; col: number } | null = null;
   lineTexts = new Map<number, string>();
   private writeParsedListeners: Array<() => void> = [];
+  private scrollListeners: Array<() => void> = [];
 
   private readonly stableLine: FakeLine = {
     isWrapped: false,
@@ -242,10 +243,12 @@ class FakeTerminal {
   scrollToBottom(): void {
     this.scrollToBottomCalls++;
     this.buffer.active.viewportY = this.buffer.active.baseY;
+    for (const listener of this.scrollListeners) listener();
   }
   scrollToLine(line: number): void {
     this.scrollToLineCalls.push(line);
     this.buffer.active.viewportY = line;
+    for (const listener of this.scrollListeners) listener();
   }
   getSelection(): string {
     return "";
@@ -263,8 +266,15 @@ class FakeTerminal {
   onLineFeed(): { dispose(): void } {
     return { dispose() {} };
   }
-  onScroll(): { dispose(): void } {
-    return { dispose() {} };
+  onScroll(listener: () => void): { dispose(): void } {
+    this.scrollListeners.push(listener);
+    return {
+      dispose: () => {
+        this.scrollListeners = this.scrollListeners.filter(
+          (candidate) => candidate !== listener,
+        );
+      },
+    };
   }
   onWriteParsed(listener: () => void): { dispose(): void } {
     this.writeParsedListeners.push(listener);
@@ -567,7 +577,7 @@ function boot(
     new Function(iifeSource())();
     runtimeBooted = true;
   }
-  sendWebViewMessage({ type: "set-auto-scroll-disabled", disabled: false });
+  sendWebViewMessage({ type: "scroll-to-bottom" });
   sendWebViewMessage({
     type: "init",
     cols: viewport.cols,
@@ -1218,14 +1228,13 @@ describe("terminal WebView mobile reflow", () => {
     expect(snapshot?.options.cursorInactiveStyle).toBe("none");
   });
 
-  it("keeps a locked history viewport stable until a complex live snapshot is complete", async () => {
+  it("keeps a scrolled-up history viewport stable until a complex live snapshot is complete", async () => {
     boot("initial\r\n");
     await settle();
-    sendWebViewMessage({ type: "set-auto-scroll-disabled", disabled: true });
     const oldProjection = FakeTerminal.instances[1];
     const oldSurface = oldProjection?.openedSurface;
     oldProjection.normalBuffer.baseY = 100;
-    oldProjection.normalBuffer.viewportY = 60;
+    oldProjection.scrollToLine(60);
     FakeTerminal.nextOpenedWriteBaseY = 200;
     FakeTerminal.deferNextOpenedWrite = true;
 
@@ -1254,7 +1263,7 @@ describe("terminal WebView mobile reflow", () => {
     await settle();
     const oldProjection = FakeTerminal.instances[1];
     oldProjection.normalBuffer.baseY = 100;
-    oldProjection.normalBuffer.viewportY = 60;
+    oldProjection.scrollToBottom();
     FakeTerminal.nextOpenedWriteBaseY = 200;
 
     sendWebViewMessage({ type: "write", data: "\u001b[2Hupdated" });
@@ -1268,10 +1277,9 @@ describe("terminal WebView mobile reflow", () => {
   it("restores the same visible content after snapshot rows shift", async () => {
     boot("initial\r\n");
     await settle();
-    sendWebViewMessage({ type: "set-auto-scroll-disabled", disabled: true });
     const oldProjection = FakeTerminal.instances[1];
     oldProjection.normalBuffer.baseY = 100;
-    oldProjection.normalBuffer.viewportY = 60;
+    oldProjection.scrollToLine(60);
     oldProjection.normalBuffer.length = 101;
     oldProjection.lineTexts.set(62, "UNIQUE-VISIBLE-ANCHOR");
     FakeTerminal.nextOpenedWriteBaseY = 200;
@@ -1369,7 +1377,7 @@ describe("terminal WebView mobile reflow", () => {
     const oldProjection = FakeTerminal.instances[1];
     const oldSurface = oldProjection?.openedSurface;
     oldProjection.normalBuffer.baseY = 120;
-    oldProjection.normalBuffer.viewportY = 80;
+    oldProjection.scrollToLine(80);
     FakeTerminal.nextOpenedWriteBaseY = 240;
     FakeTerminal.deferNextOpenedWrite = true;
 
@@ -1397,6 +1405,33 @@ describe("terminal WebView mobile reflow", () => {
     expect(replacement?.scrollToLineCalls).toContain(200);
     expect(oldProjection.disposed).toBe(true);
     expect(document.getElementById("terminal-container")?.children).toHaveLength(1);
+  });
+
+  it("reveals one older viewport after an explicit history re-init", async () => {
+    boot("current history\r\n");
+    await settle();
+    const oldProjection = FakeTerminal.instances[1];
+    oldProjection.normalBuffer.baseY = 120;
+    oldProjection.scrollToLine(80);
+    FakeTerminal.nextOpenedWriteBaseY = 240;
+
+    sendWebViewMessage({
+      type: "init",
+      cols: 228,
+      rows: 70,
+      initialData: "older history\r\ncurrent history\r\n",
+      fontScale: 1,
+      textScaleMode: "mobile-reflow",
+      preserveScroll: true,
+      preserveFullInitialData: true,
+      revealOlderHistory: true,
+    });
+    await settle();
+
+    const replacement = FakeTerminal.instances.at(-1);
+    // 240 base - 40 rows-from-bottom - 42 visible rows.
+    expect(replacement?.scrollToLineCalls).toContain(158);
+    expect(replacement?.normalBuffer.viewportY).toBe(158);
   });
 
   it("coalesces complex but stable normal output into one RN projection refresh", async () => {

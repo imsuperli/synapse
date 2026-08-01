@@ -57,7 +57,9 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('const TERMINAL_HISTORY_PREFETCH_BYTES = 768 * 1024')
     expect(routeSource).toContain('const handleHistoryTopReached = useCallback(() => {')
     expect(routeSource).toContain('await prefetchOlderTerminalHistory(TERMINAL_HISTORY_PAGE_BYTES)')
-    expect(routeSource).toContain('takePrefetchedRemoteTerminalHistory(prefetch, { maxPages })')
+    expect(routeSource).toContain(
+      'takePrefetchedRemoteTerminalHistory(prefetch, { maxPages, maxBytes })'
+    )
     expect(routeSource).toContain(
       'prependRemoteTerminalHistoryPage(\n            terminalHistoryRef.current,\n            page'
     )
@@ -65,9 +67,10 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('handleHistoryTopReachedRef.current?.()')
     expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
     expect(routeSource).toContain('void prefetchOlderTerminalHistory().catch(() => {})')
-    expect(routeSource).toContain(
-      "void activatePrefetchedTerminalHistory('history-top', 1).catch((err) => {"
-    )
+    expect(routeSource).toContain('const TERMINAL_HISTORY_GESTURE_MAX_PAGES = 2')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_GESTURE_MAX_BYTES = 384 * 1024')
+    expect(routeSource).toContain("'history-top',\n      TERMINAL_HISTORY_GESTURE_MAX_PAGES")
+    expect(routeSource).toContain("trigger === 'history-top'")
     expect(routeSource).toContain('const hydrateInitialTerminalHistory = useCallback(')
     expect(routeSource).toContain("activatePrefetchedTerminalHistory('initial', 1)")
     expect(routeSource).toContain('shouldLoadInitialTerminalHistory({')
@@ -215,7 +218,10 @@ describe('Synapse Mobile terminal route wiring', () => {
     expect(routeSource).toContain('toggleOneShotModifier(slot.modifier)')
     expect(routeSource).toContain("if (slot.type === 'scroll')")
     expect(routeSource).toContain("{'⇳'}")
-    expect(routeSource).toContain('terminalRef.current?.setAutoScrollDisabled(nextDisabled)')
+    expect(routeSource).toContain('terminalRef.current?.scrollToBottom()')
+    expect(routeSource).toContain('onPress={returnToLatestTerminalOutput}')
+    expect(routeSource).toContain("accessibilityLabel={t('terminal.followLatestOutput')}")
+    expect(routeSource).not.toContain('accessibilityState={{ selected: autoScrollDisabled }}')
     expect(routeSource).toContain('onPressIn={() => {')
     expect(routeSource).toContain('startAccessoryRepeat(input)')
     expect(routeSource).toContain('stopAccessoryRepeat()')

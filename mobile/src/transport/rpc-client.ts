@@ -42,9 +42,7 @@ type ConnectWaiter = {
   timeout: ReturnType<typeof setTimeout> | null
 }
 
-type SendRequestOptions = {
-  timeoutMs?: number
-}
+type SendRequestOptions = { timeoutMs?: number; waitForConnection?: boolean }
 
 type SubscribeOptions = {
   onBinaryFrame?: (frame: BrowserScreencastFrame) => void
@@ -1090,7 +1088,8 @@ export function connect(
     ): Promise<RpcResponse> {
       const waitStart = Date.now()
       const wasConnected = state === 'connected'
-      await waitForConnected(options?.timeoutMs)
+      if (options?.waitForConnection !== false) await waitForConnected(options?.timeoutMs)
+      else if (!wasConnected) throw new Error('Connection interrupted')
       if (!wasConnected) {
         console.log('[net] sendRequest waited for connect', {
           method,

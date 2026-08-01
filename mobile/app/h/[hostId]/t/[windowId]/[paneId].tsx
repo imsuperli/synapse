@@ -77,6 +77,7 @@ import {
   scheduleTerminalLiveInputFocus
 } from '../../../../../src/terminal/terminal-live-input'
 import type { TerminalLiveInputSender } from '../../../../../src/terminal/terminal-live-input-sender'
+import { dispatchTerminalLiveInput } from '../../../../../src/terminal/terminal-live-input-dispatch'
 import { getTerminalLiveInputKeyboardType } from '../../../../../src/terminal/terminal-keyboard-type'
 import { normalizeTerminalTextInput } from '../../../../../src/terminal/terminal-text-input-normalization'
 import { useTerminalLiveInputCommit } from '../../../../../src/terminal/use-terminal-live-input-commit'
@@ -153,6 +154,8 @@ const TERMINAL_PANE_STATUS_SYNC_MS = 3000
 const TERMINAL_HISTORY_PAGE_BYTES = 192 * 1024
 const TERMINAL_HISTORY_PAGE_CHUNKS = 50_000
 const TERMINAL_HISTORY_PREFETCH_BYTES = 768 * 1024
+const TERMINAL_HISTORY_GESTURE_MAX_PAGES = 2
+const TERMINAL_HISTORY_GESTURE_MAX_BYTES = 384 * 1024
 const TERMINAL_HISTORY_NOTICE_MS = 3_000
 const TERMINAL_INCREMENTAL_SYNC_PAGE_LIMIT = 32
 
@@ -516,7 +519,6 @@ function createRemoteTerminalSessionRuntime(windowId: string, paneId: string) {
     initialHistoryActivatedBytesRef: { current: 0 },
     terminalHistoryMetricsRef: { current: null as TerminalHistoryMetrics | null },
     terminalKeyboardMetricsRef: { current: null as TerminalKeyboardAvoidanceMetrics | null },
-    autoScrollDisabledRef: { current: false },
     terminalInitializedRef: { current: false },
     terminalWebReadyRef: { current: false },
     resyncingRef: { current: false },
@@ -611,7 +613,6 @@ export default function RemoteTerminalScreen() {
   const initialHistoryStagesRef = sessionRuntime.initialHistoryStagesRef
   const initialHistoryActivatedBytesRef = sessionRuntime.initialHistoryActivatedBytesRef
   const terminalHistoryMetricsRef = sessionRuntime.terminalHistoryMetricsRef
-  const autoScrollDisabledRef = sessionRuntime.autoScrollDisabledRef
   const terminalInitializedRef = sessionRuntime.terminalInitializedRef
   const terminalWebReadyRef = sessionRuntime.terminalWebReadyRef
   const resyncingRef = sessionRuntime.resyncingRef
@@ -676,7 +677,6 @@ export default function RemoteTerminalScreen() {
   const [stopping, setStopping] = useState(false)
   const [terminalRunning, setTerminalRunning] = useState(true)
   const [terminalTextScale, setTerminalTextScale] = useState(1)
-  const [autoScrollDisabled, setAutoScrollDisabled] = useState(autoScrollDisabledRef.current)
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
   const [historyNotice, setHistoryNotice] = useState<string | null>(null)
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false)
@@ -706,10 +706,6 @@ export default function RemoteTerminalScreen() {
   activeHandleRef.current = terminalHandle
   activeSessionTabTypeRef.current = 'terminal'
   liveInputTerminalHandlesRef.current = liveInputTerminalHandles
-
-  useEffect(() => {
-    setAutoScrollDisabled(autoScrollDisabledRef.current)
-  }, [autoScrollDisabledRef, terminalHandle])
 
   const setLiveInputCapture = useCallback((text: string) => {
     liveInputCaptureRef.current = text
@@ -1402,7 +1398,8 @@ export default function RemoteTerminalScreen() {
   const activatePrefetchedTerminalHistory = useCallback(
     async (
       trigger: 'initial' | 'history-top',
-      maxPages = 1
+      maxPages = 1,
+      maxBytes = Number.POSITIVE_INFINITY
     ): Promise<{ activated: boolean; activatedBytes: number } | null> => {
       const client = clientRef.current
       if (
@@ -1443,7 +1440,7 @@ export default function RemoteTerminalScreen() {
           return null
         }
 
-        const prefetched = takePrefetchedRemoteTerminalHistory(prefetch, { maxPages })
+        const prefetched = takePrefetchedRemoteTerminalHistory(prefetch, { maxPages, maxBytes })
         const activatedBytes = prefetched.pages.reduce(
           (pageTotal, page) =>
             pageTotal + page.chunks.reduce((chunkTotal, chunk) => chunkTotal + chunk.length, 0),
@@ -1516,7 +1513,8 @@ export default function RemoteTerminalScreen() {
           buildTerminalInitialData(),
           true,
           undefined,
-          true
+          true,
+          trigger === 'history-top'
         )
         await terminalRef.current?.awaitReady()
         appendDiagnostic('mobile', 'history-activation-result', {
@@ -2752,13 +2750,12 @@ export default function RemoteTerminalScreen() {
         return false
       }
       const runId = runIdRef.current
-      return sendTerminalInput(client, windowId, paneId, text).then(
-        () => true,
+      return dispatchTerminalLiveInput(
+        () => sendTerminalInput(client, windowId, paneId, text),
         (err) => {
           if (runIdRef.current === runId && clientRef.current === client) {
             setError(terminalErrorMessage(err, t))
           }
-          return false
         }
       )
     },
@@ -2815,12 +2812,9 @@ export default function RemoteTerminalScreen() {
   const handleAccessoryKeyRef = useRef(handleAccessoryKey)
   handleAccessoryKeyRef.current = handleAccessoryKey
 
-  const toggleTerminalAutoScroll = useCallback(() => {
-    const nextDisabled = !autoScrollDisabledRef.current
-    autoScrollDisabledRef.current = nextDisabled
-    setAutoScrollDisabled(nextDisabled)
-    terminalRef.current?.setAutoScrollDisabled(nextDisabled)
-  }, [autoScrollDisabledRef, terminalRef])
+  const returnToLatestTerminalOutput = useCallback(() => {
+    terminalRef.current?.scrollToBottom()
+  }, [terminalRef])
 
   const createAccessoryKeyInput = useCallback(
     (key: Parameters<typeof createTerminalLiveAccessoryInput>[0]) => {
@@ -3007,7 +3001,11 @@ export default function RemoteTerminalScreen() {
       return
     }
     const runId = runIdRef.current
-    void activatePrefetchedTerminalHistory('history-top', 1).catch((err) => {
+    void activatePrefetchedTerminalHistory(
+      'history-top',
+      TERMINAL_HISTORY_GESTURE_MAX_PAGES,
+      TERMINAL_HISTORY_GESTURE_MAX_BYTES
+    ).catch((err) => {
       if (runIdRef.current === runId && clientRef.current === client) {
         appendDiagnostic('mobile', 'history-activation-error', {
           handle: terminalHandle,
@@ -3024,7 +3022,6 @@ export default function RemoteTerminalScreen() {
     const runtime = sessionRuntimesRef.current.get(handle)
     if (runtime) {
       runtime.terminalRef.current = ref
-      ref?.setAutoScrollDisabled(runtime.autoScrollDisabledRef.current)
     }
   }, [])
 
@@ -3034,7 +3031,6 @@ export default function RemoteTerminalScreen() {
       if (!runtime) {
         return
       }
-      runtime.terminalRef.current?.setAutoScrollDisabled(runtime.autoScrollDisabledRef.current)
       if (handle === activeHandleRef.current) {
         handleTerminalWebReady()
         return
@@ -3529,24 +3525,15 @@ export default function RemoteTerminalScreen() {
                                 key={slot.id}
                                 style={({ pressed }) => [
                                   styles.accessoryKey,
-                                  autoScrollDisabled && styles.accessoryScrollLocked,
                                   pressed && styles.accessoryKeyPressed
                                 ]}
-                                onPress={toggleTerminalAutoScroll}
+                                onPress={returnToLatestTerminalOutput}
                                 accessibilityRole="button"
-                                accessibilityLabel={
-                                  autoScrollDisabled
-                                    ? t('terminal.followLatestOutput')
-                                    : t('terminal.lockHistoryViewport')
-                                }
-                                accessibilityState={{ selected: autoScrollDisabled }}
+                                accessibilityLabel={t('terminal.followLatestOutput')}
                               >
                                 <Text
                                   numberOfLines={1}
-                                  style={[
-                                    styles.accessoryKeyText,
-                                    autoScrollDisabled && styles.accessoryScrollLockedText
-                                  ]}
+                                  style={styles.accessoryKeyText}
                                 >
                                   {'⇳'}
                                 </Text>
@@ -3880,13 +3867,6 @@ const styles = StyleSheet.create({
   },
   accessoryModifierActive: {
     backgroundColor: colors.statusRed
-  },
-  accessoryScrollLocked: {
-    borderRadius: radii.button,
-    backgroundColor: colors.textSecondary
-  },
-  accessoryScrollLockedText: {
-    color: colors.terminalBg
   },
   accessoryKeyDisabled: {
     opacity: 0.35

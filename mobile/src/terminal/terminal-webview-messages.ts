@@ -21,6 +21,9 @@ export type TerminalWebViewCommand =
       // Remote terminal history is a raw PTY stream. Do not trim bytes before the
       // last alternate-screen enter sequence, or dynamic CLIs can lose context.
       preserveFullInitialData?: boolean
+      // Explicit history paging keeps the old anchor but reveals one newly
+      // available viewport above it, so every gesture has a visible result.
+      revealOlderHistory?: boolean
     }
   | {
       type: 'set-font-scale'
@@ -36,7 +39,7 @@ export type TerminalWebViewCommand =
   | { type: 'restore-foreground'; id?: number }
   | { type: 'reveal-live-input'; id?: number }
   | { type: 'restore-keyboard-viewport'; id?: number }
-  | { type: 'set-auto-scroll-disabled'; id?: number; disabled: boolean }
+  | { type: 'scroll-to-bottom'; id?: number }
   | { type: 'set-live-input-text'; id?: number; text: string }
   | { type: 'cancel-select'; id?: number }
   | { type: 'do-select-all'; id?: number }

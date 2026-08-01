@@ -9,6 +9,7 @@ const source =
   readFileSync(new URL('./terminal-webview-url-tap.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-tap-dispatch-injected.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-mobile-reflow-injected.ts', import.meta.url), 'utf8') +
+  readFileSync(new URL('./terminal-webview-history-scroll-injected.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-selection-word-injected.ts', import.meta.url), 'utf8') +
   readFileSync(new URL('./terminal-webview-html.ts', import.meta.url), 'utf8')
 
@@ -62,12 +63,12 @@ describe('TerminalWebView scroll routing', () => {
 
     const momentumBlock = sliceBetween('function momentumStep()', 'if (Math.abs(vel) > MIN_VEL)')
     expect(momentumBlock.indexOf('if (shouldRouteScrollToTerminalInput())')).toBeLessThan(
-      momentumBlock.indexOf('if (!applyNormalBufferScrollDelta(delta, false))')
+      momentumBlock.indexOf('if (!applyNormalBufferScrollDelta(delta))')
     )
     expect(momentumBlock).toContain('routeScrollLines(lines, ts.lastX, ts.lastY);')
   })
 
-  it('gives explicit history-reading mode ownership before TUI routing', () => {
+  it('gives smart history-reading mode ownership before TUI routing', () => {
     const routingDecision = sliceBetween(
       'function shouldRouteScrollToTerminalInput()',
       'function buildMouseWheelScrollInput'
@@ -99,7 +100,7 @@ describe('TerminalWebView scroll routing', () => {
   it('does not rubber-band normal scroll at scrollback edges', () => {
     expect(source).toContain('function canScrollNormalBufferDelta(deltaY)')
     const smoothScrollBlock = sliceBetween(
-      'function applyNormalBufferScrollDelta(deltaY, allowHistoryRequest)',
+      'function applyNormalBufferScrollDelta(deltaY)',
       'function enqueueNormalBufferScrollDelta(deltaY)'
     )
     expect(smoothScrollBlock).toContain('if (!canScrollNormalBufferDelta(deltaY))')
@@ -115,7 +116,7 @@ describe('TerminalWebView scroll routing', () => {
     expect(touchMoveBlock).toContain('ts.velY = 0;')
 
     const momentumBlock = sliceBetween('function momentumStep()', 'if (Math.abs(vel) > MIN_VEL)')
-    expect(momentumBlock).toContain('if (!applyNormalBufferScrollDelta(delta, false))')
+    expect(momentumBlock).toContain('if (!applyNormalBufferScrollDelta(delta))')
     expect(momentumBlock).toContain('ts.momentumId = null;')
   })
 
@@ -202,10 +203,13 @@ describe('TerminalWebView scroll routing', () => {
 
   it('notifies React Native when normal scrollback reaches the loaded top', () => {
     expect(source).toContain("notify({ type: 'history-top' });")
-    expect(source).toContain('if (now - lastHistoryTopNotifyAt < 900) return;')
-    expect(source).toContain('function requestHistoryTopForDelta(deltaY)')
-    expect(source).toContain('if (historyTopPullDistance < 24) return;')
-    expect(source).toContain('if (surfaceTouchActive)')
+    expect(source).toContain('function requestHistoryNearTopForDelta(deltaY)')
+    expect(source).toContain('Math.floor((term.rows || 1) / 2)')
+    expect(source).toContain('if ((buffer.viewportY || 0) > thresholdRows) return false;')
+    expect(source).toContain('if (ts.historyTopDistance < 24) return false;')
+    expect(source).not.toContain('lastHistoryTopNotifyAt')
+    expect(source).not.toContain('historyTopPullDistance')
+    expect(source).toContain('if (surfaceTouchActive || (ts && ts.momentumId !== null))')
     expect(source).toContain('historyTopPending = true;')
     const touchEndBlock = sliceBetween(
       "targetSurface.addEventListener('touchend'",
@@ -213,7 +217,27 @@ describe('TerminalWebView scroll routing', () => {
     )
     expect(touchEndBlock).toContain('surfaceTouchActive = false;')
     expect(touchEndBlock).toContain('flushPendingHistoryTopReached();')
-    expect(touchEndBlock).toContain('applyNormalBufferScrollDelta(delta, false)')
+    expect(touchEndBlock).toContain('applyNormalBufferScrollDelta(delta)')
+    expect(touchEndBlock).toContain('ts.momentumId = null;\n              flushPendingHistoryTopReached();')
+  })
+
+  it('derives smart follow from the normal-buffer viewport and exposes only return-to-latest', () => {
+    const followBlock = sliceBetween(
+      'function syncSmartFollowFromViewport()',
+      'function revealLiveInput()'
+    )
+    expect(followBlock).toContain("if (buffer.type !== 'normal') return;")
+    expect(followBlock).toContain(
+      "var next = (buffer.viewportY || 0) < (buffer.baseY || 0);"
+    )
+    expect(followBlock).toContain('function scrollToBottom()')
+    expect(followBlock).toContain('autoScrollDisabled = false;')
+    expect(source).toContain("} else if (msg.type === 'scroll-to-bottom')")
+    expect(source).not.toContain("msg.type === 'set-auto-scroll-disabled'")
+    expect(source).toContain('syncSmartFollowFromViewport();\n        updateScrollIndicator(false);')
+    expect(source).toContain(
+      'followGeneration !== terminalGeneration || !term || autoScrollDisabled'
+    )
   })
 
   it('only consumes viewport zoom gestures when the canvas actually moves', () => {
@@ -296,8 +320,9 @@ describe('TerminalWebView scroll routing', () => {
       '}, { capture: true, passive: true });'
     )
     expect(touchEndBlock.indexOf('flushPendingNormalBufferScrollDelta();')).toBeLessThan(
-      touchEndBlock.indexOf('var vel = ts.velY;')
+      touchEndBlock.indexOf('var historyRequested = flushPendingHistoryTopReached();')
     )
+    expect(touchEndBlock).toContain('var vel = historyRequested ? 0 : ts.velY;')
     expect(touchEndBlock).toContain('if (Date.now() - ts.lastTime > 80) vel = 0;')
   })
 

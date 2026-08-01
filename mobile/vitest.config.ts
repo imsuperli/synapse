@@ -45,6 +45,7 @@ export default defineConfig({
       'src/terminal/terminal-accessory-*.test.ts',
       'src/terminal/terminal-text-input-normalization.test.ts',
       'src/terminal/terminal-keyboard-avoidance.test.ts',
+      'src/terminal/terminal-live-input-dispatch.test.ts',
       'src/terminal/terminal-mobile-reflow-model.test.ts',
       'src/terminal/terminal-one-shot-modifiers.test.ts',
       'src/terminal/terminal-webview-engine-error.test.ts',

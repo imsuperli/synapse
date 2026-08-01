@@ -350,7 +350,12 @@ export async function sendTerminalInput(
   paneId: string,
   data: string
 ): Promise<void> {
-  const response = await client.sendRequest('terminal.send', { windowId, paneId, data })
+  // Terminal input belongs to the current socket. Never replay keystrokes after reconnect.
+  const response = await client.sendRequest(
+    'terminal.send',
+    { windowId, paneId, data },
+    { waitForConnection: false }
+  )
   if (!response.ok) {
     throw new Error(response.error.message)
   }

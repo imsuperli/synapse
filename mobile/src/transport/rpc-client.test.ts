@@ -1013,4 +1013,30 @@ describe('mobile rpc-client connection timeout', () => {
 
     client.close()
   })
+
+  it('does not replay fail-fast interactive requests after reconnect', async () => {
+    const client = connect('ws://desktop.invalid', 'token', 'server-key')
+    const first = mockSockets[0]!
+    first.open()
+    first.receive(JSON.stringify({ type: 'e2ee_ready' }))
+    first.receive('encrypted:{"type":"e2ee_authenticated"}')
+    first.close()
+
+    await expect(
+      client.sendRequest(
+        'terminal.send',
+        { windowId: 'w1', paneId: 'p1', data: 'x' },
+        { waitForConnection: false }
+      )
+    ).rejects.toThrow('Connection interrupted')
+
+    await vi.advanceTimersByTimeAsync(500)
+    const reconnected = mockSockets.at(-1)!
+    reconnected.open()
+    reconnected.receive(JSON.stringify({ type: 'e2ee_ready' }))
+    reconnected.receive('encrypted:{"type":"e2ee_authenticated"}')
+    expect(sentRequests(reconnected, 'terminal.send')).toEqual([])
+
+    client.close()
+  })
 })

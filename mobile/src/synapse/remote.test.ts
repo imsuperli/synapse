@@ -362,11 +362,16 @@ describe('Synapse remote terminal helpers', () => {
       beforeSeq: 12,
       limitBytes: 4096
     })
-    expect(client.sendRequest).toHaveBeenNthCalledWith(4, 'terminal.send', {
-      windowId: 'w1',
-      paneId: 'p1',
-      data: 'ls\n'
-    })
+    expect(client.sendRequest).toHaveBeenNthCalledWith(
+      4,
+      'terminal.send',
+      {
+        windowId: 'w1',
+        paneId: 'p1',
+        data: 'ls\n'
+      },
+      { waitForConnection: false }
+    )
     expect(client.sendRequest).toHaveBeenNthCalledWith(5, 'terminal.clear', {
       windowId: 'w1',
       paneId: 'p1'

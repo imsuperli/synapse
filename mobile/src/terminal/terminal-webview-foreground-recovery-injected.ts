@@ -10,7 +10,7 @@ export const TERMINAL_FOREGROUND_RECOVERY_JS = String.raw`
     resetTouchDispatcherState();
     surfaceTouchActive = false;
     historyTopPending = false;
-    historyTopPullDistance = 0;
+    ts.historyTopDistance = 0;
     lastGestureDiagnosticRoute = '';
     ts.isPinching = false;
     ts.pinchDist = 0;

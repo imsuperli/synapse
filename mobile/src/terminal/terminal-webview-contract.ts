@@ -67,7 +67,8 @@ export type TerminalWebViewHandle = {
     initialData?: string,
     preserveScroll?: boolean,
     oscLinks?: TerminalOscLinkRange[],
-    preserveFullInitialData?: boolean
+    preserveFullInitialData?: boolean,
+    revealOlderHistory?: boolean
   ) => void
   resize: (cols: number, rows: number) => void
   // Why: reflow the local xterm buffer (scrollback included) to a new width
@@ -80,7 +81,7 @@ export type TerminalWebViewHandle = {
   restoreForeground: () => void
   revealLiveInput: () => void
   restoreKeyboardViewport: () => void
-  setAutoScrollDisabled: (disabled: boolean) => void
+  scrollToBottom: () => void
   cancelSelect: () => void
   doSelectAll: () => void
   // Why: lets callers await the WebView-side `init` rAF chain (term.open

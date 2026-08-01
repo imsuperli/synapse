@@ -6,6 +6,7 @@ import type { MobileTerminalTheme } from './mobile-terminal-theme'
 import { TERMINAL_PATH_TAP_JS } from './terminal-path-tap-injected'
 import { XTERM_ENGINE_CSS, XTERM_ENGINE_JS } from './terminal-webview-engine.generated'
 import { TERMINAL_FOREGROUND_RECOVERY_JS } from './terminal-webview-foreground-recovery-injected'
+import { TERMINAL_HISTORY_SCROLL_JS } from './terminal-webview-history-scroll-injected'
 import { TERMINAL_MOBILE_REFLOW_JS } from './terminal-webview-mobile-reflow-injected'
 import { TERMINAL_REFLOW_JS } from './terminal-webview-reflow-injected'
 import { TERMINAL_RESIZE_CONTROL_JS } from './terminal-webview-resize-control-injected'
@@ -410,14 +411,13 @@ window.onerror = function(msg) {
   // once when the first live data chunk arrives so a wider line that pushes
   // scrollWidth past the previously-measured value gets re-scaled to fit.
   var firstDataPending = false;
-  var lastHistoryTopNotifyAt = 0;
   var surfaceTouchActive = false;
   var historyTopPending = false;
   var lastGestureDiagnosticRoute = '';
-  var historyTopPullDistance = 0;
-  // Termux-style SCROLL state. False follows live output; true keeps the
-  // reader's normal-buffer viewport stable while output continues.
+  // Internal smart-follow state. It is derived from the normal buffer's
+  // viewport, never persisted as a user toggle.
   var autoScrollDisabled = false;
+  var smartFollowSyncSuspended = false;
 
   // Diagnostic logger — bridges WebView console.log to RN via postMessage.
   // Tag with [fit] so it's easy to filter in the Expo/Metro logs.
@@ -1016,7 +1016,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     pumpWrites(terminalGeneration);
   }
 
-  function initDirect(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
+  function initDirect(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData, revealOlderHistory) {
     textScaleMode = normalizeTextScaleMode(nextTextScaleMode);
     if (typeof nextFontScale === 'number' && nextFontScale > 0) currentTextScale = snapToTextScalePreset(nextFontScale);
     // Why: a width-reflow re-stream rewraps the same content at new cols.
@@ -1024,6 +1024,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     // since line counts and cell positions change. null = stay pinned to bottom.
     var prevB = preserveScroll && term && term.buffer && term.buffer.active ? term.buffer.active : null;
     var scrollAnchorRows = prevB ? Math.max(0, (prevB.baseY || 0) - (prevB.viewportY || 0)) : -1;
+    var revealRows = revealOlderHistory === true && prevB ? Math.max(1, term.rows || 1) : 0;
+    smartFollowSyncSuspended = true;
     terminalGeneration++;
     var gen = terminalGeneration;
     ready = false;
@@ -1115,11 +1117,15 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       everReady = true;
       afterWritesDrained(function() {
         if (gen !== terminalGeneration) return;
-        // Why: restore the reader's place after the rewrapped buffer replays.
-        // Replay lands at bottom, so only act when they were scrolled up (rows>0).
-        if (scrollAnchorRows > 0 && term && term.buffer && term.buffer.active) {
-          try { term.scrollToLine(Math.max(0, (term.buffer.active.baseY || 0) - scrollAnchorRows)); } catch (e) {}
+        // Replay lands at bottom. Restore the prior distance from bottom, and
+        // for an explicit page load move one viewport into the new rows.
+        if (scrollAnchorRows >= 0 && term && term.buffer && term.buffer.active) {
+          try {
+            term.scrollToLine(Math.max(0, (term.buffer.active.baseY || 0) - scrollAnchorRows - revealRows));
+          } catch (e) {}
         }
+        smartFollowSyncSuspended = false;
+        syncSmartFollowFromViewport();
         captureInitialOscLinkTexts();
         initialOscLinkRowOffset = 0;
         initialOscLinkEvictionReady = true;
@@ -1147,7 +1153,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     });
   }
 
-  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData) {
+  function init(cols, rows, initialData, nextTheme, nextFontScale, preserveScroll, nextOscLinks, nextTextScaleMode, preserveFullInitialData, revealOlderHistory) {
     surfaceTouchActive = false;
     if (ts && ts.momentumId !== null) {
       cancelAnimationFrame(ts.momentumId);
@@ -1166,7 +1172,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
         nextFontScale,
         preserveScroll,
         nextOscLinks,
-        preserveFullInitialData
+        preserveFullInitialData,
+        revealOlderHistory
       );
       return;
     }
@@ -1180,7 +1187,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       preserveScroll,
       nextOscLinks,
       nextMode,
-      preserveFullInitialData
+      preserveFullInitialData,
+      revealOlderHistory
     );
   }
 
@@ -1207,7 +1215,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     if (!autoScrollDisabled) {
       var followGeneration = terminalGeneration;
       afterWritesDrained(function() {
-        if (followGeneration !== terminalGeneration || !term) return;
+        if (followGeneration !== terminalGeneration || !term || autoScrollDisabled) return;
         try { term.scrollToBottom(); } catch (e) {}
       });
     }
@@ -1235,34 +1243,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     }
   }
 
-  function notifyHistoryTopReached() {
-    if (surfaceTouchActive) {
-      historyTopPending = true;
-      return;
-    }
-    var now = Date.now();
-    if (now - lastHistoryTopNotifyAt < 900) return;
-    lastHistoryTopNotifyAt = now;
-    emitDiagnostic('history-top', {});
-    notify({ type: 'history-top' });
-  }
-
-  function flushPendingHistoryTopReached() {
-    if (!historyTopPending) return;
-    historyTopPending = false;
-    notifyHistoryTopReached();
-  }
-
-  function requestHistoryTopForDelta(deltaY) {
-    if (deltaY >= 0) {
-      historyTopPullDistance = 0;
-      return;
-    }
-    historyTopPullDistance += -deltaY;
-    if (historyTopPullDistance < 24) return;
-    historyTopPullDistance = 0;
-    notifyHistoryTopReached();
-  }
+  ${TERMINAL_HISTORY_SCROLL_JS}
 
   function engineErrorText(err) {
     if (!err) return '';
@@ -1390,7 +1371,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       if (handledMessageIds.length > 256) handledMessageIds.shift();
     }
     if (msg.type === 'init') {
-      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks, msg.textScaleMode, msg.preserveFullInitialData);
+      init(msg.cols, msg.rows, msg.initialData, msg.terminalTheme, msg.fontScale, msg.preserveScroll, msg.oscLinks, msg.textScaleMode, msg.preserveFullInitialData, msg.revealOlderHistory);
     } else if (msg.type === 'set-font-scale') {
       textScaleMode = normalizeTextScaleMode(msg.textScaleMode);
       // Why: ignore RN echoing back the value a pinch just set (msg.fontScale ===
@@ -1457,8 +1438,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       revealLiveInput();
     } else if (msg.type === 'restore-keyboard-viewport') {
       restoreKeyboardViewport();
-    } else if (msg.type === 'set-auto-scroll-disabled') {
-      setAutoScrollDisabled(msg.disabled === true);
+    } else if (msg.type === 'scroll-to-bottom') {
+      scrollToBottom();
     } else if (msg.type === 'set-live-input-text') {
       setMobileLiveInputText(msg.text);
     } else if (msg.type === 'set-theme') {
@@ -1648,29 +1629,34 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     });
   }
 
-  function setAutoScrollDisabled(disabled) {
-    var next = disabled === true;
-    if (autoScrollDisabled === next) {
-      if (!next && term) {
-        try { term.scrollToBottom(); } catch (e) {}
-      }
-      return;
-    }
+  function syncSmartFollowFromViewport() {
+    if (smartFollowSyncSuspended || !term || !term.buffer || !term.buffer.active) return;
+    var buffer = term.buffer.active;
+    if (buffer.type !== 'normal') return;
+    var next = (buffer.viewportY || 0) < (buffer.baseY || 0);
+    if (autoScrollDisabled === next) return;
     autoScrollDisabled = next;
     resetSmoothScrollOffset();
-    if (!autoScrollDisabled && term) {
+    emitDiagnostic('smart-follow', { reading: autoScrollDisabled });
+  }
+
+  function scrollToBottom() {
+    autoScrollDisabled = false;
+    smartFollowSyncSuspended = false;
+    resetSmoothScrollOffset();
+    if (term) {
       try { term.scrollToBottom(); } catch (e) {}
       if (isMobileReflowTextScale() && mobileSourceTerm) {
         scheduleMobileSnapshotProjection('follow-live');
       }
     }
     updateScrollIndicator(false);
-    emitDiagnostic('auto-scroll', { disabled: autoScrollDisabled });
+    emitDiagnostic('smart-follow', { reading: false, reason: 'return-to-latest' });
   }
 
   function revealLiveInput() {
     if (!term) return;
-    term.scrollToBottom();
+    scrollToBottom();
     var buffer = term.buffer && term.buffer.active ? term.buffer.active : null;
     var rowHeightPx = Math.max(0, getCellHeight() * getTotalScale());
     if (buffer && rowHeightPx > 0) {
@@ -1717,6 +1703,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     }
     try {
       termObserverDisposables.push(term.onScroll(function() {
+        syncSmartFollowFromViewport();
         updateScrollIndicator(false);
         scheduleCursorOverlayUpdate();
       }));
@@ -1997,15 +1984,15 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     return buffer.viewportY > 0;
   }
 
-  function applyNormalBufferScrollDelta(deltaY, allowHistoryRequest) {
+  function applyNormalBufferScrollDelta(deltaY) {
     if (!term || deltaY === 0) return false;
     var effectiveCellH = getCellHeight() * getTotalScale();
     if (effectiveCellH <= 0) return false;
     if (!canScrollNormalBufferDelta(deltaY)) {
-      // Momentum may reach the loaded top after the finger is already up. Do
-      // not replace the terminal surface from that animation; only an explicit
-      // pull gesture may request another history page.
-      if (allowHistoryRequest !== false) requestHistoryTopForDelta(deltaY);
+      // Momentum may reach the loaded top after the finger is already up. Keep
+      // the request pending until momentum stops so init never replaces the
+      // terminal surface from inside its animation frame.
+      requestHistoryNearTopForDelta(deltaY);
       resetSmoothScrollOffset();
       return false;
     }
@@ -2022,6 +2009,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       }
       if (applied !== lines) smoothScrollOffsetY = 0;
     }
+    requestHistoryNearTopForDelta(deltaY);
     var limit = effectiveCellH - 1;
     if (smoothScrollOffsetY > limit) smoothScrollOffsetY = limit;
     if (smoothScrollOffsetY < -limit) smoothScrollOffsetY = -limit;
@@ -2032,7 +2020,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
   function enqueueNormalBufferScrollDelta(deltaY) {
     if (!term || deltaY === 0) return false;
     if (!canScrollNormalBufferDelta(deltaY)) {
-      requestHistoryTopForDelta(deltaY);
+      requestHistoryNearTopForDelta(deltaY);
       resetSmoothScrollOffset();
       return false;
     }
@@ -2299,7 +2287,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
 
   var ts = {
     lastX: 0, lastY: 0, lastTime: 0, velY: 0,
-    accumDelta: 0, momentumId: null, isPinching: false,
+    accumDelta: 0, historyTopDistance: 0, momentumId: null, isPinching: false,
     pinchDist: 0, pinchScale: 0, pinchSurfX: 0, pinchSurfY: 0
   };
 
@@ -2324,7 +2312,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     if (!isFinite(dist) || dist <= 0) return false;
     ts.isPinching = true;
     historyTopPending = false;
-    historyTopPullDistance = 0;
+    ts.historyTopDistance = 0;
     ts.velY = 0;
     ts.accumDelta = 0;
     smoothScrollOffsetY = 0;
@@ -2355,7 +2343,8 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       if (isMobileReflowTextScale()) {
         deferMobileProjectionRefreshForInteraction('touch-active');
       }
-      historyTopPullDistance = 0;
+      historyTopPending = false;
+      ts.historyTopDistance = 0;
       lastGestureDiagnosticRoute = '';
       if (ts.momentumId) {
         cancelAnimationFrame(ts.momentumId);
@@ -2525,11 +2514,10 @@ ${TERMINAL_MOBILE_REFLOW_JS}
 
       if (e.touches.length === 0) {
         surfaceTouchActive = false;
-        flushPendingHistoryTopReached();
-        historyTopPullDistance = 0;
         emitKeyboardAvoidanceMetrics();
         flushPendingNormalBufferScrollDelta();
-        var vel = ts.velY;
+        var historyRequested = flushPendingHistoryTopReached();
+        var vel = historyRequested ? 0 : ts.velY;
         if (Date.now() - ts.lastTime > 80) vel = 0;
         var FRICTION = 0.972;
         var MIN_VEL = 0.012;
@@ -2537,6 +2525,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
           vel *= FRICTION;
           if (Math.abs(vel) < MIN_VEL) {
             ts.momentumId = null;
+            flushPendingHistoryTopReached();
             resumeMobileProjectionRefreshAfterInteraction();
             return;
           }
@@ -2551,8 +2540,9 @@ ${TERMINAL_MOBILE_REFLOW_JS}
               routeScrollLines(lines, ts.lastX, ts.lastY);
             }
           } else {
-            if (!applyNormalBufferScrollDelta(delta, false)) {
+            if (!applyNormalBufferScrollDelta(delta)) {
               ts.momentumId = null;
+              flushPendingHistoryTopReached();
               resumeMobileProjectionRefreshAfterInteraction();
               return;
             }
@@ -2562,6 +2552,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
         if (Math.abs(vel) > MIN_VEL) {
           ts.momentumId = requestAnimationFrame(momentumStep);
         } else {
+          flushPendingHistoryTopReached();
           resumeMobileProjectionRefreshAfterInteraction();
         }
       }
@@ -2572,7 +2563,7 @@ ${TERMINAL_MOBILE_REFLOW_JS}
       // A system gesture or app backgrounding cancelled this interaction. Only
       // a completed touchend may commit a history request.
       historyTopPending = false;
-      historyTopPullDistance = 0;
+      ts.historyTopDistance = 0;
       ts.isPinching = false;
       ts.velY = 0;
       ts.accumDelta = 0;
