@@ -69,6 +69,18 @@ describe('TerminalWebView text zoom', () => {
     expect(webViewProps).toContain('textZoom={100}')
   })
 
+  it('allows xterm small-font metrics below Android WebView default minimums', () => {
+    const start = terminalWebViewSource.indexOf('<WebView')
+    expect(start).toBeGreaterThanOrEqual(0)
+    const end = terminalWebViewSource.indexOf('/>', start)
+    expect(end).toBeGreaterThan(start)
+    const webViewProps = terminalWebViewSource.slice(start, end)
+
+    // Android defaults minimumFontSize to 8px. The 0.5x terminal preset is 5px;
+    // leaving the native floor enabled renders glyphs larger than xterm's cells.
+    expect(webViewProps).toContain('minimumFontSize={1}')
+  })
+
   it('keeps the HTML source object stable so parent renders do not reload xterm', () => {
     const start = terminalWebViewSource.indexOf('<WebView')
     expect(start).toBeGreaterThanOrEqual(0)

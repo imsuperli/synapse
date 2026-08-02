@@ -458,9 +458,8 @@ export const TerminalWebView = forwardRef<TerminalWebViewHandle, Props>(function
         // before the injected xterm scroll router sees them.
         nestedScrollEnabled
         scalesPageToFit={false}
-        // Why: Android WebView defaults textZoom to the system font scale, inflating
-        // xterm's DOM glyphs past its canvas-measured cell grid (#4579). iOS ignores it.
-        textZoom={100}
+        // Android WebView defaults can inflate xterm glyphs beyond its measured cells.
+        textZoom={100} minimumFontSize={1}
         onLoadStart={handleLoadStart}
         onMessage={handleMessage}
         onError={(event) => reportNativeEngineError('Terminal WebView load failed', event)}
