@@ -40,6 +40,8 @@ mac:
   icon: resources/icon.png
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   category: public.app-category.developer-tools
+  extendInfo:
+    NSLocalNetworkUsageDescription: Synapse needs access to devices on your local network, including SSH servers.
   identity: "-"
   hardenedRuntime: false
   gatekeeperAssess: false
