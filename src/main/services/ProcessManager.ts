@@ -20,6 +20,7 @@ import { StatusDetectorImpl, IStatusDetector } from './StatusDetector';
 import { WindowStatus } from '../../shared/types/window';
 import { ActiveSSHPortForward, ForwardedPortConfig, SSHSftpDirectoryListing, SSHSessionMetrics } from '../../shared/types/ssh';
 import type { PtyKeyboardProtocolState } from '../../shared/types/electron-api';
+import type { TerminalScreenSnapshot } from '../../shared/remote/terminal-protocol';
 import { getLatestEnvironmentVariables } from '../utils/environment';
 import { ITmuxCompatService, TmuxPaneId } from '../../shared/types/tmux';
 import { getTmuxShimDir } from '../utils/tmux-shim-path';
@@ -36,6 +37,11 @@ import { ISSHConnectionPool, SSHConnectionPool } from './ssh/SSHConnectionPool';
 import { ISSHKnownHostsStore } from './ssh/SSHKnownHostsStore';
 import { SSHPtySession } from './ssh/SSHPtySession';
 import type { ISSHHostKeyPromptService } from './ssh/SSHHostKeyPromptService';
+import {
+  consumeTerminalOscColorQueries,
+  type TerminalOscColorQueryReplyColors,
+} from '../../shared/terminal-osc-color-query';
+import { createTerminalResizeControl } from '../../shared/terminal-resize-control';
 
 type PaneHistoryEntry = {
   seq: number;
@@ -52,13 +58,41 @@ type PaneHistoryBuffer = {
   totalLength: number;
   nextSeq: number;
   lastSeq: number;
+  evictedBeforeSeq: number;
   keyboardState: TrackedKeyboardProtocolState;
+};
+
+type PaneResizeTimelineEntry = {
+  seq: number;
+  cols: number;
+  rows: number;
+};
+
+type PaneHistoryEntriesResult = {
+  entries: PaneHistoryEntry[];
+  firstSeq: number;
+  lastSeq: number;
+  evictedBeforeSeq: number;
+  gap: boolean;
+  hasMoreBefore: boolean;
+};
+
+type PaneHistoryEntriesWithKeyboardStateResult = PaneHistoryEntriesResult & {
+  keyboardState: PtyKeyboardProtocolState;
+};
+
+type PaneHistoryReadLimits = {
+  limitBytes?: number;
+  limitChunks?: number;
 };
 
 // 灏濊瘯瀵煎叆 node-pty锛屽鏋滃け璐ュ垯浣跨敤 mock
 let pty: any;
 try {
-  pty = require('node-pty');
+  const testPty = process.env.NODE_ENV === 'test'
+    ? (globalThis as { __SYNAPSE_TEST_NODE_PTY__?: unknown }).__SYNAPSE_TEST_NODE_PTY__
+    : undefined;
+  pty = testPty ?? require('node-pty');
 } catch {
   pty = null;
 }
@@ -78,7 +112,10 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   private processCleanupTimers: Map<number, NodeJS.Timeout>;
   private ptyOutputBuffers: Map<number, PtyOutputChunk[]>; // 缂撳瓨 PTY 鍒濆杈撳嚭
   private ptyDataSubscribers: Map<number, Set<(chunk: PtyOutputChunk) => void>>;
+  private terminalOscColorQueryPending: Map<number, string>;
   private paneHistoryBuffers: Map<string, PaneHistoryBuffer>;
+  private paneResizeTimelines: Map<string, PaneResizeTimelineEntry[]>;
+  private terminalScreenSnapshots: Map<string, TerminalScreenSnapshot>;
   private paneIndex: Map<string, number>; // "windowId:paneId" 鈫?pid 绱㈠紩锛岀敤浜?O(1) 鏌ユ壘
   private sessionIndex: Map<string, string>; // "windowId:paneId" -> sessionId
   private pidToSessionId: Map<number, string>;
@@ -89,8 +126,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
   private cachedSpawnEnvAt: number;
   private cachedSpawnEnvShellKey: string | null;
   private readonly SPAWN_ENV_CACHE_TTL_MS = 30000;
-  private readonly PANE_HISTORY_CHUNK_LIMIT = 2000;
-  private readonly PANE_HISTORY_CHAR_LIMIT = 2_000_000;
+  private readonly PANE_HISTORY_CHUNK_LIMIT = 250_000;
+  private readonly PANE_HISTORY_CHAR_LIMIT = 20_000_000;
   private readonly getSettings: (() => Settings | null | undefined) | null;
   private tmuxCompatService: ITmuxCompatService | null;
   private sshKnownHostsStore: ISSHKnownHostsStore | null;
@@ -113,7 +150,10 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.processCleanupTimers = new Map();
     this.ptyOutputBuffers = new Map();
     this.ptyDataSubscribers = new Map();
+    this.terminalOscColorQueryPending = new Map();
     this.paneHistoryBuffers = new Map();
+    this.paneResizeTimelines = new Map();
+    this.terminalScreenSnapshots = new Map();
     this.paneIndex = new Map();
     this.sessionIndex = new Map();
     this.pidToSessionId = new Map();
@@ -272,6 +312,12 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     }
 
     // Store process info
+    const terminalCols = typeof ptyProcess.cols === 'number'
+      ? ptyProcess.cols
+      : config.initialCols ?? 80;
+    const terminalRows = typeof ptyProcess.rows === 'number'
+      ? ptyProcess.rows
+      : config.initialRows ?? 30;
     const processInfo: ProcessInfo = {
       sessionId,
       backend,
@@ -280,6 +326,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       workingDirectory: config.workingDirectory,
       command,
       profileId: config.ssh?.profileId,
+      terminalCols,
+      terminalRows,
       windowId: config.windowId,
       paneId: config.paneId,
     };
@@ -295,20 +343,43 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
     // 鍒濆鍖栬緭鍑虹紦鍐插尯锛岀敤浜庣紦瀛樻棭鏈熻緭鍑猴紙閬垮厤绔炴€佹潯浠跺鑷存暟鎹涪澶憋級
     this.ptyOutputBuffers.set(pid, []);
-    this.resetPaneHistory(config.paneId);
+    this.resetPaneHistory(config.windowId, config.paneId);
 
     // Start tracking this PID before registering listeners (avoids race condition)
     this.statusDetector.trackPid(pid, { virtual: backend === 'ssh' });
 
     // 绔嬪嵆寮€濮嬬紦瀛?PTY 杈撳嚭锛堝湪浠讳綍璁㈤槄涔嬪墠锛?
     const onDataDisposable = ptyProcess.onData((data: string) => {
-      if (this.tmuxCompatService && config.windowId && config.paneId) {
-        this.tmuxCompatService.observePaneOutput(config.windowId, config.paneId, data);
+      const colorQueryResult = consumeTerminalOscColorQueries(
+        data,
+        this.terminalOscColorQueryPending.get(pid) ?? '',
+        this.getTerminalOscColorQueryReplyColors(),
+      );
+      if (colorQueryResult.pending) {
+        this.terminalOscColorQueryPending.set(pid, colorQueryResult.pending);
+      } else {
+        this.terminalOscColorQueryPending.delete(pid);
       }
-      const seq = this.appendPaneHistory(config.paneId, data);
+      for (const reply of colorQueryResult.replies) {
+        // Keep protocol replies in the PTY output callback so renderer frame
+        // scheduling and remote input cannot overtake Codex's query timeout.
+        try {
+          ptyProcess.write(reply);
+        } catch {
+          // The PTY can exit between its final output event and this reply.
+        }
+      }
+      const outputData = colorQueryResult.output;
+      if (!outputData) {
+        return;
+      }
+      if (this.tmuxCompatService && config.windowId && config.paneId) {
+        this.tmuxCompatService.observePaneOutput(config.windowId, config.paneId, outputData);
+      }
+      const seq = this.appendPaneHistory(config.windowId, config.paneId, outputData);
       const buffer = this.ptyOutputBuffers.get(pid);
       if (buffer) {
-        buffer.push({ data, seq });
+        buffer.push({ data: outputData, seq });
         // 闄愬埗缂撳啿鍖哄ぇ灏忥紝閬垮厤鍐呭瓨娉勬紡锛堝鍔犲埌 500 鏉℃秷鎭紝瑕嗙洊鏇村鍚姩杈撳嚭锛?
         if (buffer.length > 500) {
           buffer.shift();
@@ -317,12 +388,12 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
       const subscribers = this.ptyDataSubscribers.get(pid);
       if (subscribers && subscribers.size > 0) {
-        const chunk = { data, seq };
+        const chunk = { data: outputData, seq };
         for (const subscriber of subscribers) {
           subscriber(chunk);
         }
       }
-      this.statusDetector.onPtyData(pid, data);
+      this.statusDetector.onPtyData(pid, outputData);
     });
 
     // Register PTY listeners for status detection and save disposables
@@ -691,6 +762,20 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     return this.statusDetector.subscribeStatusChange(callback);
   }
 
+  private getTerminalOscColorQueryReplyColors(): TerminalOscColorQueryReplyColors {
+    const presetId = this.getSettings?.()?.appearance?.skin?.presetId;
+    return {
+      foreground: presetId === 'paper'
+        ? '#1f2329'
+        : presetId === 'obsidian' || presetId === 'custom'
+          ? '#d7d7d7'
+          : '#cccccc',
+      // TerminalPane uses a transparent xterm background; xterm reports its
+      // transparent color channel as black for OSC 11.
+      background: '#000000',
+    };
+  }
+
   /**
    * 鍚?PTY 鍐欏叆鏁版嵁锛堢敤鎴疯緭鍏ワ級
    */
@@ -719,7 +804,28 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     const pty = this.ptys.get(pid);
     if (pty) {
       try {
+        const previousCols = processInfo.terminalCols;
+        const previousRows = processInfo.terminalRows;
         pty.resize(cols, rows);
+        processInfo.terminalCols = cols;
+        processInfo.terminalRows = rows;
+        if (cols !== previousCols || rows !== previousRows) {
+          const marker = createTerminalResizeControl(cols, rows);
+          const seq = this.appendPaneHistory(processInfo.windowId, processInfo.paneId, marker);
+          if (seq !== undefined && processInfo.paneId) {
+            const key = this.getPaneKey(processInfo.windowId, processInfo.paneId);
+            const timeline = this.paneResizeTimelines.get(key) ?? [];
+            timeline.push({ seq, cols, rows });
+            this.paneResizeTimelines.set(key, timeline);
+            const subscribers = this.ptyDataSubscribers.get(pid);
+            if (subscribers) {
+              const chunk = { data: marker, seq };
+              for (const subscriber of subscribers) {
+                subscriber(chunk);
+              }
+            }
+          }
+        }
       } catch (error) {
         // Window teardown can race with a final resize after the PTY has exited.
         if (this.isExitedPtyResizeError(error)) {
@@ -787,29 +893,271 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     return buffer ? buffer.length > 0 : false;
   }
 
-  getPtyHistory(paneId: string): { chunks: string[]; lastSeq: number; keyboardState: PtyKeyboardProtocolState } {
-    const history = this.paneHistoryBuffers.get(paneId);
+  getPtyHistory(paneId: string): {
+    chunks: string[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    keyboardState: PtyKeyboardProtocolState;
+  };
+  getPtyHistory(windowId: string, paneId: string): {
+    chunks: string[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    keyboardState: PtyKeyboardProtocolState;
+  };
+  getPtyHistory(windowIdOrPaneId: string, paneId?: string): {
+    chunks: string[];
+    firstSeq: number;
+    lastSeq: number;
+    evictedBeforeSeq: number;
+    keyboardState: PtyKeyboardProtocolState;
+  } {
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
     if (!history) {
       return {
         chunks: [],
+        firstSeq: 0,
         lastSeq: 0,
+        evictedBeforeSeq: 0,
         keyboardState: cloneKeyboardProtocolState(createDefaultKeyboardProtocolState()),
       };
     }
 
     return {
       chunks: history.entries.map((entry) => entry.data),
+      firstSeq: getPaneHistoryFirstSeq(history),
       lastSeq: history.lastSeq,
+      evictedBeforeSeq: history.evictedBeforeSeq,
       keyboardState: cloneKeyboardProtocolState(history.keyboardState),
     };
   }
 
-  clearPtyHistory(paneId: string): void {
-    this.paneHistoryBuffers.delete(paneId);
+  getPtyReplayChunks(windowIdOrPaneId: string, paneId?: string): string[] {
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
+    return history
+      ? this.decoratePtyHistoryEntriesForReplay(windowIdOrPaneId, paneId, history.entries)
+          .map((entry) => entry.data)
+      : [];
   }
 
-  getLatestPaneOutputSeq(paneId: string): number {
-    return this.paneHistoryBuffers.get(paneId)?.lastSeq ?? 0;
+  getPtyHistoryEntriesSince(
+    paneId: string,
+    sinceSeq?: number,
+  ): PaneHistoryEntriesResult;
+  getPtyHistoryEntriesSince(
+    windowId: string,
+    paneId: string,
+    sinceSeq?: number,
+  ): PaneHistoryEntriesResult;
+  getPtyHistoryEntriesSince(
+    windowIdOrPaneId: string,
+    paneIdOrSinceSeq: string | number = 0,
+    maybeSinceSeq?: number,
+  ): PaneHistoryEntriesResult {
+    const paneId = typeof paneIdOrSinceSeq === 'string' ? paneIdOrSinceSeq : undefined;
+    const sinceSeq = typeof paneIdOrSinceSeq === 'number' ? paneIdOrSinceSeq : maybeSinceSeq ?? 0;
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
+    if (!history) {
+      return {
+        entries: [],
+        firstSeq: 0,
+        lastSeq: 0,
+        evictedBeforeSeq: 0,
+        gap: false,
+        hasMoreBefore: false,
+      };
+    }
+
+    const firstSeq = getPaneHistoryFirstSeq(history);
+    return {
+      entries: history.entries.filter((entry) => entry.seq > sinceSeq),
+      firstSeq,
+      lastSeq: history.lastSeq,
+      evictedBeforeSeq: history.evictedBeforeSeq,
+      gap: history.evictedBeforeSeq > sinceSeq,
+      hasMoreBefore: false,
+    };
+  }
+
+  getPtyHistoryEntriesBefore(
+    paneId: string,
+    beforeSeq?: number,
+    limits?: PaneHistoryReadLimits,
+  ): PaneHistoryEntriesWithKeyboardStateResult;
+  getPtyHistoryEntriesBefore(
+    windowId: string,
+    paneId: string,
+    beforeSeq?: number,
+    limits?: PaneHistoryReadLimits,
+  ): PaneHistoryEntriesWithKeyboardStateResult;
+  getPtyHistoryEntriesBefore(
+    windowIdOrPaneId: string,
+    paneIdOrBeforeSeq?: string | number,
+    beforeSeqOrLimits?: number | PaneHistoryReadLimits,
+    maybeLimits?: PaneHistoryReadLimits,
+  ): PaneHistoryEntriesWithKeyboardStateResult {
+    const paneId = typeof paneIdOrBeforeSeq === 'string' ? paneIdOrBeforeSeq : undefined;
+    const beforeSeq = typeof paneIdOrBeforeSeq === 'number'
+      ? paneIdOrBeforeSeq
+      : typeof beforeSeqOrLimits === 'number'
+        ? beforeSeqOrLimits
+        : Number.MAX_SAFE_INTEGER;
+    const limits = (
+      typeof paneIdOrBeforeSeq === 'number'
+        ? beforeSeqOrLimits
+        : maybeLimits
+    ) as PaneHistoryReadLimits | undefined;
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
+    if (!history) {
+      return {
+        entries: [],
+        firstSeq: 0,
+        lastSeq: 0,
+        evictedBeforeSeq: 0,
+        gap: false,
+        hasMoreBefore: false,
+        keyboardState: cloneKeyboardProtocolState(createDefaultKeyboardProtocolState()),
+      };
+    }
+
+    const maxBytes = normalizeHistoryLimit(limits?.limitBytes, Number.POSITIVE_INFINITY);
+    const maxChunks = normalizeHistoryLimit(limits?.limitChunks, Number.POSITIVE_INFINITY);
+    const firstAvailableSeq = getPaneHistoryFirstSeq(history);
+    const selected: PaneHistoryEntry[] = [];
+    let totalLength = 0;
+    for (let index = history.entries.length - 1; index >= 0; index -= 1) {
+      const entry = history.entries[index]!;
+      if (entry.seq >= beforeSeq) {
+        continue;
+      }
+      if (selected.length >= maxChunks) {
+        break;
+      }
+      if (selected.length > 0 && totalLength + entry.data.length > maxBytes) {
+        break;
+      }
+      selected.push(entry);
+      totalLength += entry.data.length;
+    }
+
+    selected.reverse();
+    const firstReturnedSeq = selected[0]?.seq ?? 0;
+    const hasMoreBefore = selected.length > 0 && firstReturnedSeq > firstAvailableSeq;
+    return {
+      entries: selected,
+      firstSeq: firstReturnedSeq,
+      lastSeq: selected.at(-1)?.seq ?? 0,
+      evictedBeforeSeq: history.evictedBeforeSeq,
+      gap: history.evictedBeforeSeq > 0 && !hasMoreBefore,
+      hasMoreBefore,
+      keyboardState: cloneKeyboardProtocolState(history.keyboardState),
+    };
+  }
+
+  clearPtyHistory(paneId: string): void;
+  clearPtyHistory(windowId: string, paneId: string): void;
+  clearPtyHistory(windowIdOrPaneId: string, paneId?: string): void {
+    const history = this.getPaneHistoryBuffer(windowIdOrPaneId, paneId);
+    if (!history) {
+      return;
+    }
+
+    history.entries = [];
+    history.totalLength = 0;
+    history.evictedBeforeSeq = Math.max(history.evictedBeforeSeq, history.lastSeq);
+    history.nextSeq = Math.max(history.nextSeq, history.lastSeq + 1);
+    const dimensions = paneId
+      ? this.getPaneTerminalDimensions(windowIdOrPaneId, paneId)
+      : this.getPaneTerminalDimensions(windowIdOrPaneId);
+    if (dimensions.cols && dimensions.rows) {
+      this.paneResizeTimelines.set(
+        this.getPaneHistoryKey(windowIdOrPaneId, paneId),
+        [{ seq: history.lastSeq, cols: dimensions.cols, rows: dimensions.rows }],
+      );
+    }
+  }
+
+  decoratePtyHistoryEntriesForReplay(
+    windowIdOrPaneId: string,
+    paneId: string | undefined,
+    entries: ReadonlyArray<{ seq: number; data: string }>,
+  ): Array<{ seq: number; data: string }> {
+    if (entries.length === 0) {
+      return [];
+    }
+    const key = this.getPaneHistoryKey(windowIdOrPaneId, paneId);
+    const timeline = this.paneResizeTimelines.get(key) ?? [];
+    const firstSeq = entries[0]!.seq;
+    let effective: PaneResizeTimelineEntry | undefined;
+    for (const event of timeline) {
+      if (event.seq >= firstSeq) {
+        break;
+      }
+      effective = event;
+    }
+    if (!effective) {
+      const dimensions = paneId
+        ? this.getPaneTerminalDimensions(windowIdOrPaneId, paneId)
+        : this.getPaneTerminalDimensions(windowIdOrPaneId);
+      if (!dimensions.cols || !dimensions.rows) {
+        return entries.map((entry) => ({ ...entry }));
+      }
+      effective = { seq: 0, cols: dimensions.cols, rows: dimensions.rows };
+    }
+    const prefix = createTerminalResizeControl(effective.cols, effective.rows);
+    return entries.map((entry, index) => ({
+      ...entry,
+      data: index === 0 ? `${prefix}${entry.data}` : entry.data,
+    }));
+  }
+
+  getLatestPaneOutputSeq(paneId: string): number;
+  getLatestPaneOutputSeq(windowId: string, paneId: string): number;
+  getLatestPaneOutputSeq(windowIdOrPaneId: string, paneId?: string): number {
+    return this.getPaneHistoryBuffer(windowIdOrPaneId, paneId)?.lastSeq ?? 0;
+  }
+
+  updateTerminalScreenSnapshot(snapshot: TerminalScreenSnapshot): void {
+    if (
+      !snapshot.windowId ||
+      !snapshot.paneId ||
+      !Number.isFinite(snapshot.cols) ||
+      !Number.isFinite(snapshot.rows) ||
+      !Number.isFinite(snapshot.outputSeq)
+    ) {
+      return;
+    }
+
+    if (!snapshot.alternate) {
+      this.clearTerminalScreenSnapshot(snapshot.windowId, snapshot.paneId);
+      return;
+    }
+
+    this.terminalScreenSnapshots.set(this.getPaneKey(snapshot.windowId, snapshot.paneId), {
+      ...snapshot,
+      cols: Math.max(1, Math.floor(snapshot.cols)),
+      rows: Math.max(1, Math.floor(snapshot.rows)),
+      cursorX: Math.max(0, Math.floor(snapshot.cursorX)),
+      cursorY: Math.max(0, Math.floor(snapshot.cursorY)),
+      data: snapshot.data,
+      capturedAt: snapshot.capturedAt || new Date().toISOString(),
+      outputSeq: Math.max(0, Math.floor(snapshot.outputSeq)),
+    });
+  }
+
+  getTerminalScreenSnapshot(windowId: string, paneId: string): TerminalScreenSnapshot | undefined {
+    const snapshot = this.terminalScreenSnapshots.get(this.getPaneKey(windowId, paneId));
+    return snapshot ? { ...snapshot } : undefined;
+  }
+
+  clearTerminalScreenSnapshot(windowId: string | undefined, paneId: string | undefined): void {
+    if (!paneId) {
+      return;
+    }
+    this.terminalScreenSnapshots.delete(this.getPaneKey(windowId, paneId));
+    this.terminalScreenSnapshots.delete(paneId);
   }
 
   /**
@@ -894,6 +1242,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     // 涓嶇瓑寰呰繘绋嬮€€鍑猴紝鐩存帴娓呯悊
     this.processes.clear();
     this.ptys.clear();
+    this.terminalOscColorQueryPending.clear();
     this.paneHistoryBuffers.clear();
     this.paneIndex.clear();
     this.sessionIndex.clear();
@@ -1085,8 +1434,10 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     const dataCallbacks: Array<(data: string) => void> = [];
     const exitCallbacks: Array<(exitCode: number) => void> = [];
 
-    return {
+    const mockPty = {
       pid,
+      cols: config.initialCols ?? 80,
+      rows: config.initialRows ?? 30,
       onData: (callback: (data: string) => void) => {
         dataCallbacks.push(callback);
         // Mock: 妯℃嫙缁堢杈撳嚭
@@ -1111,6 +1462,8 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       },
       resize: (cols: number, rows: number) => {
         // Mock: 妯℃嫙璋冩暣缁堢澶у皬锛堟棤闇€瀹為檯鎿嶄綔锛?
+        mockPty.cols = cols;
+        mockPty.rows = rows;
       },
       kill: () => {
         // Mock: 妯℃嫙缁堟杩涚▼
@@ -1118,6 +1471,7 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
         this.killProcess(pid);
       },
     };
+    return mockPty;
   }
 
   /**
@@ -1650,11 +2004,44 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
       }
     }
 
+    const history = this.paneHistoryBuffers.get(oldKey);
+    if (history && oldKey !== newKey) {
+      this.paneHistoryBuffers.delete(oldKey);
+      this.paneHistoryBuffers.set(newKey, history);
+    }
+    const resizeTimeline = this.paneResizeTimelines.get(oldKey);
+    if (resizeTimeline && oldKey !== newKey) {
+      this.paneResizeTimelines.delete(oldKey);
+      this.paneResizeTimelines.set(newKey, resizeTimeline);
+    }
+    const screenSnapshot = this.terminalScreenSnapshots.get(oldKey);
+    if (screenSnapshot && oldKey !== newKey) {
+      this.terminalScreenSnapshots.delete(oldKey);
+      this.terminalScreenSnapshots.set(newKey, {
+        ...screenSnapshot,
+        windowId: newWindowId,
+        paneId: newPaneId,
+      });
+    }
     if (paneId !== newPaneId) {
-      const history = this.paneHistoryBuffers.get(paneId);
-      if (history) {
+      const legacyHistory = this.paneHistoryBuffers.get(paneId);
+      if (legacyHistory) {
         this.paneHistoryBuffers.delete(paneId);
-        this.paneHistoryBuffers.set(newPaneId, history);
+        this.paneHistoryBuffers.set(newPaneId, legacyHistory);
+      }
+      const legacyResizeTimeline = this.paneResizeTimelines.get(paneId);
+      if (legacyResizeTimeline) {
+        this.paneResizeTimelines.delete(paneId);
+        this.paneResizeTimelines.set(newPaneId, legacyResizeTimeline);
+      }
+      const legacyScreenSnapshot = this.terminalScreenSnapshots.get(paneId);
+      if (legacyScreenSnapshot) {
+        this.terminalScreenSnapshots.delete(paneId);
+        this.terminalScreenSnapshots.set(newPaneId, {
+          ...legacyScreenSnapshot,
+          windowId: newWindowId,
+          paneId: newPaneId,
+        });
       }
     }
 
@@ -1689,9 +2076,14 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
 
     this.disposePtyDisposables(pid);
     this.ptyOutputBuffers.delete(pid);
+    this.terminalOscColorQueryPending.delete(pid);
     this.ptys.delete(pid);
     if (processInfo.paneId) {
-      this.clearPtyHistory(processInfo.paneId);
+      this.paneHistoryBuffers.delete(this.getPaneKey(processInfo.windowId, processInfo.paneId));
+      this.paneResizeTimelines.delete(this.getPaneKey(processInfo.windowId, processInfo.paneId));
+      this.paneHistoryBuffers.delete(processInfo.paneId);
+      this.paneResizeTimelines.delete(processInfo.paneId);
+      this.clearTerminalScreenSnapshot(processInfo.windowId, processInfo.paneId);
     }
 
     const paneKey = this.getPaneKey(processInfo.windowId, processInfo.paneId);
@@ -1708,30 +2100,67 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     this.scheduleProcessCleanup(pid);
   }
 
-  private resetPaneHistory(paneId?: string): void {
+  private resetPaneHistory(windowId?: string, paneId?: string): void {
     if (!paneId) {
       return;
     }
 
-    this.paneHistoryBuffers.set(paneId, {
+    this.paneHistoryBuffers.delete(paneId);
+    this.paneResizeTimelines.delete(paneId);
+    this.clearTerminalScreenSnapshot(windowId, paneId);
+    this.paneHistoryBuffers.set(this.getPaneKey(windowId, paneId), {
       entries: [],
       totalLength: 0,
       nextSeq: 1,
       lastSeq: 0,
+      evictedBeforeSeq: 0,
       keyboardState: createDefaultKeyboardProtocolState(),
     });
+    const dimensions = windowId
+      ? this.getPaneTerminalDimensions(windowId, paneId)
+      : this.getPaneTerminalDimensions(paneId);
+    if (dimensions.cols && dimensions.rows) {
+      this.paneResizeTimelines.set(this.getPaneKey(windowId, paneId), [{
+        seq: 0,
+        cols: dimensions.cols,
+        rows: dimensions.rows,
+      }]);
+    }
   }
 
-  private appendPaneHistory(paneId: string | undefined, data: string): number | undefined {
+  getPaneTerminalDimensions(paneId: string): { cols?: number; rows?: number };
+  getPaneTerminalDimensions(windowId: string, paneId: string): { cols?: number; rows?: number };
+  getPaneTerminalDimensions(windowIdOrPaneId: string, paneId?: string): { cols?: number; rows?: number } {
+    for (const processInfo of this.processes.values()) {
+      if (
+        processInfo.status === ProcessStatus.Exited ||
+        processInfo.paneId !== (paneId ?? windowIdOrPaneId) ||
+        (paneId && processInfo.windowId !== windowIdOrPaneId)
+      ) {
+        continue;
+      }
+      const cols = processInfo.terminalCols;
+      const rows = processInfo.terminalRows;
+      return {
+        ...(typeof cols === 'number' && cols > 0 ? { cols } : {}),
+        ...(typeof rows === 'number' && rows > 0 ? { rows } : {}),
+      };
+    }
+    return {};
+  }
+
+  private appendPaneHistory(windowId: string | undefined, paneId: string | undefined, data: string): number | undefined {
     if (!paneId || !data) {
       return undefined;
     }
 
-    const history = this.paneHistoryBuffers.get(paneId) ?? {
+    const historyKey = this.getPaneKey(windowId, paneId);
+    const history = this.paneHistoryBuffers.get(historyKey) ?? {
       entries: [],
       totalLength: 0,
       nextSeq: 1,
       lastSeq: 0,
+      evictedBeforeSeq: 0,
       keyboardState: createDefaultKeyboardProtocolState(),
     };
 
@@ -1750,10 +2179,59 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
         break;
       }
       history.totalLength -= removed.data.length;
+      history.evictedBeforeSeq = Math.max(history.evictedBeforeSeq, removed.seq);
     }
 
-    this.paneHistoryBuffers.set(paneId, history);
+    const timeline = this.paneResizeTimelines.get(historyKey);
+    if (timeline && history.entries.length > 0) {
+      const firstSeq = history.entries[0]!.seq;
+      let keepFrom = 0;
+      for (let index = 0; index < timeline.length; index += 1) {
+        if (timeline[index]!.seq < firstSeq) {
+          keepFrom = index;
+        } else {
+          break;
+        }
+      }
+      if (keepFrom > 0) {
+        this.paneResizeTimelines.set(historyKey, timeline.slice(keepFrom));
+      }
+    }
+
+    this.paneHistoryBuffers.set(historyKey, history);
     return seq;
+  }
+
+  private getPaneHistoryBuffer(windowIdOrPaneId: string, paneId?: string): PaneHistoryBuffer | undefined {
+    if (paneId) {
+      return this.paneHistoryBuffers.get(this.getPaneKey(windowIdOrPaneId, paneId));
+    }
+
+    const legacyHistory = this.paneHistoryBuffers.get(windowIdOrPaneId);
+    if (legacyHistory) {
+      return legacyHistory;
+    }
+
+    for (const processInfo of this.processes.values()) {
+      if (processInfo.paneId !== windowIdOrPaneId || processInfo.status === ProcessStatus.Exited) {
+        continue;
+      }
+      return this.paneHistoryBuffers.get(this.getPaneKey(processInfo.windowId, processInfo.paneId));
+    }
+
+    return undefined;
+  }
+
+  private getPaneHistoryKey(windowIdOrPaneId: string, paneId?: string): string {
+    if (paneId) {
+      return this.getPaneKey(windowIdOrPaneId, paneId);
+    }
+    for (const processInfo of this.processes.values()) {
+      if (processInfo.paneId === windowIdOrPaneId && processInfo.status !== ProcessStatus.Exited) {
+        return this.getPaneKey(processInfo.windowId, processInfo.paneId);
+      }
+    }
+    return this.getPaneKey(undefined, windowIdOrPaneId);
   }
 
   private scheduleProcessCleanup(pid: number): void {
@@ -1776,6 +2254,21 @@ export class ProcessManager extends EventEmitter implements IProcessManager {
     const message = error instanceof Error ? error.message : String(error);
     return /Cannot resize a pty that has already exited/i.test(message);
   }
+}
+
+function getPaneHistoryFirstSeq(history: PaneHistoryBuffer): number {
+  const firstEntry = history.entries[0];
+  if (firstEntry) {
+    return firstEntry.seq;
+  }
+  return history.lastSeq > 0 ? history.lastSeq + 1 : 0;
+}
+
+function normalizeHistoryLimit(value: number | undefined, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return fallback;
 }
 
 function isSSHPortForwardSession(value: unknown): value is {

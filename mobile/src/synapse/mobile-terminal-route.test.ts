@@ -1,0 +1,429 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+
+const routeSource = readFileSync(
+  new URL('../../app/h/[hostId]/t/[windowId]/[paneId].tsx', import.meta.url),
+  'utf8'
+)
+const mobileThemeSource = readFileSync(new URL('../theme/mobile-theme.ts', import.meta.url), 'utf8')
+
+describe('Synapse Mobile terminal route wiring', () => {
+  it('subscribes to a binary terminal stream before rendering live output', () => {
+    const subscribeIndex = routeSource.indexOf("client.subscribe(\n          'terminal.subscribe'")
+    const snapshotIndex = routeSource.indexOf(
+      'const snapshot = parseTerminalScrollbackEvent(payload)'
+    )
+    const applyIndex = routeSource.indexOf('await applyTerminalScrollbackSnapshot(')
+
+    expect(subscribeIndex).toBeGreaterThanOrEqual(0)
+    expect(snapshotIndex).toBeGreaterThan(subscribeIndex)
+    expect(applyIndex).toBeGreaterThan(snapshotIndex)
+    expect(routeSource).toContain(
+      'const viewport = updateTerminalViewportFromDesktop(snapshot, false)'
+    )
+    expect(routeSource).not.toContain('fitTerminalRowsToPhone')
+    expect(routeSource).not.toContain('fittedPhoneRowsRef')
+    expect(routeSource).toContain(
+      'sinceSeq: options.sinceSeq ?? terminalHistoryRef.current.lastSeq'
+    )
+    expect(routeSource).toContain('capabilities: { terminalBinaryStream: 1 }')
+    expect(routeSource).toContain('parseTerminalSubscribedEvent(payload)')
+    expect(routeSource).toContain('parseTerminalScrollbackEvent(payload)')
+    expect(routeSource).toContain('parseTerminalDataEvent(payload)')
+    expect(routeSource).toContain('parseTerminalStreamErrorEvent(payload)')
+    expect(routeSource).toContain(
+      'terminalHistoryRef: { current: createRemoteTerminalHistoryState() }'
+    )
+    expect(routeSource).toContain('const buildTerminalInitialData = useCallback(() => {')
+    expect(routeSource).toContain(
+      'replaceRemoteTerminalHistorySnapshot(terminalHistoryRef.current, snapshot)'
+    )
+    expect(routeSource).toContain('screenSnapshotOffset?: number')
+    expect(routeSource).toContain('screenSnapshotLength?: number')
+    expect(routeSource).toContain('buildTerminalInitialData()')
+    expect(routeSource).not.toContain('viewport: viewportRef.current')
+    expect(routeSource).not.toContain('resizeTerminal(client')
+    expect(routeSource).not.toContain('terminal.resize(')
+    expect(routeSource).not.toContain('parseTerminalOutputEvent(payload)')
+    expect(routeSource).not.toContain('parseTerminalSubscribeResult(payload)')
+    expect(routeSource).not.toContain('loadTerminalHistorySnapshot(client, runId)')
+    expect(routeSource).toContain('runtime?.terminalRef.current?.resetZoom()')
+    expect(routeSource).toContain('undefined,\n        true')
+  })
+
+  it('loads older terminal history when the WebView reaches the top of scrollback', () => {
+    expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_BYTES = 192 * 1024')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_PAGE_CHUNKS = 50_000')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_PREFETCH_BYTES = 768 * 1024')
+    expect(routeSource).toContain('const handleHistoryTopReached = useCallback(() => {')
+    expect(routeSource).toContain('await prefetchOlderTerminalHistory(TERMINAL_HISTORY_PAGE_BYTES)')
+    expect(routeSource).toContain(
+      'takePrefetchedRemoteTerminalHistory(prefetch, { maxPages, maxBytes })'
+    )
+    expect(routeSource).toContain(
+      'prependRemoteTerminalHistoryPage(\n            terminalHistoryRef.current,\n            page'
+    )
+    expect(routeSource).toContain('buildRemoteTerminalInitialData(terminalHistoryRef.current)')
+    expect(routeSource).toContain('handleHistoryTopReachedRef.current?.()')
+    expect(routeSource).toContain("t('terminal.loadingOlderHistory')")
+    expect(routeSource).toContain('void prefetchOlderTerminalHistory().catch(() => {})')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_GESTURE_MAX_PAGES = 2')
+    expect(routeSource).toContain('const TERMINAL_HISTORY_GESTURE_MAX_BYTES = 384 * 1024')
+    expect(routeSource).toContain("'history-top',\n      TERMINAL_HISTORY_GESTURE_MAX_PAGES")
+    expect(routeSource).toContain("trigger === 'history-top'")
+    expect(routeSource).toContain('const hydrateInitialTerminalHistory = useCallback(')
+    expect(routeSource).toContain("activatePrefetchedTerminalHistory('initial', 1)")
+    expect(routeSource).toContain('shouldLoadInitialTerminalHistory({')
+    expect(routeSource).toContain('!terminalRenderPausedRef.current')
+    expect(routeSource).toContain('await runtime?.resumeInitialHistoryHydrationRef.current?.()')
+    expect(routeSource).toContain('setLoadingOlderHistory(true)')
+    expect(routeSource).toContain('snapshot.evictedBeforeSeq')
+    expect(routeSource).toContain('terminalHistoryBoundaryMessage(terminalHistoryRef.current, t)')
+  })
+
+  it('resynchronizes from history when the terminal subscription reports a gap', () => {
+    expect(routeSource).toContain('unsubscribeRef.current?.()')
+    expect(routeSource).toContain('startTerminalSubscription(client, runId, { sinceSeq: 0 })')
+    expect(routeSource).toContain('await reloadSnapshotForCurrentRun()')
+  })
+
+  it('reloads terminal history and subscriptions when the desktop restarts the same pane', () => {
+    expect(routeSource).toContain(
+      'function terminalPaneRuntimeKey(pane: RemotePaneSummary | null | undefined): string | null'
+    )
+    expect(routeSource).toContain('currentPaneRuntimeKeyRef: { current: null as string | null }')
+    expect(routeSource).toContain('const previousRuntimeKey = currentPaneRuntimeKeyRef.current')
+    expect(routeSource).toContain(
+      'previousRuntimeKey && runtimeKey && previousRuntimeKey !== runtimeKey'
+    )
+    expect(routeSource).toContain('await reloadCurrentTerminalStream(client)')
+    expect(routeSource).toContain('resetRemoteTerminalHistoryState(terminalHistoryRef.current)')
+  })
+
+  it('distinguishes a deleted pane from a transient window-list failure', () => {
+    expect(routeSource).toContain('return undefined')
+    expect(routeSource).toContain('if (currentPane === undefined)')
+    expect(routeSource).toContain('if (currentPane === null)')
+    expect(routeSource).toContain("setError(t('terminal.stoppedOnDesktop'))")
+  })
+
+  it('guards terminal background polling against overlapping stale responses', () => {
+    expect(routeSource).toContain('terminalIncrementSyncInFlightRef: { current: false }')
+    expect(routeSource).toContain('paneStatusSyncInFlightRef: { current: false }')
+    expect(routeSource).toContain('terminalIncrementSyncInFlightRef.current')
+    expect(routeSource).toContain('paneStatusSyncInFlightRef.current')
+    expect(routeSource).toContain('runIdRef.current !== runId || clientRef.current !== client')
+    expect(routeSource).toContain('terminalIncrementSyncInFlightRef.current = false')
+    expect(routeSource).toContain('paneStatusSyncInFlightRef.current = false')
+    expect(routeSource).toContain('const windowListGenerationRef = useRef(0)')
+    expect(routeSource).toContain('windowListGenerationRef.current !== requestGeneration')
+  })
+
+  it('invalidates stale subscription frames and history responses after an in-place reload', () => {
+    expect(routeSource).toContain('terminalSubscriptionGenerationRef: { current: 0 }')
+    expect(routeSource).toContain('terminalHistoryGenerationRef: { current: 0 }')
+    expect(routeSource).toContain(
+      'terminalSubscriptionGenerationRef.current !== subscriptionGeneration'
+    )
+    expect(routeSource).toContain('terminalHistoryGenerationRef.current !== historyGeneration')
+    expect(routeSource).toContain('terminalHistoryGenerationRef.current += 1')
+  })
+
+  it('maps protocol-level terminal errors to user-facing messages', () => {
+    expect(routeSource).toContain(
+      'function terminalErrorMessage(err: unknown, t: MobileTranslate): string'
+    )
+    expect(routeSource).toContain("t('terminal.stoppedOnDesktop')")
+    expect(routeSource).toContain("t('terminal.workspaceNotLoaded')")
+    expect(routeSource).toContain('setError(terminalErrorMessage(err, t))')
+  })
+
+  it('clears only transient connection errors after reconnecting', () => {
+    expect(routeSource).toContain('terminalErrorAfterConnectionState')
+    expect(routeSource).toContain(
+      'setError((current) => terminalErrorAfterConnectionState(current, state))'
+    )
+    expect(routeSource).toContain(
+      "setError((current) => terminalErrorAfterConnectionState(current, 'connected'))"
+    )
+  })
+
+  it('ignores duplicate sequenced terminal events after replay or reconnect', () => {
+    expect(routeSource).toContain('appendRemoteTerminalData(')
+    expect(routeSource).toContain('appendRemoteTerminalHistoryIncrement(')
+    expect(routeSource).toContain('appendRemoteTerminalIncrementalSnapshot(')
+    expect(routeSource).toContain('if (appliedSnapshot)')
+    expect(routeSource).toContain('void syncTerminalIncrementRef.current?.()')
+    expect(routeSource).toContain(
+      'terminalSubscribeParamsRef.current.sinceSeq = terminalHistoryRef.current.lastSeq'
+    )
+  })
+
+  it('preserves both desktop grid dimensions on mobile', () => {
+    expect(routeSource).toContain('desktopViewportRef: {')
+    expect(routeSource).toContain(
+      'const nextViewport = resolveMobileTerminalViewport(desktopViewport)'
+    )
+    expect(routeSource).toContain(
+      'terminalRef.current?.resize(nextViewport.cols, nextViewport.rows)'
+    )
+    expect(routeSource).not.toContain('fittedPhoneRowsRef')
+    expect(routeSource).not.toContain('measureFitDimensions(')
+    expect(routeSource).not.toContain('resizeTerminal(client')
+  })
+
+  it('routes user input and clear through Synapse terminal RPC helpers', () => {
+    expect(routeSource).toContain('handleTerminalInput(bytes)')
+    expect(routeSource).toContain('sendTerminalInput(client, windowId, paneId, bytes)')
+    expect(routeSource).toContain('const result = await clearTerminal(client, windowId, paneId)')
+    expect(routeSource).toContain('terminalHistoryRef.current.lastSeq = result.lastSeq')
+    expect(routeSource).toContain('terminalRef.current?.clear()')
+  })
+
+  it('moves only covered terminal content and restores the full viewport after keyboard hide', () => {
+    expect(routeSource).toContain('getTerminalKeyboardAvoidanceLift({')
+    expect(routeSource).toContain('metrics: terminalKeyboardMetrics')
+    expect(routeSource).toContain('runtime.terminalKeyboardMetricsRef.current = metrics')
+    expect(routeSource).toContain('onKeyboardAvoidanceMetrics={handleKeyboardAvoidanceMetrics}')
+    expect(routeSource).toContain('setTerminalKeyboardMetrics(runtime.terminalKeyboardMetricsRef.current)')
+    expect(routeSource).toContain('{ transform: [{ translateY: -terminalKeyboardLift }] }')
+    expect(routeSource).not.toContain('terminalKeyboardLift > 0 && { transform:')
+    expect(routeSource).toContain('runtime?.terminalRef.current?.revealLiveInput()')
+    expect(routeSource).toContain('runtime?.terminalRef.current?.restoreKeyboardViewport()')
+    expect(routeSource).toContain('const restoreTerminalAfterKeyboard = useCallback(() => {')
+    expect(routeSource).toContain(
+      "Keyboard.addListener('keyboardDidHide', restoreTerminalAfterKeyboard)"
+    )
+    expect(routeSource).toContain('if (!Keyboard.isVisible()) {')
+    expect(routeSource).toContain('liveInputRef.current?.blur()')
+    expect(routeSource).toContain('Keyboard.dismiss()')
+    expect(routeSource).toContain("overflow: 'hidden'")
+    expect(routeSource).toContain("Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'")
+  })
+
+  it('uses terminal live input wiring for the command dock', () => {
+    expect(routeSource).toContain('useTerminalLiveInputCommit({')
+    expect(routeSource).not.toContain('MobileTerminalLiveInputStatus')
+    expect(routeSource).toContain('buildTerminalAccessoryPages(accessoryKeys)')
+    expect(routeSource).toContain('pagingEnabled')
+    expect(routeSource).toContain('disableIntervalMomentum')
+    expect(routeSource).toContain('TERMINAL_ACCESSORY_PAGE_COLUMNS')
+    expect(routeSource).toContain(
+      'createTerminalLiveAccessoryInput(key, getTerminalOneShotModifierList(modifiers))'
+    )
+    expect(routeSource).toContain(
+      'buildTerminalOneShotTextBytes(previousText, normalizedText, modifiers)'
+    )
+    expect(routeSource).toContain("buildTerminalOneShotNativeKeyBytes('Enter', modifiers)")
+    expect(routeSource).toContain('toggleOneShotModifier(slot.modifier)')
+    expect(routeSource).toContain("if (slot.type === 'scroll')")
+    expect(routeSource).toContain("{'⇳'}")
+    expect(routeSource).toContain('terminalRef.current?.scrollToBottom()')
+    expect(routeSource).toContain('onPress={returnToLatestTerminalOutput}')
+    expect(routeSource).toContain("accessibilityLabel={t('terminal.followLatestOutput')}")
+    expect(routeSource).not.toContain('accessibilityState={{ selected: autoScrollDisabled }}')
+    expect(routeSource).toContain('onPressIn={() => {')
+    expect(routeSource).toContain('startAccessoryRepeat(input)')
+    expect(routeSource).toContain('stopAccessoryRepeat()')
+    expect(routeSource).toContain('flushPendingLiveInputBeforeExternalSend(terminalHandle)')
+    expect(routeSource).toContain('transform: [{ translateY: -keyboardLift }]')
+    expect(routeSource).toContain('style={styles.liveInputCapture}')
+    expect(routeSource).not.toContain('<View style={styles.liveInputBar}>')
+  })
+
+  it('opens the software keyboard from terminal taps with a header fallback', () => {
+    expect(routeSource).toContain('onTerminalTap={(targetHandle) => {')
+    expect(routeSource).toContain('if (targetHandle === activeHandleRef.current) {')
+    expect(routeSource).toContain('onPress={focusLiveInput}')
+    expect(routeSource).toContain('<KeyboardIcon size={18} color={colors.textPrimary} />')
+    expect(routeSource).toContain("accessibilityLabel={t('terminal.showKeyboard')}")
+  })
+
+  it('uses a seamless black terminal with text-only accessory keys', () => {
+    expect(mobileThemeSource).toContain("terminalBg: '#000000'")
+    expect(routeSource).toContain('black: colors.terminalBg')
+    expect(routeSource).toContain("cursor: '#ffffff'")
+    expect(routeSource).toContain('backgroundColor: colors.terminalBg')
+    expect(routeSource).toContain("color: '#ffffff'")
+    expect(routeSource).toContain('fontSize: 12')
+    expect(routeSource).toContain("fontWeight: '700'")
+    expect(routeSource).toContain('accessoryKeyPressed: {\n    opacity: 0.65')
+    expect(routeSource).toContain('backgroundColor: colors.statusRed')
+    expect(routeSource).not.toContain(
+      'accessoryKeyPressed: {\n    backgroundColor: colors.borderSubtle'
+    )
+  })
+
+  it('places terminal actions in the native header without a second toolbar row', () => {
+    expect(routeSource).toContain('<Stack.Screen')
+    expect(routeSource).toContain("headerTitle: ''")
+    expect(routeSource).toContain('headerRight: () => (')
+    expect(routeSource).toContain('styles.navIconButton')
+    expect(routeSource).not.toContain('<View style={styles.toolbar}>')
+    expect(routeSource).not.toContain("<Text style={styles.title}>{t('common.terminal')}</Text>")
+    expect(routeSource).not.toContain('{windowId}:{paneId}')
+    expect(routeSource).not.toContain('preserveGridOnTextScale')
+  })
+
+  it('persists mobile-only terminal text scale changes', () => {
+    expect(routeSource).toContain('loadTerminalTextScale')
+    expect(routeSource).toContain('saveTerminalTextScale(scale)')
+    expect(routeSource).toContain('const [terminalTextScale, setTerminalTextScale] = useState(1)')
+    expect(routeSource).toContain('textScale={terminalTextScale}')
+    expect(routeSource).toContain('textScaleMode="mobile-reflow"')
+    expect(routeSource).toContain(
+      "liveInputText={handle === terminalHandle ? liveInputCapture : ''}"
+    )
+    expect(routeSource).toContain('onTextScaleChange={handleTextScaleChange}')
+    expect(routeSource).toContain('onMobileReflowRefreshRequest={handleMobileReflowRefreshRequest}')
+  })
+
+  it('exposes bounded copyable terminal diagnostics directly on mobile', () => {
+    expect(routeSource).toContain('createTerminalDiagnosticBuffer()')
+    expect(routeSource).toContain("appendDiagnostic('network', 'connection-state'")
+    expect(routeSource).toContain("appendDiagnostic('mobile', 'history-prefetch-batch'")
+    expect(routeSource).toContain("appendDiagnostic('mobile', 'history-activation-result'")
+    expect(routeSource).toContain('onDiagnostic={handleTerminalWebViewDiagnostic}')
+    expect(routeSource).toContain('<TerminalDiagnosticsModal')
+    expect(routeSource).toContain('formatTerminalDiagnostics(diagnosticsBufferRef.current')
+    expect(routeSource).toContain("accessibilityLabel={t('terminal.openDiagnostics')}")
+  })
+
+  it('automatically dismisses the terminal history boundary notice', () => {
+    expect(routeSource).toContain('const TERMINAL_HISTORY_NOTICE_MS = 3_000')
+    expect(routeSource).toContain('if (!historyNotice) {')
+    expect(routeSource).toContain('setHistoryNotice(null)')
+    expect(routeSource).toContain('}, TERMINAL_HISTORY_NOTICE_MS)')
+    expect(routeSource).toContain('return () => clearTimeout(timer)')
+    expect(routeSource).toContain("trigger === 'history-top'")
+    expect(routeSource).toContain(
+      'setLoadingOlderHistory(false)\n      setHistoryNotice(null)\n      setTerminalKeyboardMetrics(runtime.terminalKeyboardMetricsRef.current)\n      activeHandleRef.current = targetHandle\n      setActiveTerminal('
+    )
+  })
+
+  it('renders same-window terminal pane tabs without changing desktop layout', () => {
+    expect(routeSource).toContain('requestWindowList(client)')
+    expect(routeSource).toContain('windowPanes.length > 1')
+    expect(routeSource).toContain('activateTerminalTarget(pane.windowId, pane.paneId)')
+    expect(routeSource).toContain(
+      'startRemoteWindow(client, pane.windowId, pane.paneId, DEFAULT_REMOTE_START_VIEWPORT)'
+    )
+    expect(routeSource).toContain('isStartableTerminalPane(pane)')
+    expect(routeSource).not.toContain('isStartableLocalPane')
+    expect(routeSource).toContain("t('terminal.sshCredentialsUnavailable')")
+    expect(routeSource).not.toContain('pane.focus')
+    expect(routeSource).not.toContain('window.activate')
+  })
+
+  it('starts paused panes with a neutral grid and isolates inactive runtime UI updates', () => {
+    expect(routeSource).toContain(
+      'const DEFAULT_REMOTE_START_VIEWPORT = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }'
+    )
+    expect(routeSource).not.toContain(
+      'startRemoteWindow(client, pane.windowId, pane.paneId, viewportRef.current)'
+    )
+    expect(routeSource).toContain(
+      'if (activeHandleRef.current === terminalHandle) {\n        setTerminalRunning(true)'
+    )
+    expect(routeSource).toContain(
+      "if (activeHandleRef.current === terminalHandle) {\n          setTerminalRunning(false)\n          setError(t('terminal.stoppedOnDesktop'))"
+    )
+  })
+
+  it('keeps recent terminal tabs resident instead of navigating through cold routes', () => {
+    expect(routeSource).toContain('const [residentTerminalHandles, setResidentTerminalHandles]')
+    expect(routeSource).toContain('selectRemoteTerminalResidentSessions({')
+    expect(routeSource).toContain('residentTerminalHandles.map((handle) => (')
+    expect(routeSource).toContain('<TerminalPaneView')
+    expect(routeSource).not.toContain('router.replace(targetPath)')
+    expect(routeSource).toContain('disposeRemoteTerminalSessionRuntime(evicted)')
+    expect(routeSource).toContain(
+      'sessionRuntimesRef.current.delete(residency.evictedHandle)'
+    )
+  })
+
+  it('compacts retained raw history after reaching the desktop source budget', () => {
+    expect(routeSource).toContain('terminalHistoryRef.current.budgetExceeded')
+    expect(routeSource).toContain('if (terminalPendingOverflowedRef.current)')
+    expect(routeSource).toContain('await reloadSnapshotForCurrentRun()')
+  })
+
+  it('recovers explicitly when a resident WebView pending write queue overflows', () => {
+    expect(routeSource).toContain('const handlePendingWebWriteOverflow = useCallback(')
+    expect(routeSource).toContain('runtime.terminalPendingOverflowedRef.current = true')
+    expect(routeSource).toContain('void runtime.syncTerminalIncrementRef.current?.()')
+    expect(routeSource).toContain('onPendingWriteOverflow={handlePendingWebWriteOverflow}')
+  })
+
+  it('coalesces small foreground deltas and replaces large backlogs with a compact snapshot', () => {
+    expect(routeSource).toContain('terminalRenderPausedRef.current = true')
+    expect(routeSource).toContain('decideRemoteTerminalForegroundRecovery({')
+    expect(routeSource).toContain("decision === 'compact-snapshot'")
+    expect(routeSource).toContain("decision === 'coalesced-write'")
+    expect(routeSource).toContain('limitBytes: TERMINAL_FOREGROUND_SMALL_DELTA_BYTES')
+    const restoreIndex = routeSource.indexOf('runtime?.terminalRef.current?.restoreForeground()')
+    const recoverIndex = routeSource.indexOf(
+      'await runtime?.recoverTerminalAfterForegroundRef.current?.()',
+      restoreIndex
+    )
+    expect(restoreIndex).toBeGreaterThanOrEqual(0)
+    expect(recoverIndex).toBeGreaterThan(restoreIndex)
+    expect(routeSource).toContain('scheduleForegroundRecoveryRetry(runId, client)')
+    expect(routeSource).toContain('terminalRenderPausedRef.current = true')
+    expect(routeSource).toContain('clearRemoteTerminalForegroundRecoveryRetry(runtime)')
+    expect(routeSource).toContain("AppState.currentState !== 'active'")
+  })
+
+  it('does not consume or render prefetched history while terminal rendering is paused', () => {
+    expect(routeSource).toContain(
+      'resyncingRef.current ||\n        terminalRenderPausedRef.current'
+    )
+    expect(routeSource).toContain(
+      'terminalHistoryGenerationRef.current !== historyGeneration ||\n          terminalRenderPausedRef.current'
+    )
+  })
+
+  it('copies a non-empty selection only from the active terminal', () => {
+    expect(routeSource).toContain('const handleSelectionCopy = useCallback(')
+    expect(routeSource).toContain('targetHandle !== activeHandleRef.current || text.length === 0')
+    expect(routeSource).toContain('void Clipboard.setStringAsync(text)')
+    expect(routeSource).toContain('onSelectionCopy={handleSelectionCopy}')
+  })
+
+  it('renders window tabs for grouped windows before falling back to same-window pane tabs', () => {
+    expect(routeSource).toContain('const showGroupWindowTabs = groupWindowTabs.length > 1')
+    expect(routeSource).toContain('showGroupWindowTabs ?')
+    expect(routeSource).toContain('groupWindowTabs.map((window) => {')
+    expect(routeSource).toContain('getActiveTerminalPane(window.panes, window.activePaneId)')
+    expect(routeSource).toContain('handleGroupWindowTabPress(window)')
+    expect(routeSource).toContain(': windowPanes.length > 1 ?')
+  })
+
+  it('provides explicit and long-press tab deletion with confirmation and exact replacement routing', () => {
+    expect(routeSource).toContain("type TabDeleteMode = 'pane' | 'group'")
+    expect(routeSource).toContain('function ManagedTerminalTab(')
+    expect(routeSource).toContain("enterTabDeleteMode('pane')")
+    expect(routeSource).toContain("enterTabDeleteMode('group')")
+    expect(routeSource).toContain("handleTabLongPress('pane')")
+    expect(routeSource).toContain("handleTabLongPress('group')")
+    expect(routeSource).toContain('styles.paneTabDeleteButton')
+    expect(routeSource).toContain("t('common.done')")
+    expect(routeSource).toContain("Alert.alert(\n        t('terminal.deletePaneTitle')")
+    expect(routeSource).toContain("Alert.alert(\n        t('terminal.removeGroupWindowTitle')")
+    expect(routeSource).toContain("BackHandler.addEventListener('hardwareBackPress'")
+    expect(routeSource).toContain('deleteRemotePane(client, pane.windowId, pane.paneId)')
+    expect(routeSource).toContain(
+      'removeRemoteWindowFromGroup(client, groupId, groupWindow.windowId)'
+    )
+    expect(routeSource).toContain(
+      'navigateToReplacementPane(client, result.replacementPane, runId)'
+    )
+  })
+
+  it('cleans up subscriptions and sockets when leaving the terminal screen', () => {
+    expect(routeSource).toContain('unsubscribeRef.current?.()')
+    expect(routeSource).toContain('clientRef.current?.close()')
+    expect(routeSource).toContain("AppState.addEventListener('change'")
+    expect(routeSource).toContain('clientRef.current?.notifyForeground()')
+  })
+})

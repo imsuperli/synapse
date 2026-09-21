@@ -28,8 +28,6 @@ function normalizeSkinKind(value: unknown): AppearanceSkinKind {
 
 function normalizeSkinPresetId(value: unknown): AppearanceSkinPresetId {
   return value === 'obsidian'
-    || value === 'midnight'
-    || value === 'aurora'
     || value === 'paper'
     || value === 'custom'
     ? value
@@ -79,7 +77,7 @@ export function normalizeAppearanceSettings(value: Partial<AppearanceSettings> |
 
   if (legacyThemeId && !skin?.presetId) {
     // 旧版本使用 themeId，需要迁移
-    if (legacyThemeId === 'obsidian' || legacyThemeId === 'aurora' || legacyThemeId === 'paper') {
+    if (legacyThemeId === 'obsidian' || legacyThemeId === 'paper') {
       skin = {
         ...(skin || {}),
         presetId: legacyThemeId as AppearanceSkinPresetId,

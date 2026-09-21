@@ -29,17 +29,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
 
   useEffect(() => {
     if (isMac) {
-      window.electronAPI?.windowIsFullScreen().then((result) => {
-        if (result.success && typeof result.data === 'boolean') {
-          setIsMaximized(result.data);
-        }
-      });
-
-      const unsubscribe = window.electronAPI?.onWindowFullScreen((isFullScreen) => {
-        setIsMaximized(isFullScreen);
-      });
-
-      return () => { unsubscribe?.(); };
+      return;
     }
 
     window.electronAPI?.windowIsMaximized().then((result) => {
@@ -56,11 +46,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
   }, [isMac]);
 
   const handleMinimize = () => window.electronAPI?.windowMinimize();
-  const handleMaximize = () => (
-    isMac
-      ? window.electronAPI?.windowToggleFullScreen()
-      : window.electronAPI?.windowMaximize()
-  );
+  const handleMaximize = () => window.electronAPI?.windowMaximize();
   const handleClose = () => {
     if (onClose) {
       onClose();
@@ -71,7 +57,7 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
   };
   const handleDoubleClick = () => { if (!isMac) handleMaximize(); };
 
-  // macOS: 左侧红黄绿圆点 + logo，中间标题，右侧留空
+  // macOS: 系统标题栏提供真正的原生红绿灯；DOM 只为其预留空间。
   if (isMac) {
     return (
       <div
@@ -81,14 +67,10 @@ export const CustomTitleBar: React.FC<CustomTitleBarProps> = ({
           ...appearanceTitlebarSurfaceStyle,
         } as React.CSSProperties}
       >
-        {/* 左侧：窗口控制 + logo + 应用名 */}
-        <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        {/* 左侧：原生窗口控制安全区 + logo + 应用名 */}
+        <div className="flex items-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <div aria-hidden="true" className="w-[68px] flex-shrink-0" data-testid="mac-native-window-controls-spacer" />
           <div className="flex items-center gap-2">
-            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleClose} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors" aria-label="Close" />
-            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleMinimize} className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" aria-label="Minimize" />
-            <button type="button" tabIndex={-1} onMouseDown={preventMouseButtonFocus} onClick={handleMaximize} className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" aria-label="Maximize" />
-          </div>
-          <div className="flex items-center gap-2 ml-1">
             <img src={appLogoSrc} alt="Logo" className="w-5 h-5" />
             {showAppName && <span className="text-sm font-medium text-[rgb(var(--titlebar-foreground))]">{appName}</span>}
           </div>

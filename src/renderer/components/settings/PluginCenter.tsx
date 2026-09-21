@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Switch from '@radix-ui/react-switch';
 import {
+  ChevronDown,
   Check,
   Download,
   FolderUp,
@@ -74,6 +75,8 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeActionKeys, setActiveActionKeys] = useState<string[]>([]);
   const [mcpSnapshots, setMcpSnapshots] = useState<McpServerConfigSnapshot[]>([]);
+  const [isStatusLineExpanded, setIsStatusLineExpanded] = useState(false);
+  const [expandedInstalledPluginIds, setExpandedInstalledPluginIds] = useState<string[]>([]);
   const hasLoadedCatalogRef = useRef(hasLoadedCatalog);
 
   useEffect(() => {
@@ -218,6 +221,14 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
   const compactSwitchThumbClassName = 'block h-5 w-5 translate-x-0.5 rounded-full bg-[color-mix(in_srgb,rgb(var(--background))_92%,transparent)] shadow-sm transition-transform data-[state=checked]:translate-x-[18px]';
 
   const isActionActive = useCallback((actionKey: string) => activeActionKeys.includes(actionKey), [activeActionKeys]);
+
+  const toggleInstalledPluginExpanded = useCallback((pluginId: string) => {
+    setExpandedInstalledPluginIds((currentIds) => (
+      currentIds.includes(pluginId)
+        ? currentIds.filter((currentId) => currentId !== pluginId)
+        : [...currentIds, pluginId]
+    ));
+  }, []);
 
   const beginAction = useCallback((actionKey: string) => {
     setActiveActionKeys((currentKeys) => (
@@ -555,7 +566,7 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
         contentClassName="p-4"
         divided={false}
       >
-        {(feedbackMessage || errorMessage) && (
+        {(feedbackMessage || errorMessage) ? (
           <div className={`rounded-xl border px-4 py-3 text-sm ${
             errorMessage
               ? 'border-[rgb(var(--error)/0.24)] bg-[rgb(var(--error)/0.10)] text-[rgb(var(--foreground))]'
@@ -563,7 +574,7 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
           }`}>
             {errorMessage ?? feedbackMessage}
           </div>
-        )}
+        ) : null}
       </CompactSettingsSection>
 
       <section className="space-y-4">
@@ -646,11 +657,8 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
           )}
           help={t('settings.statusLine.pageDescription')}
           icon={<Plug size={15} />}
-        >
-          <CompactSettingRow
-            label={t('settings.statusLine.enableTitle')}
-            help={t('settings.statusLine.enableDescription')}
-          >
+          actions={(
+            <div className="flex items-center gap-2">
               <Switch.Root
                 checked={statusLineConfig.enabled}
                 onCheckedChange={(checked) => void onToggleStatusLine(checked)}
@@ -659,10 +667,23 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
               >
                 <Switch.Thumb className={compactSwitchThumbClassName} />
               </Switch.Root>
-          </CompactSettingRow>
-
-          {statusLineConfig.enabled && (
-            <div className="grid gap-4 border-t border-[rgb(var(--border))] p-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <button
+                type="button"
+                onClick={() => setIsStatusLineExpanded((currentValue) => !currentValue)}
+                aria-expanded={isStatusLineExpanded}
+                aria-label={t('settings.plugins.configure')}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_50%,transparent)] text-[rgb(var(--muted-foreground))] transition-colors hover:border-[rgb(var(--ring))] hover:bg-[rgb(var(--accent))] hover:text-[rgb(var(--foreground))]"
+              >
+                <ChevronDown
+                  size={16}
+                  className={`transition-transform ${isStatusLineExpanded ? 'rotate-180' : ''}`}
+                />
+              </button>
+            </div>
+          )}
+        >
+          {isStatusLineExpanded && statusLineConfig.enabled ? (
+            <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_320px]">
               <div className="rounded-xl border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_58%,transparent)] p-4">
                 <div className="text-sm font-semibold text-[rgb(var(--foreground))]">{t('settings.statusLine.displayFormat')}</div>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -725,7 +746,7 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
         </CompactSettingsSection>
       </section>
 
@@ -749,62 +770,87 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
               const workspaceMode = getWorkspaceEnableMode(plugin.id, workspacePluginSettings);
               const globalSettingsSchema = getScopedSettingsSchemaEntries(plugin, 'global');
               const workspaceSettingsSchema = getScopedSettingsSchemaEntries(plugin, 'workspace');
+              const isExpanded = expandedInstalledPluginIds.includes(plugin.id);
+              const hasExpandableDetails = plugin.manifest?.capabilities.some((capability) => (capability.requirements?.length ?? 0) > 0)
+                || globalSettingsSchema.length > 0
+                || workspaceSettingsSchema.length > 0
+                || (plugin.languages?.length ?? 0) > 0;
 
               return (
                 <div
                   key={plugin.id}
-                  className={`${sectionClassName} transition-colors hover:border-[rgb(var(--primary))]`}
+                  className={`${sectionClassName} !p-0 transition-colors hover:border-[rgb(var(--primary))]`}
                 >
-                  <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-lg font-semibold text-[rgb(var(--foreground))]">{plugin.name}</h3>
-                        <span className={badgeClassName}>
-                          {plugin.publisher}
+                  <div className="flex min-h-[52px] items-center justify-between gap-3 px-4 py-2.5">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                      <h3 className="truncate text-base font-semibold text-[rgb(var(--foreground))]">{plugin.name}</h3>
+                      <span className={badgeClassName}>
+                        {plugin.publisher}
+                      </span>
+                      <span className="rounded-full border border-[rgba(168,170,88,0.20)] bg-[rgba(168,170,88,0.10)] px-2 py-0.5 text-[11px] font-medium text-[rgb(var(--primary))]">
+                        {formatInstallStatus(plugin, t)}
+                      </span>
+                      <span className={badgeClassName}>
+                        {formatPluginSource(plugin.source, t)}
+                      </span>
+                      <span className={mutedChipClassName}>
+                        {formatRuntimeState(plugin, t)}
+                      </span>
+                      {plugin.updateAvailable && (
+                        <span className="rounded-full border border-[rgb(var(--warning)/0.24)] bg-[rgb(var(--warning)/0.12)] px-2 py-0.5 text-[rgb(var(--foreground))]">
+                          {t('settings.plugins.badges.updateAvailable')}
                         </span>
-                        <span className="rounded-full border border-[rgba(168,170,88,0.20)] bg-[rgba(168,170,88,0.10)] px-2 py-0.5 text-[11px] font-medium text-[rgb(var(--primary))]">
-                          {formatInstallStatus(plugin, t)}
-                        </span>
-                        <span className={badgeClassName}>
-                          {formatPluginSource(plugin.source, t)}
-                        </span>
-                        {plugin.updateAvailable && (
-                          <span className="rounded-full border border-[rgb(var(--warning)/0.24)] bg-[rgb(var(--warning)/0.12)] px-2 py-0.5 text-[rgb(var(--foreground))]">
-                            {t('settings.plugins.badges.updateAvailable')}
-                          </span>
-                        )}
-                      </div>
+                      )}
+                    </div>
 
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {(plugin.languages ?? []).map((language) => (
-                          <span
-                            key={`${plugin.id}:${language}`}
-                            className={chipClassName}
-                          >
-                            {language}
-                          </span>
-                        ))}
-                        <span className={mutedChipClassName}>
-                          {formatRuntimeState(plugin, t)}
-                        </span>
-                      </div>
-
-                      <div className="mt-5 overflow-hidden rounded-xl border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_58%,transparent)]">
-                        <CompactSettingRow
-                          label={t('settings.plugins.globalDefaultTitle')}
-                          help={t('settings.plugins.globalDefaultDescription')}
+                    <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
+                      <Switch.Root
+                        checked={plugin.enabledByDefault === true}
+                        disabled={isActionActive(`global-enabled:${plugin.id}`)}
+                        onCheckedChange={(checked) => void handleSetGlobalEnabled(plugin.id, checked)}
+                        aria-label={t('settings.plugins.globalDefaultTitle')}
+                        className={compactSwitchRootClassName}
+                      >
+                        <Switch.Thumb className={compactSwitchThumbClassName} />
+                      </Switch.Root>
+                      {plugin.updateAvailable && (
+                        <button
+                          type="button"
+                          onClick={() => void handleUpdatePlugin(plugin.id)}
+                          disabled={hasPluginMutationInFlight}
+                          className={`${secondaryButtonClassName} inline-flex h-9 items-center gap-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-70`}
                         >
-                            <Switch.Root
-                              checked={plugin.enabledByDefault === true}
-                              disabled={isActionActive(`global-enabled:${plugin.id}`)}
-                              onCheckedChange={(checked) => void handleSetGlobalEnabled(plugin.id, checked)}
-                              aria-label={t('settings.plugins.globalDefaultTitle')}
-                              className={compactSwitchRootClassName}
-                            >
-                              <Switch.Thumb className={compactSwitchThumbClassName} />
-                            </Switch.Root>
-                        </CompactSettingRow>
+                          {isActionActive(`update:${plugin.id}`) ? <LoaderCircle size={16} className="animate-spin" /> : <Download size={16} />}
+                          {t('settings.plugins.actions.update')}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void handleUninstallPlugin(plugin.id)}
+                        disabled={hasPluginMutationInFlight}
+                        className="inline-flex h-9 items-center gap-2 rounded-lg border border-[rgb(var(--error)/0.14)] bg-[rgb(var(--error)/0.08)] px-3 text-sm font-medium text-[rgb(var(--muted-foreground))] transition-colors hover:border-[rgb(var(--error)/0.34)] hover:bg-[rgb(var(--error)/0.14)] hover:text-[rgb(var(--foreground))] disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {isActionActive(`uninstall:${plugin.id}`) ? <LoaderCircle size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                        {t('settings.plugins.actions.uninstall')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleInstalledPluginExpanded(plugin.id)}
+                        aria-expanded={isExpanded}
+                        aria-label={t('settings.plugins.configure')}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_50%,transparent)] text-[rgb(var(--muted-foreground))] transition-colors hover:border-[rgb(var(--ring))] hover:bg-[rgb(var(--accent))] hover:text-[rgb(var(--foreground))]"
+                      >
+                        <ChevronDown
+                          size={16}
+                          className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+                    </div>
+                  </div>
 
+                  {isExpanded && (
+                    <div className="border-t border-[rgb(var(--border))] px-5 py-5">
+                      <div className="mb-5 overflow-hidden rounded-xl border border-[rgb(var(--border))] bg-[color-mix(in_srgb,rgb(var(--secondary))_58%,transparent)]">
                         <CompactSettingRow
                           label={t('settings.plugins.workspaceOverrideTitle')}
                           help={t('settings.plugins.workspaceOverrideDescription')}
@@ -825,40 +871,26 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
                           </select>
                         </CompactSettingRow>
                       </div>
-                    </div>
 
-                    <div className="flex flex-wrap gap-3">
-                      {plugin.updateAvailable && (
-                        <button
-                          type="button"
-                          onClick={() => void handleUpdatePlugin(plugin.id)}
-                          disabled={hasPluginMutationInFlight}
-                          className={`${secondaryButtonClassName} inline-flex h-11 items-center gap-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-70`}
-                        >
-                          {isActionActive(`update:${plugin.id}`) ? <LoaderCircle size={16} className="animate-spin" /> : <Download size={16} />}
-                          {t('settings.plugins.actions.update')}
-                        </button>
+                      {(plugin.languages?.length ?? 0) > 0 && (
+                        <div className="mb-5 flex flex-wrap gap-2">
+                          {(plugin.languages ?? []).map((language) => (
+                            <span
+                              key={`${plugin.id}:${language}`}
+                              className={chipClassName}
+                            >
+                              {language}
+                            </span>
+                          ))}
+                        </div>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => void handleUninstallPlugin(plugin.id)}
-                        disabled={hasPluginMutationInFlight}
-                        className="inline-flex h-11 items-center gap-2 rounded-2xl border border-[rgb(var(--error)/0.14)] bg-[rgb(var(--error)/0.08)] px-4 text-sm font-medium text-[rgb(var(--muted-foreground))] transition-colors hover:border-[rgb(var(--error)/0.34)] hover:bg-[rgb(var(--error)/0.14)] hover:text-[rgb(var(--foreground))] disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        {isActionActive(`uninstall:${plugin.id}`) ? <LoaderCircle size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                        {t('settings.plugins.actions.uninstall')}
-                      </button>
-                    </div>
-                  </div>
 
-                  {(plugin.manifest?.capabilities.some((capability) => (capability.requirements?.length ?? 0) > 0)
-                    || globalSettingsSchema.length > 0
-                    || workspaceSettingsSchema.length > 0) && (
-                    <details className={`mt-5 overflow-hidden ${subtlePanelClassName}`}>
-                      <summary className="cursor-pointer list-none px-5 py-4 text-sm font-medium text-[rgb(var(--foreground))]">
-                        {t('settings.plugins.configure')}
-                      </summary>
-                      <div className="border-t border-[rgb(var(--border))] px-5 py-5">
+                      {hasExpandableDetails && (
+                        <div className={`overflow-hidden ${subtlePanelClassName}`}>
+                          <div className="px-5 py-4 text-sm font-medium text-[rgb(var(--foreground))]">
+                            {t('settings.plugins.configure')}
+                          </div>
+                          <div className="border-t border-[rgb(var(--border))] px-5 py-5">
                         {plugin.manifest?.capabilities.some((capability) => (capability.requirements?.length ?? 0) > 0) && (
                           <div className={`mb-5 ${barePanelClassName}`}>
                             <div className="text-sm font-semibold text-[rgb(var(--foreground))]">{t('settings.plugins.requirements')}</div>
@@ -895,7 +927,9 @@ export const PluginCenter: React.FC<PluginCenterProps> = ({
                           })}
                         </div>
                       </div>
-                    </details>
+                    </div>
+                      )}
+                    </div>
                   )}
                 </div>
               );

@@ -8,14 +8,14 @@ describe('renderer appearance utilities', () => {
       ...DEFAULT_APPEARANCE_SETTINGS,
       skin: {
         ...DEFAULT_APPEARANCE_SETTINGS.skin,
-        presetId: 'aurora',
+        presetId: 'obsidian',
       },
       terminalOpacity: 0.75,
     });
 
     const style = document.documentElement.style;
-    expect(style.getPropertyValue('--background')).toBe('6 15 18');
-    expect(style.getPropertyValue('--terminal-background')).toBe('#061114');
+    expect(style.getPropertyValue('--background')).toBe('7 8 10');
+    expect(style.getPropertyValue('--terminal-background')).toBe('#08090c');
     expect(style.getPropertyValue('--appearance-terminal-opacity-percent')).toBe('75%');
     expect(style.getPropertyValue('--terminal-background-effective')).toContain('rgba(var(--terminal-background-rgb');
     expect(style.getPropertyValue('--appearance-skin-motion-duration')).toBe('0s');
@@ -31,21 +31,21 @@ describe('renderer appearance utilities', () => {
     expect(style.getPropertyValue('--appearance-split-divider-glow-opacity')).toBe('0.180');
   });
 
-  it('applies the violet midnight palette tokens', () => {
+  it('applies the obsidian palette tokens', () => {
     applyAppearanceToDocument({
       ...DEFAULT_APPEARANCE_SETTINGS,
       skin: {
         ...DEFAULT_APPEARANCE_SETTINGS.skin,
-        presetId: 'midnight',
+        presetId: 'obsidian',
       },
     });
 
     const style = document.documentElement.style;
-    expect(style.getPropertyValue('--background')).toBe('8 6 15');
-    expect(style.getPropertyValue('--primary')).toBe('176 126 255');
-    expect(style.getPropertyValue('--titlebar')).toBe('24 20 38');
-    expect(style.getPropertyValue('--terminal-background')).toBe('#080611');
-    expect(style.getPropertyValue('--terminal-cursor')).toBe('#b07eff');
+    expect(style.getPropertyValue('--background')).toBe('7 8 10');
+    expect(style.getPropertyValue('--primary')).toBe('168 170 88');
+    expect(style.getPropertyValue('--titlebar')).toBe('46 46 46');
+    expect(style.getPropertyValue('--terminal-background')).toBe('#08090c');
+    expect(style.getPropertyValue('--terminal-cursor')).toBe('#f2f2f2');
   });
 
   it('applies a crisp white palette for the paper preset', () => {
@@ -97,13 +97,13 @@ describe('renderer appearance utilities', () => {
       reduceMotion: false,
       skin: {
         ...DEFAULT_APPEARANCE_SETTINGS.skin,
-        presetId: 'aurora',
+        presetId: 'paper',
         motion: 'ambient',
       },
     });
 
     expect(descriptor.layers.length).toBeGreaterThan(0);
-    expect(descriptor.layers[0]?.style?.animation).toContain('appearance-skin-drift');
+    expect(descriptor.layers.some((layer) => String(layer.style?.animation ?? '').includes('appearance-skin-float'))).toBe(true);
   });
 
   it('skips motion-only layers when skin motion is disabled', () => {
@@ -112,7 +112,7 @@ describe('renderer appearance utilities', () => {
       reduceMotion: true,
       skin: {
         ...DEFAULT_APPEARANCE_SETTINGS.skin,
-        presetId: 'aurora',
+        presetId: 'paper',
         motion: 'none',
       },
     });

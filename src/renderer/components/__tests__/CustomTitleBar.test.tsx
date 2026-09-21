@@ -37,15 +37,15 @@ describe('CustomTitleBar', () => {
     expect(logo).toHaveAttribute('src', 'http://localhost:3000/dist/renderer/resources/icon.png');
   });
 
-  it('uses native full screen semantics for the macOS green button', () => {
+  it('reserves space for native macOS traffic lights instead of drawing imitations', () => {
     window.electronAPI.platform = 'darwin';
 
     render(<CustomTitleBar title="Workspace" />);
 
-    fireEvent.click(screen.getByLabelText('Maximize'));
-
-    expect(window.electronAPI.windowToggleFullScreen).toHaveBeenCalledTimes(1);
-    expect(window.electronAPI.windowMaximize).not.toHaveBeenCalled();
+    expect(screen.getByTestId('mac-native-window-controls-spacer')).toHaveClass('w-[68px]');
+    expect(screen.queryByLabelText('Close')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Minimize')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Maximize')).not.toBeInTheDocument();
   });
 
   it('renders the title bar actions slot before window controls', () => {

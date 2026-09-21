@@ -19,6 +19,7 @@ import { registerAgentHandlers } from './agentHandlers';
 import { registerLanguageHandlers } from './languageHandlers';
 import { registerPluginHandlers } from './pluginHandlers';
 import { registerTaskEnhancementHandlers } from './taskEnhancementHandlers';
+import { registerRemoteHandlers } from './remoteHandlers';
 
 /**
  * 注册所有 IPC handlers
@@ -56,6 +57,9 @@ export function registerAllHandlers(ctx: HandlerContext) {
   // 设置管理 (get-settings, update-settings, scan-ides, etc.)
   registerSettingsHandlers(ctx);
 
+  // 移动端远程控制（本地设置 IPC，不是网络 RPC）
+  registerRemoteHandlers(ctx);
+
   // 插件管理
   registerPluginHandlers(ctx);
 
@@ -74,7 +78,7 @@ export function registerAllHandlers(ctx: HandlerContext) {
   // 窗口组管理 (create-group, delete-group, archive-group, etc.)
   registerGroupHandlers(ctx);
 
-  // Chat AI 对话 (chat-send, chat-cancel, chat-execute-tool)
+  // Lightweight Chat completion helpers
   registerChatHandlers(ctx);
 
   // Structured agent runtime

@@ -21,6 +21,52 @@ function isWorkspacePayload(value: unknown): value is Workspace {
   return Array.isArray(candidate.windows) && Array.isArray(candidate.groups);
 }
 
+function resolveRestoredActiveSelection(
+  workspace: Workspace,
+  previous: {
+    activeWindowId: string | null;
+    activeGroupId: string | null;
+    activeCanvasWorkspaceId: string | null;
+  },
+): {
+  activeWindowId: string | null;
+  activeGroupId: string | null;
+  activeCanvasWorkspaceId: string | null;
+} {
+  if (previous.activeWindowId && workspace.windows.some((window) => window.id === previous.activeWindowId)) {
+    return {
+      activeWindowId: previous.activeWindowId,
+      activeGroupId: null,
+      activeCanvasWorkspaceId: null,
+    };
+  }
+
+  if (previous.activeGroupId && (workspace.groups ?? []).some((group) => group.id === previous.activeGroupId)) {
+    return {
+      activeWindowId: null,
+      activeGroupId: previous.activeGroupId,
+      activeCanvasWorkspaceId: null,
+    };
+  }
+
+  if (
+    previous.activeCanvasWorkspaceId &&
+    (workspace.canvasWorkspaces ?? []).some((canvasWorkspace) => canvasWorkspace.id === previous.activeCanvasWorkspaceId)
+  ) {
+    return {
+      activeWindowId: null,
+      activeGroupId: null,
+      activeCanvasWorkspaceId: previous.activeCanvasWorkspaceId,
+    };
+  }
+
+  return {
+    activeWindowId: null,
+    activeGroupId: null,
+    activeCanvasWorkspaceId: null,
+  };
+}
+
 /**
  * 工作区恢复 Hook
  *
@@ -65,6 +111,11 @@ export const useWorkspaceRestore = () => {
     );
 
     setAutoSaveEnabled(false);
+    const previousSelection = {
+      activeWindowId: useWindowStore.getState().activeWindowId,
+      activeGroupId: useWindowStore.getState().activeGroupId,
+      activeCanvasWorkspaceId: useWindowStore.getState().activeCanvasWorkspaceId,
+    };
     clearWindows();
 
     for (const window of workspace.windows) {
@@ -90,6 +141,8 @@ export const useWorkspaceRestore = () => {
     for (const event of workspace.canvasActivity ?? []) {
       appendCanvasActivity(event);
     }
+
+    useWindowStore.setState(resolveRestoredActiveSelection(workspace, previousSelection));
 
     console.log(`[useWorkspaceRestore] Restored ${workspace.windows.length} windows`);
     scheduleAutoSaveEnable();

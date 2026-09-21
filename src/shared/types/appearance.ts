@@ -1,5 +1,5 @@
 // 皮肤预设ID - 合并了原来的主题和皮肤概念
-export type AppearanceSkinPresetId = 'obsidian' | 'midnight' | 'aurora' | 'paper' | 'custom';
+export type AppearanceSkinPresetId = 'obsidian' | 'paper' | 'custom';
 
 export type AppearanceSkinKind = 'none' | 'gradient' | 'image';
 export type AppearanceSkinMotionMode = 'none' | 'ambient';
@@ -25,4 +25,4 @@ export interface AppearanceSettings {
 
 // 向后兼容：保留旧的 themeId 类型（已废弃）
 /** @deprecated 使用 AppearanceSkinPresetId 代替 */
-export type AppearanceThemeId = 'obsidian' | 'aurora' | 'paper';
+export type AppearanceThemeId = 'obsidian' | 'paper';

@@ -480,5 +480,5 @@ A: You can configure the default shell in the settings panel. On Windows, PowerS
 
 ---
 
-**Version**: 1.0
+**Version**: 3.1.1
 **Last Updated**: 2026-03-15

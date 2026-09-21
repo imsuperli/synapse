@@ -15,19 +15,10 @@ import type {
   AgentTaskStatePayload,
 } from './agent';
 import type {
-  ChatSendRequest,
-  ChatStreamChunkPayload,
-  ChatStreamDonePayload,
-  ChatStreamErrorPayload,
-  ChatToolResultPayload,
-  ChatToolApprovalRequestPayload,
-  ChatToolApprovalResponse,
-  ChatExecuteToolRequest,
   ChatCompleteTextRequest,
   ChatCompleteTextResult,
   RestoreAggregatedSessionRequest,
   RestoreAggregatedSessionResult,
-  ToolResult,
   ChatSettings,
   ChatProviderValidationRequest,
   ChatProviderValidationResult,
@@ -74,6 +65,7 @@ import type {
   McpServerConfigSnapshot,
   TaskArtifactRecord,
 } from './task';
+import type { TerminalScreenSnapshot } from '../remote/terminal-protocol';
 
 export interface IpcResponse<T = void> {
   success: boolean;
@@ -119,6 +111,8 @@ export interface CreateSSHWindowConfig {
   profileId: string;
   remoteCwd?: string;
   command?: string;
+  initialCols?: number;
+  initialRows?: number;
 }
 
 export interface StartSSHPaneConfig {
@@ -1638,8 +1632,12 @@ export interface PtyKeyboardProtocolState {
 
 export interface PtyHistorySnapshot {
   chunks: string[];
+  replayChunks?: string[];
+  firstSeq: number;
   lastSeq: number;
+  evictedBeforeSeq: number;
   keyboardState?: PtyKeyboardProtocolState;
+  screenSnapshot?: TerminalScreenSnapshot;
 }
 
 export interface RestoreResultPayload {
@@ -1661,6 +1659,60 @@ export interface CleanupProgressPayload {
 export interface AppVersionInfo {
   version: string;
   name: string;
+}
+
+export interface RemoteNetworkInterface {
+  name: string;
+  address: string;
+}
+
+export interface RemoteStatus {
+  ready: boolean;
+  endpoint: string | null;
+  settings: RemoteSettings;
+}
+
+export interface RemotePairingQR {
+  available: boolean;
+  qrDataUrl?: string;
+  pairingUrl?: string;
+  endpoint?: string;
+  relayEndpoint?: string;
+  deviceId?: string;
+  expiresAt?: number | null;
+}
+
+export interface RemoteDevice {
+  deviceId: string;
+  name: string;
+  scope: string;
+  pairedAt: number;
+  lastSeenAt: number;
+}
+
+export interface RemoteSettings {
+  enabled: boolean;
+  bindHost: string;
+  preferredPort: number;
+  selectedAddress: string | null;
+  manualEndpoint: string | null;
+  acceptedPlainWsNonLocal: boolean;
+  startOnLaunch: boolean;
+  relayEnabled: boolean;
+  relayEndpoint: string | null;
+}
+
+export interface RemoteSettingsUpdate {
+  enabled?: boolean;
+  bindHost?: string;
+  preferredPort?: number;
+  selectedAddress?: string | null;
+  manualEndpoint?: string | null;
+  acceptedPlainWsNonLocal?: boolean;
+  acceptPlainWsNonLocal?: boolean;
+  startOnLaunch?: boolean;
+  relayEnabled?: boolean;
+  relayEndpoint?: string | null;
 }
 
 export type ElectronEventHandler<T> = (event: unknown, payload: T) => void;
@@ -1727,6 +1779,13 @@ export interface ElectronAPI {
 
   getSettings: () => Promise<IpcResponse<Settings>>;
   updateSettings: (settings: SettingsPatch) => Promise<IpcResponse<Settings>>;
+  remoteListNetworkInterfaces: () => Promise<IpcResponse<{ interfaces: RemoteNetworkInterface[] }>>;
+  remoteUpdateSettings: (settings: RemoteSettingsUpdate) => Promise<IpcResponse<{ settings: RemoteSettings; endpoint: string | null }>>;
+  remoteGetStatus: () => Promise<IpcResponse<RemoteStatus>>;
+  remoteGetPairingQR: (config?: { address?: string; rotate?: boolean }) => Promise<IpcResponse<RemotePairingQR>>;
+  remoteRotatePairingQR: (config?: { address?: string }) => Promise<IpcResponse<RemotePairingQR>>;
+  remoteListDevices: () => Promise<IpcResponse<{ devices: RemoteDevice[] }>>;
+  remoteRevokeDevice: (deviceId: string) => Promise<IpcResponse<{ revoked: boolean }>>;
   validateChatProvider: (config: ChatProviderValidationRequest) => Promise<IpcResponse<ChatProviderValidationResult>>;
   getAvailableShells: () => Promise<IpcResponse<ShellProgramOption[]>>;
   scanIDEs: () => Promise<IpcResponse<IDEConfig[]>>;
@@ -1913,6 +1972,7 @@ export interface ElectronAPI {
   ) => Promise<IpcResponse<void>>;
   ptyResize: (windowId: string, paneId: string | undefined, cols: number, rows: number) => Promise<IpcResponse<void>>;
   getPtyHistory: (paneId: string) => Promise<IpcResponse<PtyHistorySnapshot>>;
+  updateTerminalScreenSnapshot: (snapshot: TerminalScreenSnapshot) => void;
   onPtyData: (callback: ElectronEventHandler<PtyDataPayload>) => void;
   offPtyData: (callback: ElectronEventHandler<PtyDataPayload>) => void;
 
@@ -2012,19 +2072,5 @@ export interface ElectronAPI {
   offAgentTaskState: (callback: ElectronEventHandler<AgentTaskStatePayload>) => void;
   onAgentTaskError: (callback: ElectronEventHandler<AgentTaskErrorPayload>) => void;
   offAgentTaskError: (callback: ElectronEventHandler<AgentTaskErrorPayload>) => void;
-  chatSend: (request: ChatSendRequest) => Promise<IpcResponse<{ messageId: string }>>;
-  chatCancel: (config: { paneId: string }) => Promise<IpcResponse<void>>;
   chatCompleteText: (request: ChatCompleteTextRequest) => Promise<IpcResponse<ChatCompleteTextResult>>;
-  chatExecuteTool: (request: ChatExecuteToolRequest) => Promise<IpcResponse<ToolResult>>;
-  chatRespondToolApproval: (response: ChatToolApprovalResponse) => void;
-  onChatStreamChunk: (callback: ElectronEventHandler<ChatStreamChunkPayload>) => void;
-  offChatStreamChunk: (callback: ElectronEventHandler<ChatStreamChunkPayload>) => void;
-  onChatStreamDone: (callback: ElectronEventHandler<ChatStreamDonePayload>) => void;
-  offChatStreamDone: (callback: ElectronEventHandler<ChatStreamDonePayload>) => void;
-  onChatStreamError: (callback: ElectronEventHandler<ChatStreamErrorPayload>) => void;
-  offChatStreamError: (callback: ElectronEventHandler<ChatStreamErrorPayload>) => void;
-  onChatToolApprovalRequest: (callback: ElectronEventHandler<ChatToolApprovalRequestPayload>) => void;
-  offChatToolApprovalRequest: (callback: ElectronEventHandler<ChatToolApprovalRequestPayload>) => void;
-  onChatToolResult: (callback: ElectronEventHandler<ChatToolResultPayload>) => void;
-  offChatToolResult: (callback: ElectronEventHandler<ChatToolResultPayload>) => void;
 }

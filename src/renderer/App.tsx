@@ -541,7 +541,7 @@ function AppContent() {
   const [appNotice, setAppNotice] = useState<{ message: string; tone: 'error' | 'success' } | null>(null);
   const [appVersion, setAppVersion] = useState<{ name: string; version: string }>({
     name: 'Synapse',
-    version: '1.0.0',
+    version: '3.1.1',
   });
   const [appearance, setAppearance] = useState<AppearanceSettings>(() => getAppearanceFromSettings());
   const keyboardShortcuts = useKeyboardShortcutSettings();

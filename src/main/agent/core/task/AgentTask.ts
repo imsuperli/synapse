@@ -34,7 +34,10 @@ import { resolveToolApprovalDecision } from '../../../services/chat/ToolApproval
 import { ChatService } from '../../../services/chat/ChatService';
 import { ToolExecutor } from '../../../services/chat/ToolExecutor';
 import { previewText } from '../../../utils/chatDebugLog';
-import { ContextManager } from '../context/ContextManager';
+import {
+  ContextManager,
+  type ContextSummaryInput,
+} from '../context/ContextManager';
 import { parseAssistantSections } from '../assistant-message';
 import { buildAgentSystemPrompt } from '../prompts/system';
 import type { RemoteTerminalManager, RemoteCommandHandle } from '../../integrations/remote-terminal';
@@ -50,6 +53,13 @@ const AGENT_OFFLOAD_DIR = path.join(os.tmpdir(), 'synapse-agent-offload');
 const RUNNING_STATE_SYNC_DEBOUNCE_MS = 80;
 const STREAM_PREVIEW_FLUSH_INTERVAL_MS = 140;
 const STREAM_PREVIEW_MAX_BUFFER_CHARS = 96;
+const DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS = 200_000;
+const LARGE_MODEL_CONTEXT_WINDOW_TOKENS = 1_000_000;
+const CONTEXT_COMPACTION_SYSTEM_PROMPT = [
+  '你正在执行一次上下文检查点压缩，为后续继续对话的模型生成交接摘要。',
+  '摘要必须保留：当前进展和关键决定、用户明确偏好和约束、已经执行过的命令/工具及结果、仍待完成的下一步、继续时必须知道的关键数据或文件路径。',
+  '不要编造没有出现在原始对话里的事实。不要输出寒暄。用中文，结构清晰，尽量压缩但不要丢失排障结论和操作状态。',
+].join('\n');
 type ApprovalResolution = 'approved' | 'rejected' | 'cancelled';
 
 interface AgentTaskDependencies {
@@ -100,6 +110,27 @@ function stripTerminalControlSequences(content: string): string {
     .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
     .replace(/\r/g, '');
+}
+
+function resolveModelContextWindowTokens(provider: LLMProviderConfig, model: string): number {
+  if (Number.isFinite(provider.contextWindowTokens) && provider.contextWindowTokens && provider.contextWindowTokens > 0) {
+    return Math.floor(provider.contextWindowTokens);
+  }
+
+  const normalized = model.toLowerCase();
+  if (
+    /\b1m\b/.test(normalized)
+    || normalized.includes('1000k')
+    || normalized.includes('1000000')
+    || normalized.includes('gpt-4.1')
+    || normalized.includes('gpt-5')
+    || normalized.includes('o3')
+    || normalized.includes('o4')
+  ) {
+    return LARGE_MODEL_CONTEXT_WINDOW_TOKENS;
+  }
+
+  return DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS;
 }
 
 export class AgentTask {
@@ -363,18 +394,9 @@ export class AgentTask {
         return;
       }
 
-      const summary = this.contextManager.maybeCompact();
-      if (summary) {
-        this.snapshot.messages = this.contextManager.getMessages();
-        this.appendEvent({
-          id: `context-summary-${Date.now()}`,
-          taskId: this.snapshot.taskId,
-          paneId: this.snapshot.paneId,
-          timestamp: new Date().toISOString(),
-          kind: 'context-summary',
-          status: 'completed',
-          summary,
-        });
+      await this.maybeCompactContextBeforeTurn();
+      if (this.isCancelled) {
+        return;
       }
 
       const toolCalls = await this.performAssistantTurn();
@@ -399,8 +421,102 @@ export class AgentTask {
     this.setStatus('failed');
   }
 
-  private async performAssistantTurn(): Promise<ToolCall[] | undefined> {
+  private async maybeCompactContextBeforeTurn(): Promise<void> {
+    if (this.isCancelled || !this.currentProvider) {
+      return;
+    }
+
+    const compaction = await this.contextManager.maybeCompact({
+      modelContextWindowTokens: resolveModelContextWindowTokens(this.currentProvider, this.snapshot.model),
+      summarizer: async (input) => this.summarizeContext(input),
+      shouldAbort: () => this.isCancelled,
+    });
+
+    if (!compaction || this.isCancelled) {
+      return;
+    }
+
+    this.snapshot.messages = this.contextManager.getMessages();
+    this.appendEvent({
+      id: `context-summary-${Date.now()}`,
+      taskId: this.snapshot.taskId,
+      paneId: this.snapshot.paneId,
+      timestamp: new Date().toISOString(),
+      kind: 'context-summary',
+      status: 'completed',
+      summary: [
+        compaction.summary,
+        '',
+        `[compacted ${compaction.compactedMessageCount} earlier messages; preserved ${compaction.preservedMessageCount} recent messages; estimated tokens ${compaction.estimatedTokensBefore} -> ${compaction.estimatedTokensAfter}; summary input ${compaction.summaryInputEstimatedTokens} tokens${compaction.summaryInputTruncated ? ', pre-truncated' : ''}${compaction.usedFallback ? '; fallback summary' : ''}]`,
+      ].join('\n'),
+    });
+  }
+
+  private async summarizeContext(input: ContextSummaryInput): Promise<string> {
     if (!this.latestRequest || !this.currentProvider) {
+      return '';
+    }
+
+    const prompt = [
+      `请把下面较早的对话压缩成不超过约 ${input.maxSummaryTokens} tokens 的上下文检查点摘要。`,
+      '最近两轮用户对话会在摘要后原样保留，所以这里重点总结更早内容中后续仍需要知道的信息。',
+      input.transcriptTruncated
+        ? `注意：原始待压缩内容已先按预算预压缩为约 ${input.transcriptEstimatedTokens} tokens；请优先保留明确事实、操作状态、文件路径、错误和下一步。`
+        : `待压缩内容估算约 ${input.transcriptEstimatedTokens} tokens。`,
+      '',
+      input.transcript,
+    ].join('\n');
+    let fullContent = '';
+    let streamError: string | null = null;
+    const abortController = new AbortController();
+    this.abortController = abortController;
+
+    try {
+      await this.deps.chatService.streamChat(
+        {
+          paneId: `${this.snapshot.paneId}:context-compaction`,
+          windowId: this.snapshot.windowId,
+          messages: [{
+            id: `context-compaction-input-${Date.now()}`,
+            role: 'user',
+            content: prompt,
+            timestamp: new Date().toISOString(),
+          }],
+          providerId: this.currentProvider.id,
+          model: this.snapshot.model,
+          enableTools: false,
+          systemPrompt: CONTEXT_COMPACTION_SYSTEM_PROMPT,
+          systemPromptMode: 'replace',
+          _provider: this.currentProvider,
+        } as Parameters<ChatService['streamChat']>[0] & { _provider: LLMProviderConfig },
+        {
+          onChunk: (chunk) => {
+            fullContent += chunk;
+          },
+          onDone: (content) => {
+            fullContent = content;
+          },
+          onError: (error) => {
+            streamError = error;
+          },
+        },
+        abortController.signal,
+      );
+    } finally {
+      if (this.abortController === abortController) {
+        this.abortController = null;
+      }
+    }
+
+    if (streamError) {
+      throw new Error(streamError);
+    }
+
+    return fullContent;
+  }
+
+  private async performAssistantTurn(): Promise<ToolCall[] | undefined> {
+    if (this.isCancelled || !this.latestRequest || !this.currentProvider) {
       return undefined;
     }
 

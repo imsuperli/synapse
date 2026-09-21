@@ -106,12 +106,16 @@ describe('registerSSHSessionHandlers', () => {
       profileId: 'profile-1',
       remoteCwd: '/srv/app',
       command: 'bash',
+      initialCols: 100,
+      initialRows: 30,
     });
 
     expect(processManager.spawnTerminal).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'ssh',
       workingDirectory: '/srv/app',
       command: 'bash',
+      initialCols: 100,
+      initialRows: 30,
       ssh: expect.objectContaining({
         profileId: 'profile-1',
         password: 'secret',

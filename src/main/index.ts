@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, protocol, net } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, protocol, net, powerMonitor } from 'electron';
 import fs from 'fs-extra';
+import { hostname } from 'os';
 import path from 'path';
 import { ProcessManager } from './services/ProcessManager';
 import { StatusPoller } from './services/StatusPoller';
@@ -51,7 +52,10 @@ import { createPtyDataForwarder } from './utils/ptyDataForwarder';
 import { isTerminalPane } from '../shared/utils/terminalCapabilities';
 import { isAllowedBrowserUrl } from '../shared/utils/browserUrls';
 import { normalizeImagePath, toFileUrl } from '../shared/utils/appImage';
-import { getAgentController } from './handlers/agentHandlers';
+import { disposeAgentTaskForPane, getAgentController } from './handlers/agentHandlers';
+import { createSSHWindowSession, startSSHPaneSession } from './handlers/sshSessionHandlers';
+import { RemoteGateway } from './remote/RemoteGateway';
+import { getMainWindowChromeOptions, resolveMainWindowCloseAction } from './windowChrome';
 
 const APP_DISPLAY_NAME = 'Synapse';
 const USER_DATA_DIR_NAME = 'synapse';
@@ -121,6 +125,7 @@ let sessionAggregationService: SessionAggregationService | null = null;
 let taskArtifactService: TaskArtifactService | null = null;
 let browserSyncService: BrowserSyncService | null = null;
 let mcpCapabilityService: McpCapabilityService | null = null;
+let remoteGateway: RemoteGateway | null = null;
 let currentWorkspace: Workspace | null = null; // 缓存当前工作区状态
 const forwardPtyData = createPtyDataForwarder(() => mainWindow);
 
@@ -198,7 +203,7 @@ function createWindow() {
     title: '',
     icon: APP_ICON_PATH,
     show: false, // 创建时不显示，等待渲染进程通知
-    frame: false, // 使用自定义标题栏
+    ...getMainWindowChromeOptions(process.platform),
     fullscreenable: true,
     webPreferences: {
       preload: preloadPath,
@@ -441,26 +446,28 @@ function createWindow() {
 
   // 窗口关闭前处理
   mainWindow.on('close', async (event) => {
-    // macOS: 关闭窗口只隐藏，不退出（除非用户通过 ⌘Q 触发退出）
-    if (process.platform === 'darwin' && !isQuitting) {
+    const currentViewState = viewSwitcher?.getCurrentView() || 'unified';
+    const closeAction = resolveMainWindowCloseAction(
+      process.platform,
+      currentViewState,
+      isQuitting,
+    );
+
+    // 终端和画布视图统一先返回主页，避免 macOS 的隐藏逻辑抢先执行。
+    if (closeAction === 'return-home') {
+      event.preventDefault();
+      viewSwitcher?.switchToUnifiedView();
+      return;
+    }
+
+    // macOS: 主页上的关闭只隐藏窗口，不退出应用。
+    if (closeAction === 'hide') {
       event.preventDefault();
       mainWindow?.hide();
       return;
     }
 
-    // Windows/Linux: 检查当前视图状态
-    const currentViewState = viewSwitcher?.getCurrentView() || 'unified';
-
-    // 如果在终端或画布视图，返回统一视图而不是关闭窗口
-    if ((currentViewState === 'terminal' || currentViewState === 'canvas') && !isQuitting) {
-      event.preventDefault();
-      // 通知渲染进程返回统一视图（会同时清除 activeWindowId 和 activeGroupId）
-      viewSwitcher?.switchToUnifiedView();
-      return;
-    }
-
-    // 在统一视图或已经在退出流程中，执行正常关闭
-    if (!isQuitting) {
+    if (closeAction === 'shutdown') {
       event.preventDefault();
       isQuitting = true;
 
@@ -475,6 +482,7 @@ function createWindow() {
           fileWatcherService,
           gitBranchWatcher,
           tmuxCompatService,
+          remoteGateway,
           languageFeatureService,
           currentWorkspace,
         };
@@ -578,6 +586,114 @@ if (hasSingleInstanceLock) {
 
     processManager.warmupConPtyDll().catch((error) => {
       console.error('[Main] ConPTY DLL warmup failed:', error);
+    });
+
+    const publishRemoteWorkspaceUpdate = (workspace: Workspace) => {
+      currentWorkspace = workspace;
+      autoSaveManager?.triggerSave();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('workspace-loaded', workspace);
+      }
+    };
+
+    remoteGateway = new RemoteGateway({
+      processManager,
+      userDataPath: app.getPath('userData'),
+      hostName: hostname(),
+      appVersion: app.getVersion(),
+      getCurrentWorkspace: () => currentWorkspace,
+      onPaneProcessStarted: ({ windowId, paneId, pid }) => {
+        statusPoller?.addPane(windowId, paneId, pid);
+      },
+      onPaneProcessStopped: ({ paneId }) => {
+        statusPoller?.removePane(paneId);
+      },
+      onPaneData: ({ windowId, paneId, data, seq }) => {
+        forwardPtyData({ windowId, paneId, data, seq });
+      },
+      onPanePtySubscription: (paneId, unsubscribe) => {
+        ptySubscriptionManager?.add(paneId, unsubscribe);
+      },
+      onPanePtyUnsubscribe: (paneId) => {
+        ptySubscriptionManager?.remove(paneId);
+      },
+      onLocalPaneStarted: async ({ windowId, workingDirectory }) => {
+        await projectConfigWatcher.startWatching(windowId, workingDirectory, (updatedConfig) => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('project-config-updated', {
+              windowId,
+              projectConfig: updatedConfig,
+            });
+          }
+        });
+      },
+      listSSHProfiles: async () => {
+        if (!sshProfileStore) {
+          throw new Error('SSH profile store is not initialized');
+        }
+        return sshProfileStore.list();
+      },
+      createSSHWindow: (params) => createSSHWindowSession({
+        mainWindow,
+        processManager,
+        statusPoller,
+        ptySubscriptionManager,
+        sshProfileStore,
+        sshVaultService,
+      }, {
+        profileId: params.profileId,
+        name: params.name,
+        remoteCwd: params.workingDirectory,
+        command: params.command,
+        initialCols: params.initialCols,
+        initialRows: params.initialRows,
+      }),
+      startSSHTerminalPane: (params) => startSSHPaneSession({
+        mainWindow,
+        processManager,
+        statusPoller,
+        ptySubscriptionManager,
+        sshProfileStore,
+        sshVaultService,
+      }, {
+        windowId: params.windowId,
+        paneId: params.paneId,
+        profileId: params.profileId,
+        remoteCwd: params.workingDirectory,
+        command: params.command,
+        initialCols: params.initialCols,
+        initialRows: params.initialRows,
+      }),
+      onRemoteWindowCreated: ({ workspace }) => {
+        publishRemoteWorkspaceUpdate(workspace);
+      },
+      onRemotePaneDeleted: ({ paneId }) => {
+        ptySubscriptionManager?.remove(paneId);
+        statusPoller?.removePane(paneId);
+        disposeAgentTaskForPane(paneId);
+      },
+      onRemoteWindowDeleted: ({ windowId, paneIds, workspace }) => {
+        for (const paneId of paneIds) {
+          ptySubscriptionManager?.remove(paneId);
+        }
+        statusPoller?.removeWindow(windowId);
+        gitBranchWatcher?.unwatch(windowId);
+        projectConfigWatcher?.stopWatching(windowId);
+      },
+      onRemoteWindowRuntimeUpdated: ({ workspace }) => {
+        publishRemoteWorkspaceUpdate(workspace);
+      },
+      onRemoteWorkspaceLayoutUpdated: ({ workspace }) => {
+        publishRemoteWorkspaceUpdate(workspace);
+      },
+    });
+    await remoteGateway.startFromSavedSettings().catch((error) => {
+      console.error('[Main] Failed to restore remote gateway:', error);
+    });
+    powerMonitor.on('resume', () => {
+      void remoteGateway?.recoverFromSystemResume().catch((error) => {
+        console.error('[Main] Failed to recover remote gateway after system resume:', error);
+      });
     });
 
     // 初始化 TmuxCompatService（内部会创建 TmuxRpcServer）
@@ -856,6 +972,7 @@ if (hasSingleInstanceLock) {
       taskArtifactService,
       browserSyncService,
       mcpCapabilityService,
+      remoteGateway,
       currentWorkspace,
       getMainWindow: () => mainWindow,
       getCurrentWorkspace: () => currentWorkspace,
@@ -934,6 +1051,7 @@ app.on('window-all-closed', () => {
         fileWatcherService,
         gitBranchWatcher,
         tmuxCompatService,
+        remoteGateway,
         codeProjectIndexService,
         languageFeatureService,
         currentWorkspace,

@@ -30,22 +30,22 @@ describe('appearance settings', () => {
     expect(normalized.skin.motion).toBe(DEFAULT_APPEARANCE_SETTINGS.skin.motion);
   });
 
-  it('migrates legacy themeId to skin.presetId', () => {
+  it('falls back removed legacy themeId values to the default skin', () => {
     const normalized = normalizeAppearanceSettings({
       themeId: 'aurora',
     } as any);
 
-    expect(normalized.skin.presetId).toBe('aurora');
+    expect(normalized.skin.presetId).toBe(DEFAULT_APPEARANCE_SETTINGS.skin.presetId);
   });
 
   it('preserves existing skin.presetId when legacy themeId is present', () => {
     const normalized = normalizeAppearanceSettings({
       themeId: 'aurora',
       skin: {
-        presetId: 'midnight',
+        presetId: 'paper',
       },
     } as any);
 
-    expect(normalized.skin.presetId).toBe('midnight');
+    expect(normalized.skin.presetId).toBe('paper');
   });
 });

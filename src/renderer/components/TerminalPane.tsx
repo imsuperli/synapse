@@ -6,6 +6,7 @@ import { Pane, WindowStatus } from '../types/window';
 import { useI18n } from '../i18n';
 import { subscribeToPanePtyData } from '../api/ptyDataBus';
 import type { PtyDataPayload, PtyHistorySnapshot, PtyKeyboardProtocolState } from '../../shared/types/electron-api';
+import type { TerminalScreenSnapshot } from '../../shared/remote/terminal-protocol';
 import { ensureTerminalFontsLoaded, TERMINAL_FONT_FAMILY } from '../utils/terminalFonts';
 import { onTerminalSettingsUpdated } from '../utils/terminalSettingsEvents';
 import { installTerminalImeFix, type ImeCompositionState } from '../utils/terminalImeFix';
@@ -33,6 +34,8 @@ import {
   matchesActiveTerminalFocusRequest,
 } from '../utils/terminalFocus';
 import { createTerminalOsc8Guard, OSC8_HYPERLINK_CLOSE } from '../utils/terminalOsc8Guard';
+import { installTerminalScrollbackPreservation } from '../utils/terminalScrollbackPreservation';
+import { writeTerminalWithResizeControls } from '../utils/terminalResizeControl';
 import { renderMarkdownLike } from './agent/RichText';
 
 const completedReplaySessions = new Set<string>();
@@ -57,6 +60,8 @@ const REPLAY_PROTOCOL_QUERY_PATTERN = new RegExp(
 );
 const XTERM_FOCUS_IN_REPORT = '\u001b[I';
 const XTERM_FOCUS_OUT_REPORT = '\u001b[O';
+const TERMINAL_SCREEN_SNAPSHOT_MIN_INTERVAL_MS = 250;
+const ALTERNATE_SCREEN_MODE_PATTERN = /\x1b\[\?(?:[0-9;]*;)?(?:47|1047|1048|1049)(?:;[0-9;]*)?[hl]/;
 
 function getDefaultSSHClipboardImageShortcut(platform: string | undefined): SSHClipboardImageShortcut {
   return platform === 'darwin' ? 'ctrl-v' : 'alt-v';
@@ -118,6 +123,53 @@ function getReplaySessionKey(windowId: string, paneId: string, pid: number | nul
   }
 
   return `${windowId}:${paneId}:${pid}`;
+}
+
+function sanitizeTerminalSnapshotLine(text: string): string {
+  return text.replace(/\x1b/g, '\u241b').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+}
+
+function createAlternateTerminalScreenSnapshot(
+  windowId: string,
+  paneId: string,
+  terminal: Terminal,
+  outputSeq: number,
+): TerminalScreenSnapshot | null {
+  const buffer = terminal.buffer?.active;
+  if (!buffer || buffer.type !== 'alternate') {
+    return null;
+  }
+
+  const cols = Math.max(1, Math.floor(terminal.cols || 1));
+  const rows = Math.max(1, Math.floor(terminal.rows || 1));
+  const cursorX = clampNumber(buffer.cursorX ?? 0, 0, Math.max(0, cols - 1));
+  const cursorY = clampNumber(buffer.cursorY ?? 0, 0, Math.max(0, rows - 1));
+  const lines: string[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    const line = buffer.getLine(row);
+    lines.push(sanitizeTerminalSnapshotLine(line?.translateToString(true, 0, cols) ?? ''));
+  }
+
+  return {
+    windowId,
+    paneId,
+    cols,
+    rows,
+    cursorX,
+    cursorY,
+    alternate: true,
+    data: `\x1b[?1049h\x1b[2J\x1b[H${lines.join('\r\n')}\x1b[${cursorY + 1};${cursorX + 1}H`,
+    capturedAt: new Date().toISOString(),
+    outputSeq,
+  };
+}
+
+function shouldCaptureTerminalScreenSnapshot(
+  terminal: Terminal,
+  data: string,
+  hasSnapshot: boolean,
+): boolean {
+  return terminal.buffer?.active?.type === 'alternate' || hasSnapshot || ALTERNATE_SCREEN_MODE_PATTERN.test(data);
 }
 
 export function __resetTerminalPaneReplaySessionCacheForTests(): void {
@@ -185,6 +237,11 @@ function readTerminalViewportY(terminal: Terminal): number | null {
   return typeof viewportY === 'number' && Number.isFinite(viewportY) ? viewportY : null;
 }
 
+function readTerminalBaseY(terminal: Terminal): number | null {
+  const baseY = terminal.buffer?.active?.baseY;
+  return typeof baseY === 'number' && Number.isFinite(baseY) ? baseY : null;
+}
+
 function restoreTerminalViewportY(terminal: Terminal, viewportY: number | null): void {
   if (viewportY === null || !Number.isFinite(viewportY)) {
     return;
@@ -200,6 +257,82 @@ function restoreTerminalViewportY(terminal: Terminal, viewportY: number | null):
   }
 
   terminal.scrollToLine(targetViewportY);
+}
+
+type TerminalViewportContentAnchor = {
+  text: string;
+  rowOffset: number;
+  absoluteViewportY: number;
+  rowsFromBottom: number;
+};
+
+function terminalViewportAnchorLineText(terminal: Terminal, row: number): string {
+  try {
+    return terminal.buffer.active.getLine(row)?.translateToString(true).slice(0, 512) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function captureTerminalViewportContentAnchor(terminal: Terminal): TerminalViewportContentAnchor {
+  const buffer = terminal.buffer.active;
+  const viewportY = Math.max(0, buffer.viewportY);
+  const baseY = Math.max(0, buffer.baseY);
+  const visibleEnd = Math.min(buffer.length, viewportY + Math.max(1, terminal.rows));
+  for (let row = viewportY; row < visibleEnd; row += 1) {
+    const text = terminalViewportAnchorLineText(terminal, row);
+    if (text) {
+      return {
+        text,
+        rowOffset: row - viewportY,
+        absoluteViewportY: viewportY,
+        rowsFromBottom: Math.max(0, baseY - viewportY),
+      };
+    }
+  }
+  return {
+    text: '',
+    rowOffset: 0,
+    absoluteViewportY: viewportY,
+    rowsFromBottom: Math.max(0, baseY - viewportY),
+  };
+}
+
+function restoreTerminalViewportContentAnchor(
+  terminal: Terminal,
+  anchor: TerminalViewportContentAnchor,
+): void {
+  const buffer = terminal.buffer.active;
+  const baseY = Math.max(0, buffer.baseY);
+  const fallbackY = baseY - anchor.rowsFromBottom;
+  const expectedRow = fallbackY + anchor.rowOffset;
+  let matchedRow = -1;
+  if (anchor.text && buffer.length > 0) {
+    const center = Math.round(clampNumber(expectedRow, 0, buffer.length - 1));
+    const maxRadius = Math.min(buffer.length - 1, 12_000);
+    for (let radius = 0; radius <= maxRadius; radius += 1) {
+      const before = center - radius;
+      if (before >= 0 && terminalViewportAnchorLineText(terminal, before) === anchor.text) {
+        matchedRow = before;
+        break;
+      }
+      const after = center + radius;
+      if (
+        radius > 0
+        && after < buffer.length
+        && terminalViewportAnchorLineText(terminal, after) === anchor.text
+      ) {
+        matchedRow = after;
+        break;
+      }
+    }
+  }
+  const targetY = matchedRow >= 0
+    ? matchedRow - anchor.rowOffset
+    : Number.isFinite(fallbackY)
+      ? fallbackY
+      : anchor.absoluteViewportY;
+  restoreTerminalViewportY(terminal, targetY);
 }
 
 /**
@@ -226,7 +359,9 @@ function extractPtyHistorySnapshot(response: unknown): PtyHistorySnapshot {
   if (Array.isArray(response)) {
     return {
       chunks: response.filter((chunk): chunk is string => typeof chunk === 'string'),
+      firstSeq: 0,
       lastSeq: 0,
+      evictedBeforeSeq: 0,
     };
   }
 
@@ -245,9 +380,21 @@ function extractPtyHistorySnapshot(response: unknown): PtyHistorySnapshot {
       && Array.isArray((data as { chunks?: unknown }).chunks)
       && typeof (data as { lastSeq?: unknown }).lastSeq === 'number'
     ) {
+      const snapshot = data as {
+        chunks: unknown[];
+        firstSeq?: unknown;
+        lastSeq: number;
+        evictedBeforeSeq?: unknown;
+      };
       return {
-        chunks: (data as { chunks: unknown[] }).chunks.filter((chunk): chunk is string => typeof chunk === 'string'),
-        lastSeq: (data as { lastSeq: number }).lastSeq,
+        chunks: snapshot.chunks.filter((chunk): chunk is string => typeof chunk === 'string'),
+        firstSeq: typeof snapshot.firstSeq === 'number'
+          ? snapshot.firstSeq
+          : 0,
+        lastSeq: snapshot.lastSeq,
+        evictedBeforeSeq: typeof snapshot.evictedBeforeSeq === 'number'
+          ? snapshot.evictedBeforeSeq
+          : 0,
         keyboardState: extractKeyboardProtocolState(data),
       };
     }
@@ -255,14 +402,18 @@ function extractPtyHistorySnapshot(response: unknown): PtyHistorySnapshot {
     if (Array.isArray(data)) {
       return {
         chunks: data.filter((chunk): chunk is string => typeof chunk === 'string'),
+        firstSeq: 0,
         lastSeq: 0,
+        evictedBeforeSeq: 0,
       };
     }
   }
 
   return {
     chunks: [],
+    firstSeq: 0,
     lastSeq: 0,
+    evictedBeforeSeq: 0,
   };
 }
 
@@ -399,6 +550,15 @@ type TerminalWithRenderService = Terminal & {
   };
 };
 
+function getTerminalRenderService(terminal: Terminal): TerminalRenderServiceRecovery | undefined {
+  return (terminal as TerminalWithRenderService)._core?._renderService;
+}
+
+function terminalRenderSurfaceNeedsRecovery(terminal: Terminal): boolean {
+  const renderService = getTerminalRenderService(terminal);
+  return Boolean(renderService?._isPaused || renderService?._needsFullRefresh);
+}
+
 function resetTerminalKeyboardProtocolState(terminal: Terminal): void {
   applyTerminalKeyboardProtocolState(terminal, {
     applicationCursorKeysMode: false,
@@ -460,7 +620,7 @@ function recoverTerminalRenderSurface(terminal: Terminal): void {
     return;
   }
 
-  const renderService = (terminal as TerminalWithRenderService)._core?._renderService;
+  const renderService = getTerminalRenderService(terminal);
   if (!renderService) {
     refreshTerminalViewport(terminal);
     return;
@@ -749,11 +909,17 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const outputChunksRef = useRef<string[]>([]);
   const outputBufferSizeRef = useRef(0);
+  const outputBufferLastSeqRef = useRef<number | undefined>(undefined);
   const outputFlushFrameRef = useRef<number | null>(null);
+  const screenSnapshotFrameRef = useRef<number | null>(null);
+  const screenSnapshotTrailingTimerRef = useRef<number | null>(null);
+  const lastScreenSnapshotSentAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const lastScreenSnapshotSignatureRef = useRef('');
   const lastLiveOutputQueuedAtRef = useRef(Number.NEGATIVE_INFINITY);
   const resizeFrameRef = useRef<number | null>(null);
   const repaintFrameRef = useRef<number | null>(null);
   const repaintTimerRef = useRef<number | null>(null);
+  const staleRenderRecoveryFrameRef = useRef<number | null>(null);
   const lastContainerSizeRef = useRef({ width: 0, height: 0 });
   const lastSyncedTerminalSizeRef = useRef({ cols: 0, rows: 0 });
   const isActiveRef = useRef(isActive); // 使用 ref 跟踪 isActive 状态
@@ -771,11 +937,13 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const bufferedLiveDataRef = useRef<PtyDataPayload[]>([]);
   const historyReplayTokenRef = useRef(0);
   const lastAppliedSeqRef = useRef(0);
+  const lastRenderedSeqRef = useRef(0);
   const suppressPtyWriteRef = useRef(false);
   const suppressProgrammaticFocusReportUntilRef = useRef(0);
   const liveOsc8GuardRef = useRef(createTerminalOsc8Guard());
   const replayOsc8GuardRef = useRef(createTerminalOsc8Guard());
   const lastKnownViewportYRef = useRef<number | null>(null);
+  const lastKnownBaseYRef = useRef<number | null>(null);
   const isWindowFocusedRef = useRef(typeof document === 'undefined' ? true : document.hasFocus());
   const isRestoringViewportRef = useRef(false);
   const isVisibleSurfaceRecoveryPendingRef = useRef(false);
@@ -843,7 +1011,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
         const textarea = terminalContainerRef.current?.querySelector('textarea');
         if (textarea instanceof HTMLElement && typeof textarea.focus === 'function') {
-          textarea.focus();
+          textarea.focus({ preventScroll: true });
         }
       } catch (error) {
         console.error(`[TerminalPane] Error focusing pane ${pane.id}:`, error);
@@ -873,22 +1041,113 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     window.electronAPI.ptyResize(windowId, pane.id, cols, rows);
   }, [pane.id, windowId]);
 
+  const scheduleTerminalScreenSnapshot = useCallback(() => {
+    if (screenSnapshotFrameRef.current !== null) {
+      return;
+    }
+
+    let didRunSynchronously = false;
+    const frameId = requestAnimationFrame(() => {
+      didRunSynchronously = true;
+      screenSnapshotFrameRef.current = null;
+      const terminal = terminalRef.current;
+      if (!terminal || !window.electronAPI?.updateTerminalScreenSnapshot) {
+        return;
+      }
+
+      const now = nowMs();
+      const snapshot = createAlternateTerminalScreenSnapshot(
+        windowId,
+        pane.id,
+        terminal,
+        lastRenderedSeqRef.current,
+      );
+      if (!snapshot) {
+        if (lastScreenSnapshotSignatureRef.current) {
+          window.electronAPI.updateTerminalScreenSnapshot({
+            windowId,
+            paneId: pane.id,
+            cols: Math.max(1, Math.floor(terminal.cols || 1)),
+            rows: Math.max(1, Math.floor(terminal.rows || 1)),
+            cursorX: 0,
+            cursorY: 0,
+            alternate: false,
+            data: '',
+            capturedAt: new Date().toISOString(),
+            outputSeq: lastRenderedSeqRef.current,
+          });
+          lastScreenSnapshotSentAtRef.current = now;
+        }
+        lastScreenSnapshotSignatureRef.current = '';
+        return;
+      }
+
+      if (now - lastScreenSnapshotSentAtRef.current < TERMINAL_SCREEN_SNAPSHOT_MIN_INTERVAL_MS) {
+        if (screenSnapshotTrailingTimerRef.current === null) {
+          const delay = Math.max(
+            0,
+            TERMINAL_SCREEN_SNAPSHOT_MIN_INTERVAL_MS - (now - lastScreenSnapshotSentAtRef.current),
+          );
+          screenSnapshotTrailingTimerRef.current = window.setTimeout(() => {
+            screenSnapshotTrailingTimerRef.current = null;
+            scheduleTerminalScreenSnapshot();
+          }, delay);
+        }
+        return;
+      }
+
+      const signature = [
+        snapshot.cols,
+        snapshot.rows,
+        snapshot.cursorX,
+        snapshot.cursorY,
+        snapshot.data,
+      ].join(':');
+      if (signature === lastScreenSnapshotSignatureRef.current) {
+        return;
+      }
+
+      lastScreenSnapshotSignatureRef.current = signature;
+      lastScreenSnapshotSentAtRef.current = now;
+      if (screenSnapshotTrailingTimerRef.current !== null) {
+        window.clearTimeout(screenSnapshotTrailingTimerRef.current);
+        screenSnapshotTrailingTimerRef.current = null;
+      }
+      window.electronAPI.updateTerminalScreenSnapshot(snapshot);
+    });
+    if (!didRunSynchronously) {
+      screenSnapshotFrameRef.current = frameId;
+    }
+  }, [pane.id, windowId]);
+
   const rememberTerminalViewportY = useCallback((viewportY: number | null) => {
     if (viewportY === null || !Number.isFinite(viewportY) || isRestoringViewportRef.current) {
       return;
     }
 
     const lastKnownViewportY = lastKnownViewportYRef.current;
-    if (
-      (!isWindowFocusedRef.current || isVisibleSurfaceRecoveryPendingRef.current)
-      && viewportY === 0
-      && (lastKnownViewportY ?? 0) > 0
-    ) {
-      const terminal = terminalRef.current;
+    const hasLastKnownViewportY = lastKnownViewportY !== null && Number.isFinite(lastKnownViewportY);
+    const savedViewportY = hasLastKnownViewportY ? lastKnownViewportY : null;
+    const terminal = terminalRef.current;
+    const baseY = terminal ? readTerminalBaseY(terminal) : null;
+    const lastKnownBaseY = lastKnownBaseYRef.current;
+    const lastKnownWasAtBottom = (
+      savedViewportY !== null
+      && lastKnownBaseY !== null
+      && savedViewportY >= lastKnownBaseY
+    );
+    const isUnexpectedRecoveryJump = savedViewportY !== null
+      && (!isWindowFocusedRef.current || isVisibleSurfaceRecoveryPendingRef.current)
+      && (
+        (viewportY === 0 && savedViewportY > 0)
+        || (baseY !== null && viewportY === baseY && savedViewportY < baseY && !lastKnownWasAtBottom)
+      );
+
+    if (isUnexpectedRecoveryJump) {
       if (terminal && isVisibleSurfaceRecoveryPendingRef.current) {
         isRestoringViewportRef.current = true;
         try {
-          restoreTerminalViewportY(terminal, lastKnownViewportY);
+          restoreTerminalViewportY(terminal, savedViewportY);
         } finally {
           isRestoringViewportRef.current = false;
         }
@@ -897,6 +1156,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     lastKnownViewportYRef.current = viewportY;
+    lastKnownBaseYRef.current = baseY;
   }, []);
 
   const captureCurrentTerminalViewportY = useCallback(() => {
@@ -909,12 +1169,34 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   }, [rememberTerminalViewportY]);
 
   const preserveTerminalViewportY = useCallback((terminal: Terminal, run: () => void) => {
-    const viewportYToPreserve = lastKnownViewportYRef.current ?? readTerminalViewportY(terminal);
+    const lastKnownViewportY = lastKnownViewportYRef.current;
+    const lastKnownBaseY = lastKnownBaseYRef.current;
+    const currentBaseY = readTerminalBaseY(terminal);
+    const viewportYToPreserve = (
+      lastKnownViewportY !== null
+      && lastKnownBaseY !== null
+      && lastKnownViewportY >= lastKnownBaseY
+      && currentBaseY !== null
+    )
+      ? currentBaseY
+      : lastKnownViewportY ?? readTerminalViewportY(terminal);
 
     isRestoringViewportRef.current = true;
     try {
       run();
       restoreTerminalViewportY(terminal, viewportYToPreserve);
+    } finally {
+      isRestoringViewportRef.current = false;
+      rememberTerminalViewportY(readTerminalViewportY(terminal));
+    }
+  }, [rememberTerminalViewportY]);
+
+  const preserveTerminalViewportContent = useCallback((terminal: Terminal, run: () => void) => {
+    const anchor = captureTerminalViewportContentAnchor(terminal);
+    isRestoringViewportRef.current = true;
+    try {
+      run();
+      restoreTerminalViewportContentAnchor(terminal, anchor);
     } finally {
       isRestoringViewportRef.current = false;
       rememberTerminalViewportY(readTerminalViewportY(terminal));
@@ -939,6 +1221,40 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       recoverTerminalRenderSurface(terminal);
     });
   }, [preserveTerminalViewportY, syncPtySize]);
+
+  const scheduleStaleRenderSurfaceRecovery = useCallback(() => {
+    const terminal = terminalRef.current;
+    const container = terminalContainerRef.current;
+    if (!terminal || !container || !isVisibleTerminalContainer(container)) {
+      return;
+    }
+
+    if (!terminalRenderSurfaceNeedsRecovery(terminal)) {
+      return;
+    }
+
+    if (staleRenderRecoveryFrameRef.current !== null) {
+      return;
+    }
+
+    staleRenderRecoveryFrameRef.current = requestAnimationFrame(() => {
+      staleRenderRecoveryFrameRef.current = null;
+
+      const currentTerminal = terminalRef.current;
+      const currentContainer = terminalContainerRef.current;
+      if (!currentTerminal || !currentContainer || !isVisibleTerminalContainer(currentContainer)) {
+        return;
+      }
+
+      if (!terminalRenderSurfaceNeedsRecovery(currentTerminal)) {
+        return;
+      }
+
+      preserveTerminalViewportY(currentTerminal, () => {
+        recoverTerminalRenderSurface(currentTerminal);
+      });
+    });
+  }, [preserveTerminalViewportY]);
 
   const scheduleVisibleTerminalRepaint = useCallback((options?: { delayed?: boolean }) => {
     const scheduleFrame = (clearRecoveryPending: boolean) => {
@@ -1534,6 +1850,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       isHistoryLoadedRef.current = true;
       bufferedLiveDataRef.current = [];
       lastAppliedSeqRef.current = 0;
+      lastRenderedSeqRef.current = 0;
       suppressPtyWriteRef.current = false;
       lastLiveOutputQueuedAtRef.current = Number.NEGATIVE_INFINITY;
       hasCompletedReplayForCurrentSessionRef.current = false;
@@ -1547,9 +1864,21 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         cancelAnimationFrame(outputFlushFrameRef.current);
         outputFlushFrameRef.current = null;
       }
+      if (screenSnapshotFrameRef.current !== null) {
+        cancelAnimationFrame(screenSnapshotFrameRef.current);
+        screenSnapshotFrameRef.current = null;
+      }
+      if (screenSnapshotTrailingTimerRef.current !== null) {
+        window.clearTimeout(screenSnapshotTrailingTimerRef.current);
+        screenSnapshotTrailingTimerRef.current = null;
+      }
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
+      outputBufferLastSeqRef.current = undefined;
+      lastScreenSnapshotSignatureRef.current = '';
+      lastScreenSnapshotSentAtRef.current = Number.NEGATIVE_INFINITY;
       lastKnownViewportYRef.current = null;
+      lastKnownBaseYRef.current = null;
       terminalRef.current?.reset();
     }
 
@@ -1800,7 +2129,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     });
     terminal.open(terminalContainerRef.current);
     const pasteCaptureBlockMs = 300;
-    const disposeImeFix = installTerminalImeFix(terminal, imeCompositionStateRef.current);
+    const disposeScrollbackPreservation = installTerminalScrollbackPreservation(terminal);
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
@@ -1819,7 +2148,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       refreshTerminalViewport(terminal);
     });
 
-    const writeGuardedLiveOutput = (data: string) => {
+    const writeGuardedLiveOutput = (data: string, outputSeq?: number) => {
       const currentTerminal = terminalRef.current;
       if (!currentTerminal) {
         return;
@@ -1827,7 +2156,24 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       const guardedData = liveOsc8GuardRef.current.sanitize(data);
       if (guardedData) {
-        currentTerminal.write(guardedData);
+        const shouldCaptureSnapshot = shouldCaptureTerminalScreenSnapshot(
+          currentTerminal,
+          guardedData,
+          Boolean(lastScreenSnapshotSignatureRef.current),
+        );
+        if (shouldCaptureSnapshot) {
+          writeTerminalWithResizeControls(currentTerminal, guardedData, () => {
+            if (outputSeq !== undefined) {
+              lastRenderedSeqRef.current = outputSeq;
+            }
+            scheduleTerminalScreenSnapshot();
+          });
+        } else {
+          writeTerminalWithResizeControls(currentTerminal, guardedData);
+        }
+        scheduleStaleRenderSurfaceRecovery();
+      } else if (outputSeq !== undefined) {
+        lastRenderedSeqRef.current = outputSeq;
       }
     };
 
@@ -1847,9 +2193,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       const pending = outputChunksRef.current.length === 1
         ? outputChunksRef.current[0]
         : outputChunksRef.current.join('');
+      const pendingLastSeq = outputBufferLastSeqRef.current;
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
-      writeGuardedLiveOutput(pending);
+      outputBufferLastSeqRef.current = undefined;
+      writeGuardedLiveOutput(pending, pendingLastSeq);
     };
 
     const clearQueuedOutput = () => {
@@ -1860,9 +2208,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       outputChunksRef.current = [];
       outputBufferSizeRef.current = 0;
+      outputBufferLastSeqRef.current = undefined;
     };
 
-    const queueOutput = (data: string) => {
+    const queueOutput = (data: string, outputSeq?: number) => {
       if (!data) return;
 
       const currentTerminal = terminalRef.current;
@@ -1878,7 +2227,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         && data.length <= DIRECT_LIVE_OUTPUT_MAX_CHARS
         && wasIdle
       ) {
-        writeGuardedLiveOutput(data);
+        writeGuardedLiveOutput(data, outputSeq);
         return;
       }
 
@@ -1895,6 +2244,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       outputChunksRef.current.push(data);
       outputBufferSizeRef.current += data.length;
+      if (outputSeq !== undefined) {
+        outputBufferLastSeqRef.current = outputSeq;
+      }
       if (outputFlushFrameRef.current !== null) {
         return;
       }
@@ -1902,7 +2254,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       outputFlushFrameRef.current = requestAnimationFrame(flushOutput);
     };
 
-    const writeReplayOutput = (data: string) => new Promise<void>((resolve) => {
+    const writeReplayOutput = (data: string, outputSeq: number) => new Promise<void>((resolve) => {
       const currentTerminal = terminalRef.current;
       if (!currentTerminal) {
         resolve();
@@ -1912,13 +2264,26 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       replayOsc8GuardRef.current.reset();
       const guardedData = replayOsc8GuardRef.current.sanitize(data, { closeAtEnd: true });
 
-      currentTerminal.write(OSC8_HYPERLINK_CLOSE, () => {
+      writeTerminalWithResizeControls(currentTerminal, OSC8_HYPERLINK_CLOSE, () => {
         if (!guardedData) {
+          lastRenderedSeqRef.current = outputSeq;
           resolve();
           return;
         }
 
-        currentTerminal.write(guardedData, () => resolve());
+        writeTerminalWithResizeControls(currentTerminal, guardedData, () => {
+          lastRenderedSeqRef.current = outputSeq;
+          if (
+            shouldCaptureTerminalScreenSnapshot(
+              currentTerminal,
+              guardedData,
+              Boolean(lastScreenSnapshotSignatureRef.current),
+            )
+          ) {
+            scheduleTerminalScreenSnapshot();
+          }
+          resolve();
+        });
       });
     });
 
@@ -1940,7 +2305,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         lastAppliedSeqRef.current = payload.seq;
       }
 
-      queueOutput(payload.data);
+      queueOutput(payload.data, payload.seq);
     };
 
     const replayHistory = async ({ resetTerminal = false }: { resetTerminal?: boolean } = {}) => {
@@ -1952,6 +2317,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       isHistoryLoadedRef.current = false;
       bufferedLiveDataRef.current = [];
       lastAppliedSeqRef.current = 0;
+      lastRenderedSeqRef.current = 0;
       liveOsc8GuardRef.current.reset();
       replayOsc8GuardRef.current.reset();
       const sessionKey = replaySessionKeyRef.current;
@@ -1981,13 +2347,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         const historySnapshot = extractPtyHistorySnapshot(response);
         replayKeyboardState = historySnapshot.keyboardState;
         lastAppliedSeqRef.current = historySnapshot.lastSeq;
+        const replayChunks = historySnapshot.replayChunks ?? historySnapshot.chunks;
         const replayData = shouldStripReplayProtocolQueries
-          ? stripReplayProtocolQueries(historySnapshot.chunks.join(''))
-          : historySnapshot.chunks.join('');
+          ? stripReplayProtocolQueries(replayChunks.join(''))
+          : replayChunks.join('');
         if (isReplayStillCurrent()) {
           suppressPtyWriteRef.current = true;
           shouldResumePtyWrites = true;
-          await writeReplayOutput(replayData);
+          await writeReplayOutput(replayData, historySnapshot.lastSeq);
         }
       } catch {
         // 历史回放失败不应影响实时输出
@@ -2015,7 +2382,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           if (payload.seq !== undefined) {
             lastAppliedSeqRef.current = payload.seq;
           }
-          queueOutput(payload.data);
+          queueOutput(payload.data, payload.seq);
         }
       }
     };
@@ -2045,9 +2412,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
 
       lastContainerSizeRef.current = { width, height };
-      currentFitAddon.fit();
-      refreshTerminalViewport(currentTerminal);
-      syncPtySize(currentTerminal);
+      preserveTerminalViewportContent(currentTerminal, () => {
+        currentFitAddon.fit();
+        refreshTerminalViewport(currentTerminal);
+        syncPtySize(currentTerminal);
+      });
     };
 
     const scheduleResize = () => {
@@ -2167,8 +2536,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       return true;
     });
 
-    // 监听用户输入
-    const dataDisposable = terminal.onData((data) => {
+    const handleTerminalData = (data: string) => {
       if (
         isXtermFocusReport(data)
         && (
@@ -2193,6 +2561,14 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (window.electronAPI && !suppressPtyWriteRef.current && ptyInputEnabledRef.current) {
         window.electronAPI.ptyWrite(windowId, pane.id, data, { source: 'xterm.onData' });
       }
+    };
+
+    // 监听用户输入。macOS 的兼容输入也走同一处理函数，避免绕过
+    // SSH cwd 跟踪、输入权限和历史回放写入保护。
+    const dataDisposable = terminal.onData(handleTerminalData);
+    const disposeImeFix = installTerminalImeFix(terminal, imeCompositionStateRef.current, {
+      platform,
+      onCompatibilityInput: handleTerminalData,
     });
 
     const binaryDisposable = terminal.onBinary?.((data) => {
@@ -2224,6 +2600,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     });
     const scrollDisposable = terminal.onScroll((viewportY) => {
       rememberTerminalViewportY(viewportY);
+      scheduleStaleRenderSurfaceRecovery();
     });
 
     const unsubscribePtyData = subscribeToPanePtyData(windowId, pane.id, queueLiveOutput, {
@@ -2248,6 +2625,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     scheduleResize();
     const initResizeTimer = window.setTimeout(() => scheduleResize(), 100);
     void replayHistory();
+    const initialFocusFrame = requestAnimationFrame(() => {
+      if (
+        terminalRef.current !== terminal
+        || !isActiveRef.current
+        || !isWindowActiveRef.current
+      ) {
+        return;
+      }
+      focusTerminalInput();
+    });
 
     return () => {
       historyReplayTokenRef.current += 1;
@@ -2255,9 +2642,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       isHistoryLoadedRef.current = true;
       bufferedLiveDataRef.current = [];
       lastAppliedSeqRef.current = 0;
+      lastRenderedSeqRef.current = 0;
       suppressPtyWriteRef.current = false;
       lastLiveOutputQueuedAtRef.current = Number.NEGATIVE_INFINITY;
       hasCompletedReplayForCurrentSessionRef.current = false;
+      disposeScrollbackPreservation();
       disposeImeFix();
       dataDisposable.dispose();
       binaryDisposable?.dispose();
@@ -2267,6 +2656,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       window.clearTimeout(initResizeTimer);
+      cancelAnimationFrame(initialFocusFrame);
 
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
@@ -2281,6 +2671,18 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       if (repaintTimerRef.current !== null) {
         window.clearTimeout(repaintTimerRef.current);
         repaintTimerRef.current = null;
+      }
+      if (staleRenderRecoveryFrameRef.current !== null) {
+        cancelAnimationFrame(staleRenderRecoveryFrameRef.current);
+        staleRenderRecoveryFrameRef.current = null;
+      }
+      if (screenSnapshotFrameRef.current !== null) {
+        cancelAnimationFrame(screenSnapshotFrameRef.current);
+        screenSnapshotFrameRef.current = null;
+      }
+      if (screenSnapshotTrailingTimerRef.current !== null) {
+        window.clearTimeout(screenSnapshotTrailingTimerRef.current);
+        screenSnapshotTrailingTimerRef.current = null;
       }
       isVisibleSurfaceRecoveryPendingRef.current = false;
 
@@ -2305,7 +2707,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     handleTerminalLinkHover,
     handleTerminalLinkLeave,
     hideSelectionAiOverlay,
+    focusTerminalInput,
+    preserveTerminalViewportContent,
     rememberTerminalViewportY,
+    scheduleTerminalScreenSnapshot,
+    scheduleStaleRenderSurfaceRecovery,
     showSelectionAiOverlay,
     syncPtySize,
     suppressFocusReportsForWindowTransition,

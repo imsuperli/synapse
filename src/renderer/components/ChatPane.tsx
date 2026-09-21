@@ -1594,14 +1594,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   const handleCancelStreaming = useCallback(async () => {
     try {
-      if (agentState) {
-        await window.electronAPI.agentCancel({
-          paneId: pane.id,
-          taskId: agentState.taskId,
-        });
-      } else {
-        await window.electronAPI.chatCancel({ paneId: pane.id });
-      }
+      await window.electronAPI.agentCancel({
+        paneId: pane.id,
+        taskId: agentState?.taskId,
+      });
     } catch (error) {
       console.error('Failed to cancel agent task:', error);
     }

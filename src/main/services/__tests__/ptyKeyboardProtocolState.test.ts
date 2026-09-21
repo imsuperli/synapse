@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildPtyModeRehydrateSequence,
   cloneKeyboardProtocolState,
   createDefaultKeyboardProtocolState,
   updateKeyboardProtocolStateFromOutput,
@@ -191,6 +192,52 @@ describe('ptyKeyboardProtocolState', () => {
     expect(cloneKeyboardProtocolState(state).bracketedPasteMode).toBe(false);
   });
 
+  it('clears tracked input modes on a full terminal reset', () => {
+    const state = createDefaultKeyboardProtocolState();
+    updateKeyboardProtocolStateFromOutput(
+      state,
+      '\u001b[?1;1002;1006;2004h\u001b=\u001b[=5u\u001bc',
+    );
+
+    expect(state).toEqual(createDefaultKeyboardProtocolState());
+  });
+
+  it('tracks modes that follow a full reset in the same output chunk', () => {
+    const state = createDefaultKeyboardProtocolState();
+    updateKeyboardProtocolStateFromOutput(state, '\u001b[?1002;1006h\u001bc\u001b[?1000h');
+
+    expect(cloneKeyboardProtocolState(state).mouseTracking).toEqual({
+      protocol: 'VT200',
+      encoding: 'DEFAULT',
+    });
+  });
+
+  it('matches xterm soft reset semantics across output chunks', () => {
+    const state = createDefaultKeyboardProtocolState();
+    updateKeyboardProtocolStateFromOutput(
+      state,
+      '\u001b[?1;1002;1006;2004h\u001b=\u001b[=5u\u001b[?1049h',
+    );
+    updateKeyboardProtocolStateFromOutput(state, '\u001b[!');
+    updateKeyboardProtocolStateFromOutput(state, 'p');
+
+    expect(cloneKeyboardProtocolState(state)).toEqual({
+      ...defaultKeyboardProtocolState,
+      mouseTracking: {
+        protocol: 'DRAG',
+        encoding: 'SGR',
+      },
+      kittyKeyboard: {
+        flags: 0,
+        mainFlags: 0,
+        altFlags: 0,
+        mainStack: [],
+        altStack: [],
+      },
+    });
+    expect(state.activeAltBuffer).toBe(true);
+  });
+
   it('returns clone snapshots that cannot mutate tracked state', () => {
     const state = createDefaultKeyboardProtocolState();
     updateKeyboardProtocolStateFromOutput(state, '\u001b[=5u\u001b[>3u');
@@ -210,5 +257,45 @@ describe('ptyKeyboardProtocolState', () => {
         altStack: [],
       },
     });
+  });
+
+  it('builds an authoritative mouse mode recovery sequence for remote replay', () => {
+    const state = createDefaultKeyboardProtocolState();
+    updateKeyboardProtocolStateFromOutput(state, '\u001b[?1002;1006h');
+
+    const recovery = buildPtyModeRehydrateSequence(cloneKeyboardProtocolState(state));
+
+    expect(recovery).toContain('\u001b[?1;9;1000;1002;1003;1004;1006;1016;2004;9001l');
+    expect(recovery).toContain('\u001b[?1002;1006h');
+    expect(recovery).not.toContain('\u001b[?1049h');
+  });
+
+  it.each([
+    ['X10', 9],
+    ['VT200', 1000],
+    ['DRAG', 1002],
+    ['ANY', 1003],
+  ] as const)('rehydrates the %s mouse protocol', (protocol, privateMode) => {
+    const state = createDefaultKeyboardProtocolState();
+    state.mouseTracking.protocol = protocol;
+
+    expect(buildPtyModeRehydrateSequence(cloneKeyboardProtocolState(state)))
+      .toContain(`\u001b[?${privateMode}h`);
+  });
+
+  it('restores pixel mouse encoding independently of mouse reporting', () => {
+    const state = createDefaultKeyboardProtocolState();
+    state.mouseTracking.encoding = 'SGR_PIXELS';
+
+    const recovery = buildPtyModeRehydrateSequence(cloneKeyboardProtocolState(state));
+
+    expect(recovery).toContain('\u001b[?1016h');
+    expect(recovery).not.toContain('\u001b[?1006h');
+  });
+
+  it('does not add recovery bytes for the default terminal state', () => {
+    expect(buildPtyModeRehydrateSequence(
+      cloneKeyboardProtocolState(createDefaultKeyboardProtocolState()),
+    )).toBe('');
   });
 });

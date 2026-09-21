@@ -11,6 +11,7 @@ import {
   WindowNode,
   GroupSplitNode,
 } from '../../shared/types/window-group';
+import { removeWindowFromGroupLayout } from '../../shared/utils/layout-tree';
 
 /**
  * 在组布局树中查找窗口节点
@@ -121,48 +122,7 @@ export function removeWindowFromGroup(
   layout: GroupLayoutNode,
   windowId: string
 ): GroupLayoutNode | null {
-  if (layout.type === 'window') {
-    return layout.id === windowId ? null : layout;
-  }
-
-  let hasChanges = false;
-  const newChildren: GroupLayoutNode[] = [];
-  const remainingSizes: number[] = [];
-
-  layout.children.forEach((child, index) => {
-    const nextChild = removeWindowFromGroup(child, windowId);
-    if (nextChild !== child) {
-      hasChanges = true;
-    }
-    if (nextChild !== null) {
-      newChildren.push(nextChild);
-      remainingSizes.push(layout.sizes[index] ?? 0);
-    }
-  });
-
-  if (!hasChanges) {
-    return layout;
-  }
-
-  if (newChildren.length === 0) {
-    return null;
-  }
-
-  // 如果只剩一个子节点，提升它（扁平化）
-  if (newChildren.length === 1) {
-    return newChildren[0];
-  }
-
-  const sizesChanged = newChildren.length !== layout.children.length;
-  const newSizes = sizesChanged
-    ? normalizeSizes(remainingSizes)
-    : layout.sizes;
-
-  return {
-    ...layout,
-    children: newChildren,
-    sizes: newSizes,
-  };
+  return removeWindowFromGroupLayout(layout, windowId);
 }
 
 /**
@@ -276,4 +236,3 @@ export function replaceWindowId(
     ),
   };
 }
-

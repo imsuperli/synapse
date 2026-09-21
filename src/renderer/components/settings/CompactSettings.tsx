@@ -35,7 +35,7 @@ interface CompactSettingsSectionProps {
   help?: React.ReactNode;
   icon?: React.ReactNode;
   actions?: React.ReactNode;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   className?: string;
   contentClassName?: string;
   divided?: boolean;
@@ -51,6 +51,8 @@ export function CompactSettingsSection({
   contentClassName,
   divided = true,
 }: CompactSettingsSectionProps) {
+  const hasContent = children !== null && children !== undefined && children !== false;
+
   return (
     <section
       className={joinClassNames(
@@ -76,9 +78,11 @@ export function CompactSettingsSection({
         )}
       </div>
 
-      <div className={joinClassNames(divided && 'divide-y divide-[rgb(var(--border))]', contentClassName)}>
-        {children}
-      </div>
+      {hasContent && (
+        <div className={joinClassNames(divided && 'divide-y divide-[rgb(var(--border))]', contentClassName)}>
+          {children}
+        </div>
+      )}
     </section>
   );
 }

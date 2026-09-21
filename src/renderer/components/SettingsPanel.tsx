@@ -3,7 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Select from '@radix-ui/react-select';
 import * as Switch from '@radix-ui/react-switch';
 import * as Tabs from '@radix-ui/react-tabs';
-import { X, Plus, Trash2, Search, Check, ChevronDown, Globe, Folder, Edit2, FolderOpen, Languages, Compass, Plug, Wrench, Monitor, Command, Palette, Wallpaper, SunMoon } from 'lucide-react';
+import { X, Plus, Trash2, Search, Check, ChevronDown, Globe, Folder, Edit2, FolderOpen, Languages, Compass, Plug, Wrench, Monitor, Command, Palette, Wallpaper, SunMoon, Smartphone } from 'lucide-react';
 import { IDEIcon } from './icons/IDEIcons';
 import { notifyIDESettingsUpdated } from '../hooks/useIDESettings';
 import { notifyWorkspaceSettingsUpdated } from '../utils/settingsEvents';
@@ -25,6 +25,7 @@ import { AppLanguage } from '../../shared/i18n';
 import { ChatSettingsTab } from './ChatSettingsTab';
 import { PluginCenter } from './settings/PluginCenter';
 import { CompactSettingRow, CompactSettingsSection } from './settings/CompactSettings';
+import { RemoteSettingsTab } from './settings/RemoteSettingsTab';
 import { applyAppearanceToDocument, getAppearanceBackdropDescriptor, getAppearanceSkinStyle } from '../utils/appearance';
 import {
   formatKeyboardShortcut,
@@ -63,7 +64,7 @@ interface SettingsPanelProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'appearance' | 'shortcuts' | 'quicknav' | 'chat' | 'plugins' | 'advanced';
+type SettingsTab = 'general' | 'appearance' | 'shortcuts' | 'quicknav' | 'chat' | 'plugins' | 'remote' | 'advanced';
 type QuickNavSubTab = 'ide' | 'custom';
 const AUTO_SHELL_OPTION_VALUE = '__auto__';
 const DEFAULT_STATUSLINE_CONFIG: StatusLineConfig = {
@@ -118,34 +119,6 @@ const APPEARANCE_SKIN_PRESETS: Array<{
       dim: 0.42,
       blur: 0,
       motion: 'none',
-    },
-  },
-  {
-    id: 'midnight',
-    labelKey: 'settings.appearance.skin.midnight',
-    descriptionKey: 'settings.appearance.skin.midnightDescription',
-    preview: 'radial-gradient(circle at 16% 14%, rgba(182, 106, 255, 0.42), transparent 30%), radial-gradient(circle at 82% 20%, rgba(104, 110, 255, 0.26), transparent 28%), linear-gradient(140deg, #090611 0%, #171126 50%, #0c0716 100%)',
-    skin: {
-      presetId: 'midnight',
-      kind: 'gradient',
-      gradient: 'radial-gradient(circle at 16% 14%, rgba(182, 106, 255, 0.32), transparent 30%), radial-gradient(circle at 82% 20%, rgba(104, 110, 255, 0.20), transparent 28%), linear-gradient(140deg, #090611 0%, #171126 50%, #0c0716 100%)',
-      dim: 0.36,
-      blur: 0,
-      motion: 'ambient',
-    },
-  },
-  {
-    id: 'aurora',
-    labelKey: 'settings.appearance.skin.aurora',
-    descriptionKey: 'settings.appearance.skin.auroraDescription',
-    preview: 'radial-gradient(circle at 22% 18%, rgba(78, 244, 207, 0.32), transparent 28%), radial-gradient(circle at 78% 16%, rgba(103, 164, 255, 0.22), transparent 30%), linear-gradient(140deg, #041417 0%, #0b2c31 54%, #07191d 100%)',
-    skin: {
-      presetId: 'aurora',
-      kind: 'gradient',
-      gradient: 'radial-gradient(circle at 22% 18%, rgba(78, 244, 207, 0.22), transparent 28%), radial-gradient(circle at 78% 16%, rgba(103, 164, 255, 0.16), transparent 30%), linear-gradient(140deg, #041417 0%, #0b2c31 54%, #07191d 100%)',
-      dim: 0.28,
-      blur: 0,
-      motion: 'ambient',
     },
   },
   {
@@ -1132,6 +1105,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
       value: 'chat' as SettingsTab,
       label: t('settings.tab.chat'),
       icon: Monitor,
+    },
+    {
+      value: 'remote' as SettingsTab,
+      label: t('settings.tab.remote'),
+      icon: Smartphone,
     },
     {
       value: 'advanced' as SettingsTab,
@@ -2162,6 +2140,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
 
               <Tabs.Content value="chat" className="h-full overflow-y-auto px-8 py-8 data-[state=inactive]:hidden">
                 <ChatSettingsTab />
+              </Tabs.Content>
+
+              <Tabs.Content value="remote" className="h-full overflow-y-auto px-6 py-6 data-[state=inactive]:hidden">
+                <RemoteSettingsTab />
               </Tabs.Content>
 
               <Tabs.Content value="advanced" className="h-full overflow-y-auto px-6 py-6 data-[state=inactive]:hidden">

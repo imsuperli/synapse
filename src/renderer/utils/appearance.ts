@@ -67,86 +67,6 @@ const APPEARANCE_PRESET_DEFINITIONS: Record<AppearanceSkinPresetId, AppearancePr
       brightWhite: '#ffffff',
     },
   },
-  midnight: {
-    app: {
-      background: '8 6 15',
-      foreground: '243 239 255',
-      card: '19 16 31',
-      secondary: '28 23 44',
-      muted: '42 35 62',
-      mutedForeground: '176 166 214',
-      accent: '63 49 94',
-      border: '89 73 128',
-      primary: '176 126 255',
-      primaryForeground: '18 13 29',
-      sidebar: '12 10 22',
-      titlebar: '24 20 38',
-      titlebarForeground: '244 239 255',
-    },
-    terminal: {
-      background: '#080611',
-      foreground: '#e7e0ff',
-      cursor: '#b07eff',
-      cursorAccent: '#080611',
-      selection: 'rgba(176, 126, 255, 0.28)',
-      black: '#080611',
-      red: '#ff6f91',
-      green: '#72e6a3',
-      yellow: '#f4d88a',
-      blue: '#9f8bff',
-      magenta: '#d8a8ff',
-      cyan: '#7dd3fc',
-      white: '#e7e0ff',
-      brightBlack: '#8e87aa',
-      brightRed: '#ff92b0',
-      brightGreen: '#98ffc1',
-      brightYellow: '#fff0ad',
-      brightBlue: '#bbb0ff',
-      brightMagenta: '#e8c4ff',
-      brightCyan: '#a7e7ff',
-      brightWhite: '#ffffff',
-    },
-  },
-  aurora: {
-    app: {
-      background: '6 15 18',
-      foreground: '232 255 250',
-      card: '12 28 32',
-      secondary: '16 38 42',
-      muted: '25 54 58',
-      mutedForeground: '151 196 190',
-      accent: '28 72 76',
-      border: '43 92 96',
-      primary: '94 234 212',
-      primaryForeground: '4 18 20',
-      sidebar: '7 22 25',
-      titlebar: '10 34 38',
-      titlebarForeground: '226 255 250',
-    },
-    terminal: {
-      background: '#061114',
-      foreground: '#d7fff8',
-      cursor: '#9ffced',
-      cursorAccent: '#061114',
-      selection: 'rgba(94, 234, 212, 0.30)',
-      black: '#061114',
-      red: '#ff6b8b',
-      green: '#5ff0a6',
-      yellow: '#e9d26a',
-      blue: '#71b7ff',
-      magenta: '#d99cff',
-      cyan: '#5eead4',
-      white: '#d7fff8',
-      brightBlack: '#6e9292',
-      brightRed: '#ff8fa7',
-      brightGreen: '#86ffc4',
-      brightYellow: '#fff09b',
-      brightBlue: '#9ccdff',
-      brightMagenta: '#eabaff',
-      brightCyan: '#96fff0',
-      brightWhite: '#ffffff',
-    },
-  },
   paper: {
     app: {
       background: '252 253 255',
@@ -264,7 +184,7 @@ export function applyAppearanceToDocument(appearance: AppearanceSettings): void 
   }
 
   const rootStyle = document.documentElement.style;
-  const preset = APPEARANCE_PRESET_DEFINITIONS[appearance.skin.presetId] ?? APPEARANCE_PRESET_DEFINITIONS.midnight;
+  const preset = APPEARANCE_PRESET_DEFINITIONS[appearance.skin.presetId] ?? APPEARANCE_PRESET_DEFINITIONS.obsidian;
 
   rootStyle.setProperty('--background', preset.app.background);
   rootStyle.setProperty('--foreground', preset.app.foreground);
@@ -435,50 +355,6 @@ function buildAppearanceBackdropLayers(appearance: AppearanceSettings): Appearan
   }
 
   const presetId = appearance.skin.presetId;
-  if (presetId === 'aurora') {
-    return [
-      ...(motionEnabled
-        ? [{
-            className: 'absolute inset-[-10%] will-change-transform',
-            style: {
-              background: 'radial-gradient(circle at 18% 18%, rgba(94, 234, 212, 0.24), transparent 28%), radial-gradient(circle at 78% 16%, rgba(113, 183, 255, 0.18), transparent 30%)',
-              opacity: 'var(--appearance-skin-motion-opacity, 0)',
-              animation: 'appearance-skin-drift var(--appearance-skin-motion-duration, 18s) ease-in-out infinite alternate',
-              mixBlendMode: 'screen' as const,
-            },
-          }]
-        : []),
-      {
-        className: 'absolute inset-0',
-        style: {
-          background: 'linear-gradient(180deg, rgba(4, 20, 23, 0.05) 0%, rgba(4, 20, 23, 0.36) 100%)',
-        },
-      },
-    ];
-  }
-
-  if (presetId === 'midnight') {
-    return [
-      ...(motionEnabled
-        ? [{
-            className: 'absolute inset-[-10%] will-change-transform',
-            style: {
-              background: 'radial-gradient(circle at 16% 18%, rgba(176, 126, 255, 0.28), transparent 30%), radial-gradient(circle at 82% 16%, rgba(124, 92, 255, 0.20), transparent 32%)',
-              opacity: 'var(--appearance-skin-motion-opacity, 0)',
-              animation: 'appearance-skin-drift var(--appearance-skin-motion-duration, 18s) ease-in-out infinite alternate',
-              mixBlendMode: 'screen' as const,
-            },
-          }]
-        : []),
-      {
-        className: 'absolute inset-0',
-        style: {
-          background: 'linear-gradient(180deg, rgba(10, 6, 22, 0.05) 0%, rgba(17, 10, 33, 0.40) 100%)',
-        },
-      },
-    ];
-  }
-
   if (presetId === 'paper') {
     return [
       {
@@ -586,10 +462,6 @@ function resolveRunningAccentRgb(appearance: AppearanceSettings): string {
   switch (appearance.skin.presetId) {
     case 'paper':
       return '53 116 240';
-    case 'midnight':
-      return '176 126 255';
-    case 'aurora':
-      return '94 234 212';
     case 'obsidian':
     case 'custom':
     default:

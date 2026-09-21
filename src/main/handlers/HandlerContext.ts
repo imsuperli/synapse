@@ -30,6 +30,7 @@ import { SessionAggregationService } from '../services/SessionAggregationService
 import { TaskArtifactService } from '../services/TaskArtifactService';
 import { BrowserSyncService } from '../services/BrowserSyncService';
 import { McpCapabilityService } from '../services/McpCapabilityService';
+import { RemoteGateway } from '../remote/RemoteGateway';
 import { Workspace } from '../types/workspace';
 
 /**
@@ -69,6 +70,7 @@ export interface HandlerContext {
   taskArtifactService?: TaskArtifactService | null;
   browserSyncService?: BrowserSyncService | null;
   mcpCapabilityService?: McpCapabilityService | null;
+  remoteGateway?: RemoteGateway | null;
   currentWorkspace: Workspace | null;
   getMainWindow?: () => BrowserWindow | null;
   getCurrentWorkspace: () => Workspace | null;

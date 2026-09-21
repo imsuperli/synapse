@@ -219,4 +219,62 @@ describe('useWorkspaceRestore', () => {
 
     unmount();
   });
+
+  it('preserves the active desktop window when a remote workspace update is restored', async () => {
+    const { unmount } = renderHook(() => useWorkspaceRestore());
+
+    await waitFor(() => {
+      expect(useWindowStore.getState().windows).toHaveLength(2);
+    });
+
+    useWindowStore.setState({
+      activeWindowId: 'window-2',
+      activeGroupId: null,
+      activeCanvasWorkspaceId: null,
+    });
+
+    const nextWorkspace = createWorkspace();
+    nextWorkspace.lastSavedAt = '2026-04-10T00:04:00.000Z';
+    nextWorkspace.windows[1] = {
+      ...nextWorkspace.windows[1],
+      lastActiveAt: '2026-04-10T00:04:00.000Z',
+    };
+
+    workspaceLoadedHandler?.({}, nextWorkspace);
+
+    expect(useWindowStore.getState().activeWindowId).toBe('window-2');
+    expect(useWindowStore.getState().activeGroupId).toBeNull();
+    expect(useWindowStore.getState().activeCanvasWorkspaceId).toBeNull();
+
+    unmount();
+  });
+
+  it('preserves the active desktop group when a remote group update is restored', async () => {
+    const { unmount } = renderHook(() => useWorkspaceRestore());
+
+    await waitFor(() => {
+      expect(useWindowStore.getState().groups).toHaveLength(1);
+    });
+
+    useWindowStore.setState({
+      activeWindowId: null,
+      activeGroupId: 'group-1',
+      activeCanvasWorkspaceId: null,
+    });
+
+    const nextWorkspace = createWorkspace();
+    nextWorkspace.lastSavedAt = '2026-04-10T00:04:30.000Z';
+    nextWorkspace.groups[0] = {
+      ...nextWorkspace.groups[0],
+      lastActiveAt: '2026-04-10T00:04:30.000Z',
+    };
+
+    workspaceLoadedHandler?.({}, nextWorkspace);
+
+    expect(useWindowStore.getState().activeWindowId).toBeNull();
+    expect(useWindowStore.getState().activeGroupId).toBe('group-1');
+    expect(useWindowStore.getState().activeCanvasWorkspaceId).toBeNull();
+
+    unmount();
+  });
 });

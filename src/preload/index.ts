@@ -69,6 +69,15 @@ const electronAPI: ElectronAPI = {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings: unknown) => ipcRenderer.invoke('update-settings', settings),
+  remoteListNetworkInterfaces: () => ipcRenderer.invoke('remote:listNetworkInterfaces'),
+  remoteUpdateSettings: (settings) => ipcRenderer.invoke('remote:updateSettings', settings),
+  remoteGetStatus: () => ipcRenderer.invoke('remote:getStatus'),
+  remoteGetPairingQR: (config?: { address?: string; rotate?: boolean }) =>
+    ipcRenderer.invoke('remote:getPairingQR', config),
+  remoteRotatePairingQR: (config?: { address?: string }) =>
+    ipcRenderer.invoke('remote:rotatePairingQR', config),
+  remoteListDevices: () => ipcRenderer.invoke('remote:listDevices'),
+  remoteRevokeDevice: (deviceId: string) => ipcRenderer.invoke('remote:revokeDevice', { deviceId }),
   validateChatProvider: (config: unknown) => ipcRenderer.invoke('validate-chat-provider', config),
   getAvailableShells: () => ipcRenderer.invoke('get-available-shells'),
   scanIDEs: () => ipcRenderer.invoke('scan-ides'),
@@ -433,6 +442,9 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('pty-resize', { windowId, paneId, cols, rows }),
   getPtyHistory: (paneId: string) =>
     ipcRenderer.invoke('get-pty-history', { paneId }),
+  updateTerminalScreenSnapshot: (snapshot) => {
+    ipcRenderer.send('terminal-screen-snapshot:update', snapshot);
+  },
   onPtyData: (callback) => {
     ipcRenderer.on('pty-data', callback);
   },
@@ -633,47 +645,9 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.removeListener('agent-task-error', callback);
   },
 
-  // Chat AI
-  chatSend: (request: unknown) =>
-    ipcRenderer.invoke('chat-send', request),
-  chatCancel: (config: { paneId: string }) =>
-    ipcRenderer.invoke('chat-cancel', config),
+  // Lightweight Chat completion helpers
   chatCompleteText: (request: unknown) =>
     ipcRenderer.invoke('chat-complete-text', request),
-  chatExecuteTool: (request: unknown) =>
-    ipcRenderer.invoke('chat-execute-tool', request),
-  chatRespondToolApproval: (response: unknown) =>
-    ipcRenderer.send('chat-respond-tool-approval', response),
-  onChatStreamChunk: (callback) => {
-    ipcRenderer.on('chat-stream-chunk', callback);
-  },
-  offChatStreamChunk: (callback) => {
-    ipcRenderer.removeListener('chat-stream-chunk', callback);
-  },
-  onChatStreamDone: (callback) => {
-    ipcRenderer.on('chat-stream-done', callback);
-  },
-  offChatStreamDone: (callback) => {
-    ipcRenderer.removeListener('chat-stream-done', callback);
-  },
-  onChatStreamError: (callback) => {
-    ipcRenderer.on('chat-stream-error', callback);
-  },
-  offChatStreamError: (callback) => {
-    ipcRenderer.removeListener('chat-stream-error', callback);
-  },
-  onChatToolApprovalRequest: (callback) => {
-    ipcRenderer.on('chat-tool-approval-request', callback);
-  },
-  offChatToolApprovalRequest: (callback) => {
-    ipcRenderer.removeListener('chat-tool-approval-request', callback);
-  },
-  onChatToolResult: (callback) => {
-    ipcRenderer.on('chat-tool-result', callback);
-  },
-  offChatToolResult: (callback) => {
-    ipcRenderer.removeListener('chat-tool-result', callback);
-  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

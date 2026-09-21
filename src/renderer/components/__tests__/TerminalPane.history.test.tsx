@@ -31,8 +31,12 @@ const { terminalInstances, ptyCallbacks, terminalDataCallbacks, terminalScrollCa
     };
     buffer: {
       active: {
+        type?: 'normal' | 'alternate';
         viewportY: number;
         baseY: number;
+        cursorX?: number;
+        cursorY?: number;
+        getLine?: (row: number) => { translateToString: (trimRight?: boolean, startColumn?: number, endColumn?: number) => string } | undefined;
       };
     };
     _core: {
@@ -204,8 +208,12 @@ vi.mock('@xterm/xterm', () => ({
       },
       buffer: {
         active: {
+          type: 'normal' as const,
           viewportY: 0,
           baseY: 0,
+          cursorX: 0,
+          cursorY: 0,
+          getLine: vi.fn(() => undefined),
         },
       },
       cols: 120,
@@ -285,6 +293,7 @@ describe('TerminalPane history replay', () => {
     vi.mocked(window.electronAPI.getPtyHistory).mockReset();
     vi.mocked(window.electronAPI.ptyWrite).mockReset();
     vi.mocked(window.electronAPI.ptyResize).mockReset();
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockReset();
     requestAnimationFrameMock.mockClear();
     cancelAnimationFrameMock.mockClear();
     vi.stubGlobal('requestAnimationFrame', requestAnimationFrameMock);
@@ -544,8 +553,196 @@ describe('TerminalPane history replay', () => {
       seq: 1,
     });
 
-    expect(terminalInstances[0].write).toHaveBeenCalledWith('a');
+    expect(terminalInstances[0].write).toHaveBeenCalledWith('a', expect.any(Function));
     expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+  });
+
+  it('publishes alternate screen snapshots after live output without writing back to the PTY', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-alt"
+        pane={{
+          id: 'pane-alt',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(ptyCallbacks).toHaveLength(1);
+    });
+
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'alternate' as const,
+      cursorX: 7,
+      cursorY: 2,
+      getLine: vi.fn((row: number) => ({
+        translateToString: () => (row === 0 ? 'Codex task' : row === 2 ? 'working 12s' : ''),
+      })),
+    });
+    terminalInstances[0].cols = 20;
+    terminalInstances[0].rows = 4;
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockClear();
+    vi.mocked(window.electronAPI.ptyWrite).mockClear();
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt', paneId: 'pane-alt', data: '\u001b[?1049hworking', seq: 1 });
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          windowId: 'win-alt',
+          paneId: 'pane-alt',
+          cols: 20,
+          rows: 4,
+          cursorX: 7,
+          cursorY: 2,
+          alternate: true,
+          outputSeq: 1,
+          data: expect.stringContaining('Codex task\r\n\r\nworking 12s'),
+        }),
+      );
+    });
+    expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining('\u001b[?1049h\u001b[2J\u001b[H'),
+      }),
+    );
+    expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining('\u001b[3;8H'),
+      }),
+    );
+    expect(window.electronAPI.ptyWrite).not.toHaveBeenCalled();
+  });
+
+  it('publishes the final alternate frame after the snapshot throttle window', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+    render(
+      <TerminalPane
+        windowId="win-alt-tail"
+        pane={{
+          id: 'pane-alt-tail',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(ptyCallbacks).toHaveLength(1));
+
+    let visibleText = 'first frame';
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'alternate' as const,
+      cursorX: 0,
+      cursorY: 0,
+      getLine: vi.fn((row: number) => ({
+        translateToString: () => (row === 0 ? visibleText : ''),
+      })),
+    });
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockClear();
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt-tail', paneId: 'pane-alt-tail', data: 'first', seq: 1 });
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ outputSeq: 1, data: expect.stringContaining('first frame') }),
+      );
+    });
+
+    visibleText = 'final frame';
+    ptyCallbacks[0]?.({ windowId: 'win-alt-tail', paneId: 'pane-alt-tail', data: 'final', seq: 2 });
+
+    await waitFor(
+      () => {
+        expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenLastCalledWith(
+          expect.objectContaining({ outputSeq: 2, data: expect.stringContaining('final frame') }),
+        );
+      },
+      { timeout: 700 },
+    );
+  });
+
+  it('clears alternate screen snapshots immediately when the terminal returns to the normal buffer', async () => {
+    vi.mocked(window.electronAPI.getPtyHistory).mockResolvedValue({
+      success: true,
+      data: { chunks: [], lastSeq: 0 },
+    });
+
+    render(
+      <TerminalPane
+        windowId="win-alt-clear"
+        pane={{
+          id: 'pane-alt-clear',
+          cwd: 'D:\\tmp',
+          command: 'codex',
+          status: WindowStatus.Running,
+          pid: 1234,
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(ptyCallbacks).toHaveLength(1);
+    });
+
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'alternate' as const,
+      cursorX: 0,
+      cursorY: 0,
+      getLine: vi.fn(() => ({
+        translateToString: () => 'working',
+      })),
+    });
+    vi.mocked(window.electronAPI.updateTerminalScreenSnapshot).mockClear();
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt-clear', paneId: 'pane-alt-clear', data: '\u001b[?1049hworking', seq: 1 });
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ alternate: true }),
+      );
+    });
+
+    Object.assign(terminalInstances[0].buffer.active, {
+      type: 'normal' as const,
+      cursorX: 0,
+      cursorY: 0,
+      getLine: vi.fn(() => undefined),
+    });
+
+    ptyCallbacks[0]?.({ windowId: 'win-alt-clear', paneId: 'pane-alt-clear', data: '\u001b[?1049l', seq: 2 });
+
+    await waitFor(() => {
+      expect(window.electronAPI.updateTerminalScreenSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          windowId: 'win-alt-clear',
+          paneId: 'pane-alt-clear',
+          alternate: false,
+          data: '',
+          outputSeq: 2,
+        }),
+      );
+    });
   });
 
   it('tracks ssh cwd updates as runtime-only without triggering auto-save', async () => {
@@ -1290,8 +1487,10 @@ describe('TerminalPane history replay', () => {
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live', paneId: 'pane-osc8-live', data: `${osc8Open}docs`, seq: 1 });
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live', paneId: 'pane-osc8-live', data: '\nplain text', seq: 2 });
 
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`);
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\nplain text`);
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`, expect.any(Function));
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\nplain text`, expect.any(Function));
+    });
   });
 
   it('closes split live OSC 8 links before cursor-positioned redraw output', async () => {
@@ -1325,8 +1524,10 @@ describe('TerminalPane history replay', () => {
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live-cursor', paneId: 'pane-osc8-live-cursor', data: `${osc8Open}docs\u001b[`, seq: 1 });
     ptyCallbacks[0]?.({ windowId: 'win-osc8-live-cursor', paneId: 'pane-osc8-live-cursor', data: '12;1Hplain text', seq: 2 });
 
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`);
-    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\u001b[12;1Hplain text`);
+    expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${osc8Open}docs`, expect.any(Function));
+    await waitFor(() => {
+      expect(terminalInstances[0]?.write).toHaveBeenCalledWith(`${OSC8_CLOSE}\u001b[12;1Hplain text`, expect.any(Function));
+    });
   });
 
   it('applies the pane keyboard state snapshot after replaying stale protocol sequences', async () => {
@@ -1924,6 +2125,59 @@ describe('TerminalPane history replay', () => {
     fireEvent.click(paneRoot!);
 
     expect(terminal.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: 'local', backend: 'local' as const },
+    { label: 'SSH', backend: 'ssh' as const },
+  ])('focuses a newly mounted active $label terminal when xterm is ready', async ({ backend }) => {
+    render(
+      <TerminalPane
+        windowId={`win-${backend}`}
+        pane={{
+          id: `pane-${backend}`,
+          cwd: backend === 'ssh' ? '/srv/app' : 'D:\\tmp',
+          command: backend === 'ssh' ? '' : 'pwsh.exe',
+          status: WindowStatus.WaitingForInput,
+          pid: 1234,
+          backend,
+          ...(backend === 'ssh'
+            ? { ssh: { profileId: 'profile-1', remoteCwd: '/srv/app' } }
+            : {}),
+        }}
+        isActive
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances[0]?.focus).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does not focus a newly mounted terminal in an inactive pane', async () => {
+    render(
+      <TerminalPane
+        windowId="win-inactive"
+        pane={{
+          id: 'pane-inactive',
+          cwd: 'D:\\tmp',
+          command: 'pwsh.exe',
+          status: WindowStatus.WaitingForInput,
+          pid: 1234,
+          backend: 'local',
+        }}
+        isActive={false}
+        isWindowActive
+        onActivate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalInstances).toHaveLength(1);
+    });
+    expect(terminalInstances[0]?.focus).not.toHaveBeenCalled();
   });
 
   it('re-focuses xterm on terminal-region mousedown even when the pane is already active', async () => {

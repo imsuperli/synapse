@@ -1,4 +1,39 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const ptyTestHarness = vi.hoisted(() => {
+  let nextPid = 4321;
+
+  function createMockPtyProcess(pid = nextPid++) {
+    return {
+      pid,
+      onData: vi.fn(() => ({ dispose: vi.fn() })),
+      onExit: vi.fn(() => ({ dispose: vi.fn() })),
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+    };
+  }
+
+  const nodePty = {
+    spawn: vi.fn(() => createMockPtyProcess()),
+  };
+
+  (globalThis as { __SYNAPSE_TEST_NODE_PTY__?: unknown }).__SYNAPSE_TEST_NODE_PTY__ = nodePty;
+
+  return {
+    nodePty,
+    createMockPtyProcess,
+  };
+});
+
+vi.mock('electron', () => ({
+  app: {
+    getAppPath: () => process.cwd(),
+    getPath: () => process.cwd(),
+    isPackaged: false,
+  },
+}));
+
 import { ProcessManager } from '../ProcessManager';
 import { ProcessStatus } from '../../types/process';
 import { TmuxCompatService } from '../TmuxCompatService';
@@ -7,20 +42,14 @@ import * as fs from 'fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
+import { createTerminalResizeControl } from '../../../shared/terminal-resize-control';
 
 function getPtyModule() {
-  return require('node-pty');
+  return ptyTestHarness.nodePty;
 }
 
 function makeMockPtyProcess(pid = 4321) {
-  return {
-    pid,
-    onData: vi.fn(() => ({ dispose: vi.fn() })),
-    onExit: vi.fn(() => ({ dispose: vi.fn() })),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn(),
-  };
+  return ptyTestHarness.createMockPtyProcess(pid);
 }
 
 const defaultKeyboardProtocolState = {
@@ -86,6 +115,137 @@ describe('ProcessManager', () => {
         spawnSpy.mockRestore();
       }
     });
+
+    it('tracks firstSeq and gap when replay history evicts old chunks', async () => {
+      const ptyModule = getPtyModule();
+      const dataListeners: Array<(data: string) => void> = [];
+      (processManager as unknown as { PANE_HISTORY_CHUNK_LIMIT: number }).PANE_HISTORY_CHUNK_LIMIT = 3;
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...makeMockPtyProcess(4328),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListeners.push(handler);
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-history-evict',
+          paneId: 'pane-history-evict',
+        });
+
+        for (let i = 1; i <= 5; i += 1) {
+          dataListeners.forEach((listener) => listener(`chunk-${i}`));
+        }
+
+        expect(processManager.getPtyHistory('pane-history-evict')).toEqual({
+          chunks: ['chunk-3', 'chunk-4', 'chunk-5'],
+          firstSeq: 3,
+          lastSeq: 5,
+          evictedBeforeSeq: 2,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-evict', 1)).toEqual({
+          entries: [
+            { seq: 3, data: 'chunk-3' },
+            { seq: 4, data: 'chunk-4' },
+            { seq: 5, data: 'chunk-5' },
+          ],
+          firstSeq: 3,
+          lastSeq: 5,
+          evictedBeforeSeq: 2,
+          gap: true,
+          hasMoreBefore: false,
+        });
+
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-evict', 3)).toMatchObject({
+          entries: [
+            { seq: 4, data: 'chunk-4' },
+            { seq: 5, data: 'chunk-5' },
+          ],
+          gap: false,
+        });
+
+        expect(processManager.getPtyHistoryEntriesBefore('pane-history-evict', 5, {
+          limitBytes: 8,
+        })).toEqual({
+          entries: [{ seq: 4, data: 'chunk-4' }],
+          firstSeq: 4,
+          lastSeq: 4,
+          evictedBeforeSeq: 2,
+          gap: false,
+          hasMoreBefore: true,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
+    it('stores and clears renderer terminal screen snapshots', () => {
+      processManager.updateTerminalScreenSnapshot({
+        windowId: 'win-snapshot',
+        paneId: 'pane-snapshot',
+        cols: 120.8,
+        rows: 30.2,
+        cursorX: 4.9,
+        cursorY: 8.1,
+        alternate: true,
+        data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+        capturedAt: '2026-07-11T10:30:00.000Z',
+        outputSeq: 12,
+      });
+
+      expect(processManager.getTerminalScreenSnapshot('win-snapshot', 'pane-snapshot')).toMatchObject({
+        windowId: 'win-snapshot',
+        paneId: 'pane-snapshot',
+        cols: 120,
+        rows: 30,
+        cursorX: 4,
+        cursorY: 8,
+        alternate: true,
+        outputSeq: 12,
+      });
+
+      processManager.clearTerminalScreenSnapshot('win-snapshot', 'pane-snapshot');
+
+      expect(processManager.getTerminalScreenSnapshot('win-snapshot', 'pane-snapshot')).toBeUndefined();
+    });
+
+    it('clears renderer terminal screen snapshots when alternate screen is inactive', () => {
+      processManager.updateTerminalScreenSnapshot({
+        windowId: 'win-clear-snapshot',
+        paneId: 'pane-clear-snapshot',
+        cols: 120,
+        rows: 30,
+        cursorX: 4,
+        cursorY: 8,
+        alternate: true,
+        data: '\u001b[?1049h\u001b[2J\u001b[Hworking',
+        capturedAt: '2026-07-11T10:30:00.000Z',
+        outputSeq: 8,
+      });
+      expect(processManager.getTerminalScreenSnapshot('win-clear-snapshot', 'pane-clear-snapshot')).toBeDefined();
+
+      processManager.updateTerminalScreenSnapshot({
+        windowId: 'win-clear-snapshot',
+        paneId: 'pane-clear-snapshot',
+        cols: 120,
+        rows: 30,
+        cursorX: 0,
+        cursorY: 0,
+        alternate: false,
+        data: '',
+        capturedAt: '2026-07-11T10:30:01.000Z',
+        outputSeq: 8,
+      });
+
+      expect(processManager.getTerminalScreenSnapshot('win-clear-snapshot', 'pane-clear-snapshot')).toBeUndefined();
+    });
   });
 
   describe('spawnTerminal', () => {
@@ -122,8 +282,30 @@ describe('ProcessManager', () => {
 
       expect(status).toBeDefined();
       expect(status?.command).toBeDefined();
-      // Should use platform default shell
-      expect(status?.command).toMatch(/(pwsh|cmd|zsh|bash)/);
+      // Should use platform default shell.
+      expect(status?.command).toMatch(/(pwsh|cmd|zsh|bash|sh)/);
+    });
+
+    it('tracks terminal dimensions from spawn config and resize events', async () => {
+      const handle = await processManager.spawnTerminal({
+        workingDirectory: testWorkingDir,
+        windowId: 'win-dimensions',
+        paneId: 'pane-dimensions',
+        initialCols: 120,
+        initialRows: 40,
+      });
+
+      expect(processManager.getPaneTerminalDimensions('pane-dimensions')).toEqual({
+        cols: 120,
+        rows: 40,
+      });
+
+      processManager.resizePty(handle.pid, 96, 28);
+
+      expect(processManager.getPaneTerminalDimensions('pane-dimensions')).toEqual({
+        cols: 96,
+        rows: 28,
+      });
     });
 
     it('uses the global default shell when the window does not override it', async () => {
@@ -483,6 +665,54 @@ describe('ProcessManager', () => {
   });
 
   describe('PTY history', () => {
+    it('answers OSC color queries before publishing sanitized terminal output', async () => {
+      const ptyModule = getPtyModule();
+      let dataListener: ((data: string) => void) | undefined;
+      const events: string[] = [];
+      const ptyProcess = {
+        ...makeMockPtyProcess(4324),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListener = handler;
+          return { dispose: vi.fn() };
+        }),
+        write: vi.fn((data: string) => events.push(`input:${data}`)),
+      };
+      const themedProcessManager = new ProcessManager(() => ({
+        appearance: {
+          skin: { presetId: 'obsidian' },
+        },
+      }) as any);
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockReturnValue(ptyProcess as any);
+
+      try {
+        const handle = await themedProcessManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-color-query',
+          paneId: 'pane-color-query',
+        });
+        themedProcessManager.subscribePtyData(handle.pid, (data) => events.push(`output:${data}`));
+
+        dataListener?.('before\x1b]10;?;?\x1b\\after');
+
+        expect(events).toEqual([
+          'input:\x1b]10;rgb:d7d7/d7d7/d7d7\x1b\\',
+          'input:\x1b]11;rgb:0000/0000/0000\x1b\\',
+          'output:beforeafter',
+        ]);
+        expect(themedProcessManager.getPtyHistory('pane-color-query')).toEqual({
+          chunks: ['beforeafter'],
+          firstSeq: 1,
+          lastSeq: 1,
+          evictedBeforeSeq: 0,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
     it('stores replayable history per pane and resets it on a new session', async () => {
       const ptyModule = getPtyModule();
       const dataListeners: Array<(data: string) => void> = [];
@@ -506,7 +736,9 @@ describe('ProcessManager', () => {
         dataListeners.forEach((listener) => listener('first-output'));
         expect(processManager.getPtyHistory('pane-history')).toEqual({
           chunks: ['first-output'],
+          firstSeq: 1,
           lastSeq: 1,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
@@ -520,15 +752,134 @@ describe('ProcessManager', () => {
 
         expect(processManager.getPtyHistory('pane-history')).toEqual({
           chunks: [],
+          firstSeq: 0,
           lastSeq: 0,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
         dataListeners.forEach((listener) => listener('second-output'));
         expect(processManager.getPtyHistory('pane-history')).toEqual({
           chunks: ['second-output'],
+          firstSeq: 1,
           lastSeq: 1,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
+    it('records resize controls in sequence and prefixes paged replay with its effective grid', async () => {
+      const ptyModule = getPtyModule();
+      let dataListener: ((data: string) => void) | undefined;
+      const ptyProcess = makeMockPtyProcess(4390);
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...ptyProcess,
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListener = handler;
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        const handle = await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-resize-history',
+          paneId: 'pane-resize-history',
+          initialCols: 80,
+          initialRows: 30,
+        });
+        const published: string[] = [];
+        processManager.subscribePtyData(handle.pid, (data) => published.push(data));
+
+        dataListener?.('before-resize');
+        processManager.resizePty(handle.pid, 120, 40);
+        dataListener?.('after-resize');
+
+        const resize120 = createTerminalResizeControl(120, 40);
+        expect(processManager.getPtyHistory('win-resize-history', 'pane-resize-history').chunks)
+          .toEqual(['before-resize', resize120, 'after-resize']);
+        expect(processManager.getPtyReplayChunks('win-resize-history', 'pane-resize-history').join(''))
+          .toBe(
+            createTerminalResizeControl(80, 30) +
+              'before-resize' +
+              resize120 +
+              'after-resize',
+          );
+        const pageStartingAtResize = processManager.getPtyHistoryEntriesSince(
+          'win-resize-history',
+          'pane-resize-history',
+          1,
+        ).entries;
+        expect(processManager.decoratePtyHistoryEntriesForReplay(
+          'win-resize-history',
+          'pane-resize-history',
+          pageStartingAtResize,
+        )[0]?.data).toBe(createTerminalResizeControl(80, 30) + resize120);
+        expect(published).toContain(resize120);
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
+    it('keeps remote histories separate for panes with the same pane id in different windows', async () => {
+      const ptyModule = getPtyModule();
+      const dataListeners: Array<(data: string) => void> = [];
+      let nextPid = 4520;
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...makeMockPtyProcess(nextPid++),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListeners.push(handler);
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-a',
+          paneId: 'pane-shared',
+        });
+
+        dataListeners[0]?.('win-a-output');
+
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-b',
+          paneId: 'pane-shared',
+        });
+
+        expect(processManager.getPtyHistory('win-a', 'pane-shared')).toEqual({
+          chunks: ['win-a-output'],
+          firstSeq: 1,
+          lastSeq: 1,
+          evictedBeforeSeq: 0,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+        expect(processManager.getPtyHistory('win-b', 'pane-shared')).toEqual({
+          chunks: [],
+          firstSeq: 0,
+          lastSeq: 0,
+          evictedBeforeSeq: 0,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+
+        dataListeners[1]?.('win-b-output');
+
+        expect(processManager.getPtyHistoryEntriesSince('win-a', 'pane-shared', 0)).toMatchObject({
+          entries: [{ seq: 1, data: 'win-a-output' }],
+          lastSeq: 1,
+          gap: false,
+        });
+        expect(processManager.getPtyHistoryEntriesSince('win-b', 'pane-shared', 0)).toMatchObject({
+          entries: [{ seq: 1, data: 'win-b-output' }],
+          lastSeq: 1,
+          gap: false,
         });
       } finally {
         spawnSpy.mockRestore();
@@ -563,7 +914,9 @@ describe('ProcessManager', () => {
         dataListeners.forEach((listener) => listener('stale-output'));
         expect(processManager.getPtyHistory('pane-history-exit')).toEqual({
           chunks: ['stale-output'],
+          firstSeq: 1,
           lastSeq: 1,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
@@ -571,8 +924,76 @@ describe('ProcessManager', () => {
 
         expect(processManager.getPtyHistory('pane-history-exit')).toEqual({
           chunks: [],
+          firstSeq: 0,
           lastSeq: 0,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
+        });
+      } finally {
+        spawnSpy.mockRestore();
+      }
+    });
+
+    it('clears replayable chunks without resetting output sequence numbers', async () => {
+      const ptyModule = getPtyModule();
+      const dataListeners: Array<(data: string) => void> = [];
+
+      const spawnSpy = vi.spyOn(ptyModule, 'spawn');
+      spawnSpy.mockImplementation(() => ({
+        ...makeMockPtyProcess(4329),
+        onData: vi.fn((handler: (data: string) => void) => {
+          dataListeners.push(handler);
+          return { dispose: vi.fn() };
+        }),
+      }) as any);
+
+      try {
+        await processManager.spawnTerminal({
+          workingDirectory: testWorkingDir,
+          windowId: 'win-history-clear',
+          paneId: 'pane-history-clear',
+        });
+
+        dataListeners.forEach((listener) => {
+          listener('before-1');
+          listener('before-2');
+        });
+        expect(processManager.getLatestPaneOutputSeq('pane-history-clear')).toBe(2);
+
+        processManager.clearPtyHistory('pane-history-clear');
+
+        expect(processManager.getPtyHistory('pane-history-clear')).toEqual({
+          chunks: [],
+          firstSeq: 3,
+          lastSeq: 2,
+          evictedBeforeSeq: 2,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-clear', 2)).toEqual({
+          entries: [],
+          firstSeq: 3,
+          lastSeq: 2,
+          evictedBeforeSeq: 2,
+          gap: false,
+          hasMoreBefore: false,
+        });
+
+        dataListeners.forEach((listener) => listener('after-clear'));
+
+        expect(processManager.getPtyHistory('pane-history-clear')).toEqual({
+          chunks: ['after-clear'],
+          firstSeq: 3,
+          lastSeq: 3,
+          evictedBeforeSeq: 2,
+          keyboardState: defaultKeyboardProtocolState,
+        });
+        expect(processManager.getPtyHistoryEntriesSince('pane-history-clear', 2)).toEqual({
+          entries: [{ seq: 3, data: 'after-clear' }],
+          firstSeq: 3,
+          lastSeq: 3,
+          evictedBeforeSeq: 2,
+          gap: false,
+          hasMoreBefore: false,
         });
       } finally {
         spawnSpy.mockRestore();
@@ -606,7 +1027,9 @@ describe('ProcessManager', () => {
 
         expect(processManager.getPtyHistory('pane-keyboard-history')).toEqual({
           chunks: ['\u001b[?9001h\u001b[=5u\u001b[>3u', '\u001b[<1u\u001b[?9001l\u001b[=0u'],
+          firstSeq: 1,
           lastSeq: 2,
+          evictedBeforeSeq: 0,
           keyboardState: defaultKeyboardProtocolState,
         });
 
@@ -626,7 +1049,9 @@ describe('ProcessManager', () => {
             '5',
             'u',
           ],
+          firstSeq: 1,
           lastSeq: 6,
+          evictedBeforeSeq: 0,
           keyboardState: {
             ...defaultKeyboardProtocolState,
             bracketedPasteMode: true,
@@ -655,7 +1080,9 @@ describe('ProcessManager', () => {
             'u',
             '\u001b[=7u\u001b[?1049h\u001b[=3u\u001b[?1049l',
           ],
+          firstSeq: 1,
           lastSeq: 7,
+          evictedBeforeSeq: 0,
           keyboardState: {
             ...defaultKeyboardProtocolState,
             bracketedPasteMode: true,
@@ -667,6 +1094,22 @@ describe('ProcessManager', () => {
               mainStack: [],
               altStack: [],
             },
+          },
+        });
+        expect(processManager.getPtyHistoryEntriesBefore(
+          'pane-keyboard-history',
+          Number.MAX_SAFE_INTEGER,
+          { limitChunks: 1 },
+        ).keyboardState).toEqual({
+          ...defaultKeyboardProtocolState,
+          bracketedPasteMode: true,
+          win32InputMode: true,
+          kittyKeyboard: {
+            flags: 7,
+            mainFlags: 7,
+            altFlags: 3,
+            mainStack: [],
+            altStack: [],
           },
         });
       } finally {

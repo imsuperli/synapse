@@ -62,19 +62,20 @@ export function registerPaneHandlers(ctx: HandlerContext) {
         throw new Error('ProcessManager not initialized');
       }
 
-      // 清理 PTY 订阅
-      if (ptySubscriptionManager) {
-        ptySubscriptionManager.remove(paneId);
-      }
-
-      statusPoller?.removePane(paneId);
-      disposeAgentTaskForPane(paneId);
-
       const processes = processManager.listProcesses();
       const found = processes.find(p => p.windowId === windowId && p.paneId === paneId);
-      if (found && found.status !== 'exited') {
+      if (!found) {
+        return successResponse();
+      }
+
+      if (found.status !== 'exited') {
         await processManager.killProcess(found.pid);
       }
+
+      // Only clear pane-scoped state after the requested window/pane resolves to a process.
+      ptySubscriptionManager?.remove(paneId);
+      statusPoller?.removePane(paneId);
+      disposeAgentTaskForPane(paneId);
 
       return successResponse();
     } catch (error) {

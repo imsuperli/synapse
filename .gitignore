@@ -17,4 +17,5 @@ Auto-Claude-2.7.6/
 xterm.js-6.0.0/
 .npm-cache/
 package-lock.json
+!mobile/package-lock.json
 问题截图/
