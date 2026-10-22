@@ -51,7 +51,7 @@ class FakeTerminal {
   cols: number;
   rows: number;
   options: Record<string, unknown>;
-  modes: Record<string, unknown> = { mouseTrackingMode: "none" };
+  modes: Record<string, unknown> = { mouseTrackingMode: "none", showCursor: true };
   element: { scrollWidth: number; scrollHeight: number } | null = null;
   allData = "";
   opened = false;
@@ -165,6 +165,9 @@ class FakeTerminal {
       throw new Error("projection write failed");
     }
     this.allData += data;
+    for (const match of this.allData.matchAll(/(?:\u001b\[|\u009b)\?25([lh])/g)) {
+      this.modes.showCursor = match[1] === "h";
+    }
     if (data.includes("\u001b[?1049h")) {
       this.buffer.active = this.alternateBuffer;
     }
@@ -228,7 +231,7 @@ class FakeTerminal {
   reset(): void {
     this.unstable = false;
     this.cursorGap = false;
-    this.modes = { mouseTrackingMode: "none" };
+    this.modes = { mouseTrackingMode: "none", showCursor: true };
     this.buffer.active = this.normalBuffer;
     this.normalBuffer.baseY = 0;
     this.normalBuffer.viewportY = 0;
@@ -607,13 +610,122 @@ const writeXterm = (terminal: XtermTerminal, data: string): Promise<void> =>
   new Promise((resolve) => terminal.write(data, resolve));
 
 describe("terminal WebView mobile reflow", () => {
+  it.each(["\u001b[", "\u009b"])(
+    "preserves hidden cursor state during initial replay and projection (%j)",
+    async (csi) => {
+      const replay = csi + "?25lcontent";
+      boot(replay);
+      await settle();
+
+      expect(FakeTerminal.instances[0]?.allData).toBe(replay);
+      expect(FakeTerminal.instances[0]?.modes.showCursor).toBe(false);
+      const projection = FakeTerminal.instances.find((terminal) => terminal.opened);
+      expect(projection?.modes.showCursor).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the cursor hidden across live redraw chunks (exact grid: %j)",
+    async (exactGrid) => {
+      boot(exactGrid ? "\u001b[?1000h\u001b[?1006hready" : "ready");
+      await settle();
+      const source = FakeTerminal.instances[0]!;
+
+      sendWebViewMessage({ type: "write", data: "\u001b[?25l\u001b[2Hredraw" });
+      await settle();
+      expect(source.allData).toContain("\u001b[?25l\u001b[2Hredraw");
+      expect(source.modes.showCursor).toBe(false);
+
+      sendWebViewMessage({ type: "write", data: "\u001b[3;5Hmore" });
+      await settle();
+      expect(source.modes.showCursor).toBe(false);
+
+      sendWebViewMessage({ type: "write", data: "\u001b[?25h" });
+      await settle();
+      expect(source.modes.showCursor).toBe(true);
+      // The hidden state must also survive a control sequence split by transport.
+      sendWebViewMessage({ type: "write", data: "\u001b[?2" });
+      await settle();
+      sendWebViewMessage({ type: "write", data: "5l" });
+      await settle();
+      expect(source.modes.showCursor).toBe(false);
+    },
+  );
+
+  it("preserves the real xterm cursor mode when serializing an adaptive projection", async () => {
+    const source = new XtermTerminal({ cols: 80, rows: 24, allowProposedApi: true });
+    const serializer = new XtermSerializeAddon();
+    source.loadAddon(serializer);
+    // eslint-disable-next-line no-new-func
+    const makeSafe = new Function(
+      TERMINAL_MOBILE_REFLOW_JS +
+        "; mobileSourceCols = 80; return makeMobileSerializedProjectionReflowSafe;",
+    )() as (serialized: string) => string;
+    try {
+      for (const cursorMode of ["l", "h"]) {
+        await writeXterm(source, "\u001b[?25" + cursorMode);
+        const serialized = makeSafe(serializer.serialize({ excludeModes: false }));
+        const projection = new XtermTerminal({ cols: 40, rows: 24, allowProposedApi: true });
+        await writeXterm(projection, serialized);
+        expect(projection.modes.showCursor).toBe(cursorMode === "h");
+        projection.dispose();
+      }
+    } finally {
+      source.dispose();
+    }
+  });
+
+  it("hides the independent overlay during redraw and restores one cursor at the final position", () => {
+    const start = XTERM_HTML.indexOf("function resolveCursorOverlayPosition(");
+    const end = XTERM_HTML.indexOf("function updateScrollIndicator(", start);
+    // eslint-disable-next-line no-new-func
+    const createOverlayUpdater = new Function(
+      "term",
+      "surface",
+      "var cursorOverlay = null;" +
+        "function getCellWidth() { return 8; }" +
+        "function getCellHeight() { return 15; }" +
+        "function getTotalScale() { return 1; }" +
+        "function isMobileReflowSnapshotLayout() { return false; }" +
+        XTERM_HTML.slice(start, end) +
+        "; return updateCursorOverlay;",
+    ) as (term: Record<string, unknown>, surface: HTMLElement) => () => void;
+    const screen = document.createElement("div");
+    const buffer = { baseY: 0, viewportY: 0, cursorY: 0, cursorX: 0 };
+    const terminal = {
+      screenElement: screen,
+      modes: { showCursor: true },
+      buffer: { active: buffer },
+      cols: 80,
+      rows: 24,
+    };
+    const update = createOverlayUpdater(terminal, screen);
+    update();
+    expect((screen.firstElementChild as HTMLElement).style.display).toBe("block");
+    terminal.modes.showCursor = false;
+    for (let row = 1; row <= 5; row++) {
+      buffer.cursorY = row;
+      update();
+      expect((screen.firstElementChild as HTMLElement).style.display).toBe("none");
+    }
+    terminal.modes.showCursor = true;
+    buffer.cursorX = 4;
+    update();
+    expect(screen.children).toHaveLength(1);
+    const overlay = screen.firstElementChild as HTMLElement;
+    expect(overlay.style.display).toBe("block");
+    expect(overlay.style.transform).toBe("translate(32px,75px)");
+  });
+
   it("keeps a high-contrast cursor visible in the adaptive projection", () => {
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorBlink: true");
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorStyle: 'bar'");
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorInactiveStyle: 'bar'");
     expect(TERMINAL_MOBILE_REFLOW_JS).toContain("cursorWidth: 3");
-    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("replace(/\\x1b\\[\\?25l/g, '\\x1b[?25h')");
-    expect(TERMINAL_MOBILE_REFLOW_JS).toContain("ensureTerminalCursorVisible(source);");
+    expect(TERMINAL_MOBILE_REFLOW_JS).not.toContain("replace(/\\x1b\\[\\?25l/g, '\\x1b[?25h')");
+    expect(TERMINAL_MOBILE_REFLOW_JS).not.toContain("ensureTerminalCursorVisible(source)");
+    expect(XTERM_HTML).toContain('term.modes.showCursor === false');
+    expect(XTERM_HTML).not.toContain('function ensureTerminalCursorVisible(');
   });
 
   it("replays resize records between text without rendering the records", async () => {

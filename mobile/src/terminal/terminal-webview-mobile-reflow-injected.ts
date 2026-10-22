@@ -1472,9 +1472,6 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
 
   function makeMobileSerializedProjectionReflowSafe(serialized) {
     if (typeof serialized !== 'string' || serialized.length === 0) return '';
-    serialized = serialized
-      .replace(/\x1b\[\?25l/g, '\x1b[?25h')
-      .replace(/\x9b\?25l/g, '\x1b[?25h');
     var result = '';
     var index = 0;
     while (index < serialized.length) {
@@ -2071,9 +2068,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
     var replayData = preserveFullInitialData
       ? initialData
       : normalizeInitialData(initialData);
-    replayData = normalizeStatusDotPresentation(replayData || '')
-      .replace(/\x1b\[\?25l/g, '\x1b[?25h')
-      .replace(/\x9b\?25l/g, '\x1b[?25h');
+    replayData = normalizeStatusDotPresentation(replayData || '');
     mobileControlSequenceState = scanMobileControlSequenceState(replayData, 'ground');
     mobileCarriageReturnPending = replayData.charAt(replayData.length - 1) === '\r';
     updateMouseModeFromData(replayData);
@@ -2348,7 +2343,6 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
       completed = true;
       Promise.resolve().then(function() {
         if (generation !== terminalGeneration || source !== mobileSourceTerm) return;
-        ensureTerminalCursorVisible(source);
         if (normalBufferMayChange || source.buffer.active.type !== 'alternate') {
           mobileNormalBufferRevision++;
         }
@@ -2361,9 +2355,7 @@ export const TERMINAL_MOBILE_REFLOW_JS = String.raw`
   }
 
   function writeMobileReflow(data) {
-    var normalized = normalizeStatusDotPresentation(data)
-      .replace(/\x1b\[\?25l/g, '\x1b[?25h')
-      .replace(/\x9b\?25l/g, '\x1b[?25h');
+    var normalized = normalizeStatusDotPresentation(data);
     var previousControlSequenceState = mobileControlSequenceState;
     var previousCarriageReturnPending = mobileCarriageReturnPending;
     mobileControlSequenceState = scanMobileControlSequenceState(

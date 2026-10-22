@@ -605,6 +605,10 @@ window.onerror = function(msg) {
       cursorOverlay.className = 'mobile-cursor-overlay';
       screen.appendChild(cursorOverlay);
     }
+    if (term.modes && term.modes.showCursor === false) {
+      cursorOverlay.style.display = 'none';
+      return;
+    }
     var buffer = term.buffer.active;
     var cellW = getCellWidth();
     var cellH = getCellHeight();
@@ -1718,7 +1722,6 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     try {
       if (term.onWriteParsed) {
         termObserverDisposables.push(term.onWriteParsed(function() {
-          ensureTerminalCursorVisible(term);
           scheduleCursorOverlayUpdate();
           emitModesIfChanged();
           emitKeyboardAvoidanceMetrics();
@@ -1727,16 +1730,10 @@ ${TERMINAL_MOBILE_REFLOW_JS}
     } catch (e) {}
     // Initial emit once buffer settles.
     afterWritesDrained(function() {
-      ensureTerminalCursorVisible(term);
       scheduleCursorOverlayUpdate();
       emitModesIfChanged();
       emitKeyboardAvoidanceMetrics();
     });
-  }
-
-  function ensureTerminalCursorVisible(targetTerm) {
-    if (!targetTerm || !targetTerm.modes || targetTerm.modes.showCursor !== false) return;
-    try { targetTerm.write('\x1b[?25h'); } catch (e) {}
   }
 
   function viewportToCell(clientX, clientY) {
