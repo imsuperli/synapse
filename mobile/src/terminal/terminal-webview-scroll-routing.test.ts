@@ -362,7 +362,7 @@ describe('TerminalWebView scroll routing', () => {
     expect(dragMoveBlock).toContain('syncSelectionHandleToViewportPoint(handle, clientX, clientY)')
   })
 
-  it('opens links and paths from surface taps before mouse/focus fallback', () => {
+  it('opens links and paths before sending mouse input and native focus on surface taps', () => {
     expect(source).toContain('function buildMouseClickInput(clientX, clientY)')
     expect(source).toContain('function isClickMouseTrackingMode(mode)')
     expect(source).toContain("return mode !== 'none';")
@@ -401,6 +401,7 @@ describe('TerminalWebView scroll routing', () => {
     expect(tapHandlerBlock).toContain("notify({ type: 'open-url', url: tappedUrl });")
     expect(tapHandlerBlock).toContain("notify({ type: 'terminal-input', bytes: clickInput });")
     expect(tapHandlerBlock).toContain("notify({ type: 'terminal-tap' });")
+    expect(tapHandlerBlock).not.toContain("else if (!isClickMouseTrackingMode(getMouseTrackingMode()))")
   })
 
 })

@@ -73,12 +73,16 @@ export function RemoteSettingsTab() {
   const requiresPlainWsAcknowledgement = useCustomEndpoint && customEndpoint.trim()
     ? endpointRequiresPlainWsAcknowledgement(customEndpoint)
     : false;
+  const selectedAddressRequiresPlainWsAcknowledgement = !useCustomEndpoint && selectedAddress
+    ? endpointRequiresPlainWsAcknowledgement(selectedAddress)
+    : false;
   const relayRequiresPlainWsAcknowledgement = relayEnabled && relayEndpoint.trim()
     ? endpointRequiresPlainWsAcknowledgement(relayEndpoint)
     : false;
   const canGeneratePairing = enabled
     && (relayEnabled ? Boolean(relayEndpoint.trim()) : Boolean(effectiveAddress))
     && (!requiresPlainWsAcknowledgement || acceptPlainWsNonLocal)
+    && (!selectedAddressRequiresPlainWsAcknowledgement || acceptPlainWsNonLocal)
     && (!relayRequiresPlainWsAcknowledgement || acceptPlainWsNonLocal);
   const selectedAddressMissing = !useCustomEndpoint
     && Boolean(selectedAddress)
@@ -140,11 +144,6 @@ export function RemoteSettingsTab() {
     try {
       const response = await window.electronAPI.remoteUpdateSettings({
         enabled: nextEnabled,
-        selectedAddress: useCustomEndpoint ? null : selectedAddress || null,
-        manualEndpoint: useCustomEndpoint ? customEndpoint.trim() || null : null,
-        relayEnabled,
-        relayEndpoint: relayEndpoint.trim() || null,
-        acceptPlainWsNonLocal,
       });
       if (!response.success || !response.data) {
         throw new Error(response.error || t('settings.remote.error.updateFailed'));
@@ -352,7 +351,7 @@ export function RemoteSettingsTab() {
               />
             )}
 
-            {requiresPlainWsAcknowledgement && (
+            {(requiresPlainWsAcknowledgement || selectedAddressRequiresPlainWsAcknowledgement) && (
               <label className="flex items-start gap-2 rounded-lg border border-[rgb(var(--warning))]/40 bg-[rgb(var(--warning))]/10 px-3 py-2 text-xs leading-5 text-[rgb(var(--muted-foreground))]">
                 <input
                   type="checkbox"

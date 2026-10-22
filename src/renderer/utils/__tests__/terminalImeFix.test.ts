@@ -184,6 +184,41 @@ describe('installTerminalImeFix', () => {
     dispose();
   });
 
+  it('forwards the committed Chinese enumeration comma without changing it', () => {
+    const terminalElement = document.createElement('div');
+    const textarea = document.createElement('textarea');
+    terminalElement.appendChild(textarea);
+    const forwarded: string[] = [];
+    const terminal = {
+      element: terminalElement,
+      textarea,
+      rows: 24,
+      refresh: vi.fn(),
+      _core: {
+        coreService: {
+          triggerDataEvent: (data: string) => forwarded.push(data),
+        },
+      },
+    } as any;
+    const dispose = installTerminalImeFix(
+      terminal,
+      { isComposing: false },
+      { platform: 'darwin', onCompatibilityInput: (data) => forwarded.push(data) },
+    );
+
+    textarea.value = '、';
+    textarea.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: '、',
+      inputType: 'insertText',
+    }));
+
+    expect(forwarded).toEqual(['、']);
+    expect(textarea.value).toBe('');
+    dispose();
+  });
+
   it('leaves normal keydown-before-input delivery to xterm', () => {
     const terminalElement = document.createElement('div');
     const textarea = document.createElement('textarea');

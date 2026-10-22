@@ -20,4 +20,22 @@ describe('RemoteSettingsTab wiring', () => {
     expect(source).toContain('} catch (err) {');
     expect(source).toContain('setError(err instanceof Error ? err.message : String(err));');
   });
+
+  it('enables remote control before persisting an address that may need acknowledgement', () => {
+    const toggleBlock = source.slice(
+      source.indexOf('async function toggleRemote('),
+      source.indexOf('async function generatePairing('),
+    );
+    expect(toggleBlock).toContain('remoteUpdateSettings({\n        enabled: nextEnabled,\n      })');
+    expect(toggleBlock).not.toContain('selectedAddress:');
+    expect(toggleBlock).not.toContain('manualEndpoint:');
+  });
+
+  it('shows plain ws acknowledgement for a selected public-looking interface address', () => {
+    expect(source).toContain('const selectedAddressRequiresPlainWsAcknowledgement');
+    expect(source).toContain('|| selectedAddressRequiresPlainWsAcknowledgement');
+    expect(source).toContain(
+      '(requiresPlainWsAcknowledgement || selectedAddressRequiresPlainWsAcknowledgement)',
+    );
+  });
 });

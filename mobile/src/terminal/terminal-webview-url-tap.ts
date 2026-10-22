@@ -246,8 +246,9 @@ export const URL_TAP_WEBVIEW_JS = `
     var clickInput = buildMouseClickInput(originX, originY);
     if (clickInput) {
       notify({ type: 'terminal-input', bytes: clickInput });
-    } else if (!isClickMouseTrackingMode(getMouseTrackingMode())) {
-      notify({ type: 'terminal-tap' });
     }
+    // Why: TUIs such as current Codex enable click tracking; mouse reporting
+    // must not suppress the separate native-input focus request for a tap.
+    notify({ type: 'terminal-tap' });
   }
 `
