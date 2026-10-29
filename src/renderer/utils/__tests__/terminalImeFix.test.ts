@@ -219,6 +219,99 @@ describe('installTerminalImeFix', () => {
     dispose();
   });
 
+  it('forwards Chinese punctuation when macOS reports the physical key first', () => {
+    const terminalElement = document.createElement('div');
+    const textarea = document.createElement('textarea');
+    terminalElement.appendChild(textarea);
+    const forwarded: string[] = [];
+    const targetInput = vi.fn();
+    textarea.addEventListener('input', targetInput);
+
+    const terminal = {
+      element: terminalElement,
+      textarea,
+      rows: 24,
+      refresh: vi.fn(),
+      _core: {
+        coreService: {
+          triggerDataEvent: (data: string) => forwarded.push(data),
+        },
+      },
+    } as any;
+    const dispose = installTerminalImeFix(
+      terminal,
+      { isComposing: false },
+      { platform: 'darwin', onCompatibilityInput: (data) => forwarded.push(data) },
+    );
+
+    const physicalKey = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: '\\',
+    });
+    Object.defineProperty(physicalKey, 'keyCode', { value: 220 });
+    textarea.dispatchEvent(physicalKey);
+    textarea.value = '、';
+    textarea.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: '、',
+      inputType: 'insertText',
+    }));
+
+    expect(forwarded).toEqual(['、']);
+    expect(targetInput).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('');
+    dispose();
+  });
+
+  it('suppresses a composing physical punctuation key until its committed text arrives', () => {
+    const terminalElement = document.createElement('div');
+    const textarea = document.createElement('textarea');
+    terminalElement.appendChild(textarea);
+    const forwarded: string[] = [];
+    const targetKeyDown = vi.fn();
+    textarea.addEventListener('keydown', targetKeyDown);
+
+    const terminal = {
+      element: terminalElement,
+      textarea,
+      rows: 24,
+      refresh: vi.fn(),
+      _core: {
+        coreService: {
+          triggerDataEvent: (data: string) => forwarded.push(data),
+        },
+      },
+    } as any;
+    const dispose = installTerminalImeFix(
+      terminal,
+      { isComposing: false },
+      { platform: 'darwin', onCompatibilityInput: (data) => forwarded.push(data) },
+    );
+
+    const physicalKey = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: '\\',
+      isComposing: true,
+    });
+    Object.defineProperty(physicalKey, 'keyCode', { value: 220 });
+    textarea.dispatchEvent(physicalKey);
+    textarea.value = '、';
+    textarea.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: '、',
+      inputType: 'insertText',
+    }));
+
+    expect(forwarded).toEqual(['、']);
+    expect(targetKeyDown).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('');
+    dispose();
+  });
+
   it('leaves normal keydown-before-input delivery to xterm', () => {
     const terminalElement = document.createElement('div');
     const textarea = document.createElement('textarea');

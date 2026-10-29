@@ -41,6 +41,11 @@ function isLikelyTextKey(event: KeyboardEvent): boolean {
   return event.key.length === 1 && !event.ctrlKey && !event.metaKey;
 }
 
+function isPunctuationKey(event: KeyboardEvent): boolean {
+  return event.keyCode >= 186 && event.keyCode <= 222
+    && !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
 export function installTerminalImeFix(
   terminal: Terminal,
   compositionState: ImeCompositionState,
@@ -62,6 +67,7 @@ export function installTerminalImeFix(
   let hasAllowedInitialCompositionAnchorUpdate = false;
   let macImePassthroughActive = false;
   let sawTextKeyDownSinceInput = false;
+  let lastTextKeyDown = '';
   let skipCompatibilityInputUntilNextTask = false;
   let compatibilityInputResetTimer: number | null = null;
   let compositionPrefix = '';
@@ -82,6 +88,7 @@ export function installTerminalImeFix(
   const resetMacImePassthrough = () => {
     macImePassthroughActive = false;
     sawTextKeyDownSinceInput = false;
+    lastTextKeyDown = '';
   };
 
   const clearCompositionPrefixCheckTimer = () => {
@@ -189,7 +196,20 @@ export function installTerminalImeFix(
   };
 
   const handleMacKeyDownCapture = (event: KeyboardEvent) => {
-    if (!supportsMacImeCompatibility || compositionState.isComposing || event.isComposing) {
+    if (!supportsMacImeCompatibility || compositionState.isComposing) {
+      return;
+    }
+
+    // During an active macOS IME composition, punctuation keydown reports the
+    // physical US key (for example `\\`) while the following input event has
+    // the committed CJK punctuation (for example `、`). Let the input event
+    // provide the text instead of letting xterm emit the physical key.
+    if (event.isComposing && isPunctuationKey(event)) {
+      macImePassthroughActive = true;
+      sawTextKeyDownSinceInput = false;
+      lastTextKeyDown = '';
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
@@ -199,6 +219,7 @@ export function installTerminalImeFix(
       // (xterm.js #5887 and #6045).
       macImePassthroughActive = true;
       sawTextKeyDownSinceInput = false;
+      lastTextKeyDown = '';
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -206,6 +227,7 @@ export function installTerminalImeFix(
 
     macImePassthroughActive = false;
     sawTextKeyDownSinceInput = isLikelyTextKey(event);
+    lastTextKeyDown = sawTextKeyDownSinceInput ? event.key : '';
   };
 
   const handleMacInputCapture = (event: Event) => {
@@ -214,6 +236,12 @@ export function installTerminalImeFix(
     }
 
     const data = event.data;
+    const inputDiffersFromKeyDown = Boolean(
+      data
+      && sawTextKeyDownSinceInput
+      && lastTextKeyDown
+      && data !== lastTextKeyDown
+    );
     const shouldForward = Boolean(
       data
       && event.inputType === 'insertText'
@@ -223,10 +251,12 @@ export function installTerminalImeFix(
       && (
         macImePassthroughActive
         || (event.composed && !sawTextKeyDownSinceInput)
+        || inputDiffersFromKeyDown
       )
     );
 
     sawTextKeyDownSinceInput = false;
+    lastTextKeyDown = '';
     if (!shouldForward || !data) {
       return;
     }
