@@ -271,6 +271,7 @@ describe('installTerminalImeFix', () => {
     terminalElement.appendChild(textarea);
     const forwarded: string[] = [];
     const targetKeyDown = vi.fn();
+    const compositionState: ImeCompositionState = { isComposing: true };
     textarea.addEventListener('keydown', targetKeyDown);
 
     const terminal = {
@@ -286,7 +287,7 @@ describe('installTerminalImeFix', () => {
     } as any;
     const dispose = installTerminalImeFix(
       terminal,
-      { isComposing: false },
+      compositionState,
       { platform: 'darwin', onCompatibilityInput: (data) => forwarded.push(data) },
     );
 
@@ -298,6 +299,7 @@ describe('installTerminalImeFix', () => {
     });
     Object.defineProperty(physicalKey, 'keyCode', { value: 220 });
     textarea.dispatchEvent(physicalKey);
+    textarea.dispatchEvent(new Event('compositionend'));
     textarea.value = '、';
     textarea.dispatchEvent(new InputEvent('input', {
       bubbles: true,

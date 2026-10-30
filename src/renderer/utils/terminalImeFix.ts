@@ -66,6 +66,7 @@ export function installTerminalImeFix(
   let originalUpdateCompositionElements: ((dontRecurse?: boolean) => void) | null = null;
   let hasAllowedInitialCompositionAnchorUpdate = false;
   let macImePassthroughActive = false;
+  let pendingMacImeInput = false;
   let sawTextKeyDownSinceInput = false;
   let lastTextKeyDown = '';
   let skipCompatibilityInputUntilNextTask = false;
@@ -136,6 +137,7 @@ export function installTerminalImeFix(
     clearCompatibilityInputResetTimer();
     skipCompatibilityInputUntilNextTask = false;
     resetMacImePassthrough();
+    pendingMacImeInput = false;
     resetCompositionPrefixTracking();
     const compositionStart = compositionHelper?._compositionPosition?.start ?? textarea.value.length;
     compositionPrefix = textarea.value.slice(0, compositionStart);
@@ -196,7 +198,7 @@ export function installTerminalImeFix(
   };
 
   const handleMacKeyDownCapture = (event: KeyboardEvent) => {
-    if (!supportsMacImeCompatibility || compositionState.isComposing) {
+    if (!supportsMacImeCompatibility) {
       return;
     }
 
@@ -204,7 +206,11 @@ export function installTerminalImeFix(
     // physical US key (for example `\\`) while the following input event has
     // the committed CJK punctuation (for example `、`). Let the input event
     // provide the text instead of letting xterm emit the physical key.
-    if (event.isComposing && isPunctuationKey(event)) {
+    const imeIsActive = compositionState.isComposing
+      || Boolean(compositionHelper?.isComposing)
+      || event.isComposing;
+    if (imeIsActive && isPunctuationKey(event)) {
+      pendingMacImeInput = true;
       macImePassthroughActive = true;
       sawTextKeyDownSinceInput = false;
       lastTextKeyDown = '';
@@ -225,6 +231,7 @@ export function installTerminalImeFix(
       return;
     }
 
+    pendingMacImeInput = false;
     macImePassthroughActive = false;
     sawTextKeyDownSinceInput = isLikelyTextKey(event);
     lastTextKeyDown = sawTextKeyDownSinceInput ? event.key : '';
@@ -247,11 +254,11 @@ export function installTerminalImeFix(
       && event.inputType === 'insertText'
       && !event.isComposing
       && !compositionState.isComposing
-      && !skipCompatibilityInputUntilNextTask
       && (
-        macImePassthroughActive
-        || (event.composed && !sawTextKeyDownSinceInput)
-        || inputDiffersFromKeyDown
+        pendingMacImeInput
+        || (!skipCompatibilityInputUntilNextTask && macImePassthroughActive)
+        || (!skipCompatibilityInputUntilNextTask && event.composed && !sawTextKeyDownSinceInput)
+        || (!skipCompatibilityInputUntilNextTask && inputDiffersFromKeyDown)
       )
     );
 
@@ -261,6 +268,7 @@ export function installTerminalImeFix(
       return;
     }
 
+    pendingMacImeInput = false;
     macImePassthroughActive = true;
     event.preventDefault();
     event.stopPropagation();
