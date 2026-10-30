@@ -14,7 +14,7 @@ export class BinaryRuntimeAdapter implements LanguageRuntimeAdapter {
   }
 
   async spawn(runtime: PluginRuntime, context: RuntimeSpawnContext): Promise<SpawnedRuntimeProcess> {
-    const env = buildRuntimeEnvironment(runtime, context);
+    const env = await buildRuntimeEnvironment(runtime, context);
     const command = resolvePluginPath(runtime.entry, context.pluginInstallPath);
     const args = resolveRuntimeArgs(runtime, context);
 

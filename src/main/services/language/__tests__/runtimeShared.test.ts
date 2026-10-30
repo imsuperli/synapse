@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { buildRuntimeEnvironment, prepareRuntimeSpawn } from '../runtime/shared';
 
 describe('language runtime shared helpers', () => {
-  it('passes merged plugin settings to runtime processes as JSON', () => {
-    const env = buildRuntimeEnvironment({
+  it('passes merged plugin settings to runtime processes as JSON', async () => {
+    const env = await buildRuntimeEnvironment({
       type: 'node',
       entry: 'bin/server.cjs',
     }, {

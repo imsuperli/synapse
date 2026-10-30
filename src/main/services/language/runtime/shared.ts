@@ -5,8 +5,8 @@ import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { PluginRuntime } from '../../../../shared/types/plugin';
-import { getLatestEnvironmentVariables } from '../../../utils/environment';
-import { resolveNodePath } from '../../../utils/node-path';
+import { getLatestEnvironmentVariablesAsync } from '../../../utils/environment';
+import { resolveNodePathAsync } from '../../../utils/node-path';
 import { prepareSpawnCommand } from '../../../utils/spawnCommand';
 
 export interface RuntimeSpawnContext {
@@ -50,12 +50,12 @@ export async function ensureWorkspaceStoragePath(
   return workspaceStoragePath;
 }
 
-export function buildRuntimeEnvironment(
+export async function buildRuntimeEnvironment(
   runtime: PluginRuntime,
   context: RuntimeSpawnContext,
   extraEnv: NodeJS.ProcessEnv = {},
-): NodeJS.ProcessEnv {
-  const baseEnv = getLatestEnvironmentVariables();
+): Promise<NodeJS.ProcessEnv> {
+  const baseEnv = await getLatestEnvironmentVariablesAsync();
   const runtimeEnv = Object.fromEntries(
     Object.entries(runtime.env ?? {}).map(([key, value]) => [key, substituteRuntimeVariables(value, context)]),
   );
@@ -98,8 +98,8 @@ export function getPathEnvironment(env: NodeJS.ProcessEnv): string {
   return env.PATH || env.Path || process.env.PATH || process.env.Path || '';
 }
 
-export function resolveNodeExecutable(env: NodeJS.ProcessEnv): string {
-  return resolveNodePath({
+export async function resolveNodeExecutable(env: NodeJS.ProcessEnv): Promise<string> {
+  return resolveNodePathAsync({
     currentPath: getPathEnvironment(env),
     env,
   });

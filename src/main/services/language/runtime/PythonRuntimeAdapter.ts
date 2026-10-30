@@ -15,7 +15,7 @@ export class PythonRuntimeAdapter implements LanguageRuntimeAdapter {
   }
 
   async spawn(runtime: PluginRuntime, context: RuntimeSpawnContext): Promise<SpawnedRuntimeProcess> {
-    const env = buildRuntimeEnvironment(runtime, context);
+    const env = await buildRuntimeEnvironment(runtime, context);
     const command = resolvePythonExecutable(context.settings, env);
     const args = [
       resolvePluginPath(runtime.entry, context.pluginInstallPath),

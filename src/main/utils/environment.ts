@@ -1,6 +1,7 @@
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { basename } from 'path';
 import { platform } from 'os';
+import { promisify } from 'util';
 
 const WINDOWS_REQUIRED_RUNTIME_ENV_KEYS = [
   'SystemRoot',
@@ -41,7 +42,7 @@ const DEFAULT_LESS_FLAGS = 'FRX';
  * 获取最新的系统环境变量
  *
  * Windows: 从注册表读取最新的用户和系统环境变量
- * macOS/Linux: 使用 process.env（这些平台的环境变量继承机制不同）
+ * macOS/Linux: 读取 login shell 环境，并与 process.env 合并
  *
  * @returns 合并后的环境变量对象
  */
@@ -52,6 +53,45 @@ export function getLatestEnvironmentVariables(options: GetLatestEnvironmentVaria
   }
 
   return applyTerminalEnvironmentDefaults(getUnixEnvironmentVariables(currentPlatform, options.preferredShellProgram));
+}
+
+// Language-service startup runs in Electron's main process. Shell startup files
+// may wait for network access or user input, so never probe them synchronously.
+export async function getLatestEnvironmentVariablesAsync(
+  options: GetLatestEnvironmentVariablesOptions = {},
+): Promise<NodeJS.ProcessEnv> {
+  const currentPlatform = platform();
+  if (currentPlatform === 'win32') {
+    return getLatestEnvironmentVariables(options);
+  }
+
+  for (const shellPath of getUnixShellCandidates(currentPlatform, options.preferredShellProgram)) {
+    for (const args of getUnixShellProbeArgs(shellPath)) {
+      try {
+        const probe = promisify(execFile)(shellPath, args, {
+          env: process.env,
+          timeout: 5000,
+          killSignal: 'SIGKILL',
+          encoding: 'buffer',
+        });
+        probe.child.stdin?.end();
+        const { stdout } = await probe;
+        const shellEnv = parseNullDelimitedEnvironment(stdout);
+        if (Object.keys(shellEnv).length === 0) {
+          continue;
+        }
+        const env = { ...process.env, ...shellEnv };
+        for (const key of UNIX_RUNTIME_ENV_KEYS_TO_DROP) {
+          delete env[key];
+        }
+        return applyTerminalEnvironmentDefaults(env);
+      } catch {
+        // Preserve the existing shell/mode fallback order without blocking IPC.
+      }
+    }
+  }
+
+  return applyTerminalEnvironmentDefaults(process.env);
 }
 
 export function applyTerminalEnvironmentDefaults(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

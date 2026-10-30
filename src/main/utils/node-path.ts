@@ -1,7 +1,8 @@
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { accessSync, constants } from 'fs';
 import { homedir, platform as getPlatform } from 'os';
 import * as path from 'path';
+import { promisify } from 'util';
 
 export interface ResolveNodePathOptions {
   currentPath: string;
@@ -99,10 +100,9 @@ function parseShellProbeOutput(output: string, isExecutable: (filePath: string) 
   return null;
 }
 
-function probeNodeFromShell(shellPath: string, env: NodeJS.ProcessEnv): string | null {
+function getNodeShellProbeArgs(shellPath: string): string[][] {
   const shellName = path.basename(shellPath).toLowerCase();
-  const argVariants =
-    shellName === 'fish'
+  return shellName === 'fish'
       ? [
           ['-i', '-l', '-c', 'command -v node'],
           ['-l', '-c', 'command -v node'],
@@ -118,6 +118,10 @@ function probeNodeFromShell(shellPath: string, env: NodeJS.ProcessEnv): string |
             ['-l', '-c', 'command -v node'],
             ['-c', 'command -v node'],
           ];
+}
+
+function probeNodeFromShell(shellPath: string, env: NodeJS.ProcessEnv): string | null {
+  const argVariants = getNodeShellProbeArgs(shellPath);
 
   for (const args of argVariants) {
     try {
@@ -136,6 +140,27 @@ function probeNodeFromShell(shellPath: string, env: NodeJS.ProcessEnv): string |
     }
   }
 
+  return null;
+}
+
+async function probeNodeFromShellAsync(shellPath: string, env: NodeJS.ProcessEnv): Promise<string | null> {
+  for (const args of getNodeShellProbeArgs(shellPath)) {
+    try {
+      const probe = promisify(execFile)(shellPath, args, {
+        encoding: 'utf8',
+        timeout: 3000,
+        killSignal: 'SIGKILL',
+        env,
+      });
+      probe.child.stdin?.end();
+      const { stdout } = await probe;
+      if (stdout.trim()) {
+        return stdout.trim();
+      }
+    } catch {
+      // Try the next invocation mode without blocking the main process.
+    }
+  }
   return null;
 }
 
@@ -163,6 +188,47 @@ export function resolveNodePath(options: ResolveNodePathOptions): string {
     }
 
     const probed = probeShell(shellPath, env);
+    if (!probed) {
+      continue;
+    }
+
+    const resolved = parseShellProbeOutput(probed, isExecutable);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return 'node';
+}
+
+export async function resolveNodePathAsync(
+  options: Omit<ResolveNodePathOptions, 'probeShell'> & {
+    probeShell?: (shellPath: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
+  },
+): Promise<string> {
+  const env = options.env ?? process.env;
+  const targetPlatform = options.platform ?? getPlatform();
+  const homeDir = options.homeDir ?? homedir();
+  const isExecutable = options.isExecutable ?? isExecutableFile;
+  const probeShell = options.probeShell ?? probeNodeFromShellAsync;
+
+  const fromPath = which('node', options.currentPath, isExecutable);
+  if (fromPath) {
+    return fromPath;
+  }
+
+  for (const candidate of getKnownNodeCandidates(targetPlatform, homeDir, env)) {
+    if (isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const shellPath of getShellCandidates(targetPlatform, env, options.preferredShell)) {
+    if (!isExecutable(shellPath)) {
+      continue;
+    }
+
+    const probed = await probeShell(shellPath, env);
     if (!probed) {
       continue;
     }

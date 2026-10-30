@@ -15,10 +15,10 @@ export class NodeRuntimeAdapter implements LanguageRuntimeAdapter {
   }
 
   async spawn(runtime: PluginRuntime, context: RuntimeSpawnContext): Promise<SpawnedRuntimeProcess> {
-    const env = buildRuntimeEnvironment(runtime, context, {
+    const env = await buildRuntimeEnvironment(runtime, context, {
       ELECTRON_RUN_AS_NODE: '1',
     });
-    const command = resolveNodeExecutable(env);
+    const command = await resolveNodeExecutable(env);
     const args = [
       resolvePluginPath(runtime.entry, context.pluginInstallPath),
       ...resolveRuntimeArgs(runtime, context),

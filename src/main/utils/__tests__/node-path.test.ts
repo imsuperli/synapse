@@ -87,3 +87,40 @@ describe('resolveNodePath', () => {
     expect(result).toBe('node');
   });
 });
+
+describe('resolveNodePathAsync', () => {
+  it('waits asynchronously for a shell-managed Node and preserves fallback order', async () => {
+    const { resolveNodePathAsync } = await import('../node-path');
+    const probeShell = vi.fn(async (shellPath: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return shellPath === '/bin/bash' ? '/shell-managed/node' : null;
+    });
+    let finished = false;
+    const pendingNode = resolveNodePathAsync({
+      currentPath: '/usr/bin:/bin',
+      platform: 'darwin',
+      homeDir: '/Users/tester',
+      env: {},
+      isExecutable: (filePath) => ['/bin/zsh', '/bin/bash', '/shell-managed/node'].includes(filePath),
+      probeShell,
+    }).then((node) => { finished = true; return node; });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const finishedBeforeHeartbeat = finished;
+    expect(await pendingNode).toBe('/shell-managed/node');
+    expect(finishedBeforeHeartbeat).toBe(false);
+    expect(probeShell.mock.calls.map(([shell]) => shell)).toEqual(['/bin/zsh', '/bin/bash']);
+  });
+
+  it('uses Homebrew Node without probing shells', async () => {
+    const { resolveNodePathAsync } = await import('../node-path');
+    const probeShell = vi.fn();
+    expect(await resolveNodePathAsync({
+      currentPath: '/usr/bin:/bin',
+      platform: 'darwin',
+      env: {},
+      isExecutable: (filePath) => filePath === '/opt/homebrew/bin/node',
+      probeShell,
+    })).toBe('/opt/homebrew/bin/node');
+    expect(probeShell).not.toHaveBeenCalled();
+  });
+});
